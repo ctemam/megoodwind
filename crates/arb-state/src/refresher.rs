@@ -105,6 +105,43 @@ sol! {
     }
 }
 
+sol! {
+    #[sol(rpc)]
+    interface IMulticall3 {
+        struct Call3 {
+            address target;
+            bool allowFailure;
+            bytes callData;
+        }
+        struct Result3 {
+            bool success;
+            bytes returnData;
+        }
+        function aggregate3(Call3[] calldata calls) external payable returns (Result3[] memory returnData);
+    }
+
+    #[sol(rpc)]
+    interface IV2Pool {
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IV3Pool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
+        function liquidity() external view returns (uint128);
+        function fee() external view returns (uint24);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+}
+
+/// Canonical Multicall3 — deployed at the same address on BSC and Base.
+/// READ-PATH ONLY: never used to wrap execution calldata (flash-loan
+/// callbacks must land on our executor contract, not Multicall3).
+pub const MULTICALL3_ADDR: Address = alloy_primitives::address!("cA11bde05977b3631167028862bE2a173976CA11");
+
 pub struct PoolConfig {
     pub address: Address,
     pub protocol: Protocol,
@@ -195,6 +232,114 @@ impl StateRefresher {
         }
     }
 
+    /// Multicall3 read for V2 pools: reserves + token addresses in ONE
+    /// aggregate3 (single network round-trip), allowFailure per call so a
+    /// dead pool can't sink the batch — unlike the all-or-nothing
+    /// IStateReader chunk reads.
+    async fn multicall_v2(&self, pools: &[Address]) -> Vec<(Address, U256, U256, Address, Address)> {
+        use alloy_sol_types::SolCall;
+        let calls: Vec<IMulticall3::Call3> = pools
+            .iter()
+            .flat_map(|&p| {
+                [
+                    IV2Pool::getReservesCall::new(()).abi_encode().into(),
+                    IV2Pool::token0Call::new(()).abi_encode().into(),
+                    IV2Pool::token1Call::new(()).abi_encode().into(),
+                ]
+                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+            })
+            .collect();
+        let provider = self.endpoint.provider();
+        let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
+        let results = match mc.aggregate3(calls).call().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "Multicall3 V2 read failed");
+                return Vec::new();
+            }
+        };
+        pools
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &p)| {
+                let base = i * 3;
+                let res = &results[base];
+                let t0 = &results[base + 1];
+                let t1 = &results[base + 2];
+                if !(res.success && t0.success && t1.success) {
+                    return None;
+                }
+                let reserves = IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
+                let token0 = IV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
+                let token1 = IV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+                Some((
+                    p,
+                    U256::from(reserves.reserve0),
+                    U256::from(reserves.reserve1),
+                    token0,
+                    token1,
+                ))
+            })
+            .collect()
+    }
+
+    /// Multicall3 read for V3 pools: slot0 + liquidity + fee + tokens in
+    /// ONE aggregate3 round-trip, allowFailure per call.
+    async fn multicall_v3(&self, pools: &[Address]) -> Vec<(Address, U256, i32, u128, u32, Address, Address)> {
+        use alloy_sol_types::SolCall;
+        let calls: Vec<IMulticall3::Call3> = pools
+            .iter()
+            .flat_map(|&p| {
+                [
+                    IV3Pool::slot0Call::new(()).abi_encode().into(),
+                    IV3Pool::liquidityCall::new(()).abi_encode().into(),
+                    IV3Pool::feeCall::new(()).abi_encode().into(),
+                    IV3Pool::token0Call::new(()).abi_encode().into(),
+                    IV3Pool::token1Call::new(()).abi_encode().into(),
+                ]
+                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+            })
+            .collect();
+        let provider = self.endpoint.provider();
+        let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
+        let results = match mc.aggregate3(calls).call().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "Multicall3 V3 read failed");
+                return Vec::new();
+            }
+        };
+        pools
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &p)| {
+                let base = i * 5;
+                let s = results.get(base)?;
+                let l = results.get(base + 1)?;
+                let f = results.get(base + 2)?;
+                let t0 = results.get(base + 3)?;
+                let t1 = results.get(base + 4)?;
+                if !(s.success && l.success && f.success && t0.success && t1.success) {
+                    return None;
+                }
+                let slot0 = IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]).ok()?;
+                let liq = IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
+                let fee = IV3Pool::feeCall::abi_decode_returns(&f.returnData[..]).ok()?;
+                let token0 = IV3Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
+                let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+                Some((
+                    p,
+                    U256::from(slot0.sqrtPriceX96),
+                    slot0.tick.as_i32(),
+                    liq,
+                    fee.to::<u32>(),
+                    token0,
+                    token1,
+                ))
+            })
+            .collect()
+    }
+
     pub async fn refresh(&self, store: &PoolStore) -> Result<(usize, std::time::Duration)> {
         let start = Instant::now();
         let mut updated = 0;
@@ -260,8 +405,18 @@ impl StateRefresher {
         let wombat_t0s: Vec<Address> = wombat_data.iter().map(|d| d.1).collect();
         let wombat_t1s: Vec<Address> = wombat_data.iter().map(|d| d.2).collect();
 
+        // When no bespoke state_reader is configured (zero address), skip the
+        // reader path entirely — Multicall3 covers V2/V3 reads deployless.
+        let reader_live = !self.state_reader_addr.is_zero();
+        if !reader_live {
+            debug!("state_reader unset — Multicall3 fallback mode (V2/V3 reads only)");
+        }
+
         let (v2_results, v3_results, algebra_results, aero_results,
-             pcs_results, dodo_results, wombat_results) = tokio::join!(
+             pcs_results, dodo_results, wombat_results) = if !reader_live {
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        } else {
+            tokio::join!(
             async { chunk_loop!("V2", v2_chunks, readV2) },
             async { chunk_loop!("V3", v3_chunks, readV3) },
             async { chunk_loop!("Algebra", algebra_chunks, readAlgebra) },
@@ -295,7 +450,8 @@ impl StateRefresher {
                     }
                 }
             },
-        );
+        )
+        };
 
         for s in &v2_results {
             let onchain_fee = s.fee as u32;
@@ -440,6 +596,72 @@ impl StateRefresher {
                 }),
             );
             updated += 1;
+        }
+
+        // Multicall3 salvage: pools the reader missed (reverted chunks — the
+        // constant "chunk read failed" noise) or ALL V2/V3 pools in
+        // deployless mode. One aggregate3 per CHUNK_SIZE pools; per-pool
+        // allowFailure so dead pools drop out instead of sinking the batch.
+        {
+            use std::collections::HashSet;
+            let seen_v2: HashSet<Address> = v2_results.iter().map(|s| s.pool).collect();
+            let missing_v2: Vec<Address> =
+                v2_addrs.iter().copied().filter(|a| !seen_v2.contains(a)).collect();
+            if !missing_v2.is_empty() {
+                let mut salvaged = 0usize;
+                for chunk in missing_v2.chunks(Self::CHUNK_SIZE) {
+                    for (pool, r0, r1, t0, t1) in self.multicall_v2(chunk).await {
+                        store.update(
+                            pool,
+                            PoolState::V2(V2PoolState {
+                                address: pool,
+                                token0: t0,
+                                token1: t1,
+                                reserve0: r0,
+                                reserve1: r1,
+                                fee_bps: self.fee_for_pool(&pool),
+                            }),
+                        );
+                        updated += 1;
+                        salvaged += 1;
+                    }
+                }
+                if salvaged > 0 {
+                    debug!(salvaged, missing = missing_v2.len(), "Multicall3 V2 salvage");
+                }
+            }
+
+            let seen_v3: HashSet<Address> = v3_results.iter().map(|s| s.pool).collect();
+            let missing_v3: Vec<Address> =
+                v3_addrs.iter().copied().filter(|a| !seen_v3.contains(a)).collect();
+            if !missing_v3.is_empty() {
+                let mut salvaged = 0usize;
+                for chunk in missing_v3.chunks(Self::CHUNK_SIZE) {
+                    for (pool, sqrt_p, tick, liq, fee, t0, t1) in self.multicall_v3(chunk).await {
+                        if sqrt_p.is_zero() {
+                            continue;
+                        }
+                        store.update(
+                            pool,
+                            PoolState::V3(V3PoolState {
+                                address: pool,
+                                token0: t0,
+                                token1: t1,
+                                sqrt_price_x96: sqrt_p,
+                                tick,
+                                liquidity: liq,
+                                fee,
+                                fee_otz: None,
+                            }),
+                        );
+                        updated += 1;
+                        salvaged += 1;
+                    }
+                }
+                if salvaged > 0 {
+                    debug!(salvaged, missing = missing_v3.len(), "Multicall3 V3 salvage");
+                }
+            }
         }
 
         let block = self.endpoint.block_number().await.unwrap_or(0);

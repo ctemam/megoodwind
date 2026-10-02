@@ -207,6 +207,26 @@ p50/p99 every 500 events — live: **p50 2µs / p99 4µs** on
 held for the stream's lifetime (dropping it kills alloy's pubsub
 frontend). Dead seeds are pruned by `gen_rpc_pool.py`'s verified seed list.
 
+### Multicall3 read-path (allbrightA)
+
+Pool-state reads go through canonical Multicall3
+(`0xcA11bde05977b3631167028862bE2a173976CA11`, same address on BSC and
+Base) in two roles:
+
+- **Salvage** — after the `IStateReader` batch pass, any V2/V3 pool the
+  reader missed (a reverted/undecodable chunk drops up to 50 pools at
+  once) is re-read via `aggregate3` with `allowFailure: true`: reserves +
+  token addresses for V2, slot0 + liquidity + fee + tokens for V3, all
+  inside one `eth_call` round-trip per 50-pool chunk. Per-pool
+  `allowFailure` degrades gracefully instead of sinking the batch.
+- **Deployless mode** — when `state_reader` is unset (zero address),
+  Multicall3 becomes the primary V2/V3 reader; no reader contract needs
+  to be deployed at all.
+
+Multicall3 is strictly read-path: the execution pipeline and Pimlico
+UserOperation construction never route through it — flash-loan callbacks
+must land on our executor contract, not on Multicall3.
+
 ### Compile-time spec constants (allbrightA)
 
 `arb_runner::config::spec` holds the spec's gate/math primitives as `const`:
