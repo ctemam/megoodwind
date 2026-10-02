@@ -54,16 +54,27 @@ impl PoolState {
 /// True when a JSON-RPC error is a transport failure (429, timeout, conn refused)
 /// worth benching the endpoint for — as opposed to a valid RPC-level response
 /// (execution revert, bad params) which says nothing about endpoint health.
+/// Also benches endpoints that answer "method not supported" (-32601, or
+/// -32000 like "eth_call is not supported"): the endpoint cannot serve this
+/// call class at all, so every pick of it is a guaranteed wasted RTT.
 pub fn is_transport_error<E>(e: &RpcError<TransportErrorKind, E>) -> bool {
-    matches!(e, RpcError::Transport(_))
+    match e {
+        RpcError::Transport(_) => true,
+        RpcError::ErrorResp(p) => {
+            p.code == -32601
+                || (p.code == -32000
+                    && p.message.to_ascii_lowercase().contains("not supported"))
+        }
+        _ => false,
+    }
 }
 
 /// Same check for errors returned by `sol!` contract calls (e.g. StateReader).
 pub fn is_contract_transport_error(e: &alloy::contract::Error) -> bool {
-    matches!(
-        e,
-        alloy::contract::Error::TransportError(RpcError::Transport(_))
-    )
+    match e {
+        alloy::contract::Error::TransportError(t) => is_transport_error(t),
+        _ => false,
+    }
 }
 
 pub struct Endpoint {

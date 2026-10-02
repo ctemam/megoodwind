@@ -4,12 +4,9 @@ name = "BSC"
 rpc_https = "${BSC_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-    "https://bsc-mainnet.gateway.tatum.io",
     "https://bnb.api.onfinality.io/public",
-    "https://1rpc.io/bnb",
     "https://bsc.drpc.org",
     "https://bsc-mainnet.public.blastapi.io",
-    "https://bsc.meowrpc.com",
     "https://rpc-bsc.48.club",
     "https://0.48.club",
     "https://api-bsc-mainnet-full.n.dwellir.com/2ccf18bf-2916-4198-8856-42172854353c",
@@ -33,8 +30,6 @@ rpc_https_pool = [
     "https://bsc-dataseed3.defibit.io",
     "https://bsc-dataseed2.defibit.io",
     "https://rpc.swiftnodes.io/rpc/bsc",
-    "https://bsc.api.pocket.network",
-    "https://api.zan.top/bsc-mainnet",
     "https://xrpc.cl/bsc",
 ]
 rpc_wss = "${BSC_WSS_URL}"
@@ -84,9 +79,7 @@ safety_margin_bps = 10
 stable_pool_extra_margin_bps = 5
 
 [submission]
-puissant_url    = "https://puissant-builder.48.club/"
 blockrazor_url  = "https://bsc.blockrazor.xyz"
-jetbldr_url     = "https://rpc.bsc-virginia.jetbldr.xyz"
 nodereal_url    = "https://bsc-mainnet-builder.nodereal.io"
 blink_url       = ""
 # Warp (Chainstack Trader) fires ONLY when projected profit exceeds this threshold.

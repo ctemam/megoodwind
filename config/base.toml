@@ -4,12 +4,9 @@ name = "Base"
 rpc_https = "${BASE_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-    "https://base-mainnet.gateway.tatum.io",
     "https://mainnet.base.org",
     "https://base.drpc.org",
-    "https://1rpc.io/base",
     "https://base-mainnet.public.blastapi.io",
-    "https://base.meowrpc.com",
     "https://base-pokt.nodies.app",
     "https://base-public.nodies.app",
     "https://gateway.tenderly.co/public/base",
@@ -19,8 +16,6 @@ rpc_https_pool = [
     "https://base.rpc.blxrbdn.com",
     "https://xrpc.cl/base",
     "https://rpc.swiftnodes.io/rpc/base",
-    "https://api.zan.top/base-mainnet",
-    "https://base.api.pocket.network",
 ]
 rpc_wss = "${BASE_WSS_URL}"
 # WSS pool for mempool stream — cycled on failure/backpressure

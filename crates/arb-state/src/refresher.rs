@@ -213,6 +213,12 @@ pub struct StateRefresher {
     state_reader_addr: Address,
     pool_configs: Vec<PoolConfig>,
     chain_id: u64,
+    /// Per-reader-method consecutive contract-failure streaks. A method that
+    /// fails with a non-transport error (revert, ABI decode) on every chunk
+    /// for READER_DEAD_AFTER refreshes in a row is proven dead for this
+    /// session — its bytecode predates the interface. Skipping the call
+    /// avoids guaranteed-wasted round-trips every block.
+    reader_fail_streaks: std::sync::Mutex<std::collections::HashMap<&'static str, u8>>,
 }
 
 impl StateRefresher {
@@ -221,6 +227,14 @@ impl StateRefresher {
     /// eth_calls ("request is too complex") well before the gas cap. 60 calls
     /// = 20 V2 or 12 V3 pools per round-trip.
     const MC3_MAX_CALLS: usize = 60;
+    /// Consecutive refreshes in which a reader method must fail on every
+    /// chunk before it is skipped for the rest of the session.
+    const READER_DEAD_AFTER: u8 = 2;
+    /// Per-call deadline for every read. Public endpoints have bimodal tail
+    /// latency (~150ms healthy vs 500ms+ slow): an unbounded slow pick holds
+    /// the whole parallel join hostage. A call past the deadline benches the
+    /// endpoint like a transport failure and retries on the next one.
+    const CALL_DEADLINE: std::time::Duration = std::time::Duration::from_millis(400);
 
     pub fn new(
         endpoint: Arc<Endpoint>,
@@ -233,7 +247,35 @@ impl StateRefresher {
             state_reader_addr,
             pool_configs,
             chain_id,
+            reader_fail_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Increment the contract-failure streak for a reader method; warn once
+    /// when it crosses the dead threshold.
+    fn note_reader_contract_failure(&self, label: &'static str) {
+        let mut m = self.reader_fail_streaks.lock().unwrap();
+        let n = m.entry(label).or_insert(0);
+        *n = n.saturating_add(1);
+        if *n == Self::READER_DEAD_AFTER {
+            warn!(method = label, "StateReader method dead on this deployment — skipping call (Multicall3 covers V2/V3)");
+        }
+    }
+
+    /// Reset a method's streak on any successful chunk read.
+    fn clear_reader_failure(&self, label: &'static str) {
+        let mut m = self.reader_fail_streaks.lock().unwrap();
+        m.remove(label);
+    }
+
+    /// True once a reader method has failed contract-side for
+    /// READER_DEAD_AFTER consecutive refreshes.
+    fn reader_method_dead(&self, label: &'static str) -> bool {
+        self.reader_fail_streaks
+            .lock()
+            .unwrap()
+            .get(label)
+            .is_some_and(|n| *n >= Self::READER_DEAD_AFTER)
     }
 
     /// One aggregate3 against the read pool with blacklist+retry on
@@ -244,27 +286,57 @@ impl StateRefresher {
     ) -> Vec<IMulticall3::Result3> {
         let mut all = Vec::with_capacity(calls.len());
         for batch in calls.chunks(Self::MC3_MAX_CALLS) {
-            let mut ok = None;
+            let r = self.aggregate3_batch(batch).await;
+            if r.is_empty() {
+                return Vec::new();
+            }
+            all.extend(r);
+        }
+        all
+    }
+
+    /// Single aggregate3 batch with transport failover. Some public endpoints
+    /// reject even moderate batches ("request is too complex", -32602) — a
+    /// per-endpoint gas/complexity limit, not a transport fault — so the
+    /// batch is split and retried recursively instead of failing wholesale.
+    fn aggregate3_batch<'a>(
+        &'a self,
+        batch: &'a [IMulticall3::Call3],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<IMulticall3::Result3>> + Send + 'a>> {
+        Box::pin(async move {
             for attempt in 0..2 {
                 let (idx, provider) = self.endpoint.pool_pick();
                 let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-                match mc.aggregate3(batch.to_vec()).call().await {
-                    Ok(r) => { ok = Some(r); break; }
-                    Err(e) => {
-                        warn!(error = %e, attempt, "Multicall3 aggregate3 failed");
-                        if !arb_rpc::is_contract_transport_error(&e) || attempt == 1 {
-                            return Vec::new();
+                match tokio::time::timeout(Self::CALL_DEADLINE, mc.aggregate3(batch.to_vec()).call()).await {
+                    Ok(Ok(r)) => return r,
+                    outcome => {
+                        if let Ok(Err(e)) = &outcome {
+                            warn!(error = %e, attempt, calls = batch.len(), "Multicall3 aggregate3 failed");
+                            let msg = e.to_string().to_ascii_lowercase();
+                            if msg.contains("too complex") || msg.contains("too large") {
+                                self.endpoint.blacklist_read(idx);
+                                let mut out = Vec::new();
+                                if batch.len() > 4 {
+                                    let mid = batch.len() / 2;
+                                    out = self.aggregate3_batch(&batch[..mid]).await;
+                                    if !out.is_empty() {
+                                        out.extend(self.aggregate3_batch(&batch[mid..]).await);
+                                    }
+                                }
+                                return out;
+                            }
+                            if !arb_rpc::is_contract_transport_error(e) || attempt == 1 {
+                                return Vec::new();
+                            }
+                        } else {
+                            warn!(attempt, calls = batch.len(), "Multicall3 aggregate3 timed out");
                         }
                         self.endpoint.blacklist_read(idx);
                     }
                 }
             }
-            match ok {
-                Some(r) => all.extend(r),
-                None => return Vec::new(),
-            }
-        }
-        all
+            Vec::new()
+        })
     }
 
     /// Multicall3 read for V2 pools: reserves + token addresses in ONE
@@ -374,28 +446,68 @@ impl StateRefresher {
 
         // Each async block picks its own provider from the read pool and fails
         // over to the next healthy endpoint on a transport error (429/timeout).
+        // A contract-level error (revert / decode) comes from the deployed
+        // reader bytecode itself — the same call fails identically on every
+        // remaining chunk and on any other endpoint, so break early instead
+        // of burning one RTT per chunk. Total-failure streaks mark the method
+        // dead so future refreshes skip it entirely.
         macro_rules! chunk_loop {
             ($label:literal, $chunks:expr, $call:ident) => {{
                 let mut all = Vec::new();
+                let mut contract_fail = false;
                 let (mut idx, provider) = self.endpoint.pool_pick();
                 let mut reader = IStateReader::new(self.state_reader_addr, provider);
                 for chunk in &$chunks {
-                    match reader.$call(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => {
-                            warn!(chunk_size = chunk.len(), "{} chunk read failed: {}", $label, e);
-                            if arb_rpc::is_contract_transport_error(&e) {
+                    match tokio::time::timeout(Self::CALL_DEADLINE, reader.$call(chunk.clone()).call()).await {
+                        Ok(Ok(states)) => all.extend(states),
+                        outcome => {
+                            if let Ok(Err(e)) = &outcome {
+                                warn!(chunk_size = chunk.len(), "{} chunk read failed: {}", $label, e);
+                            } else {
+                                warn!(chunk_size = chunk.len(), "{} chunk read timed out ({}ms)", $label, Self::CALL_DEADLINE.as_millis());
+                            }
+                            let transport_fail = match &outcome {
+                                Ok(Err(e)) => arb_rpc::is_contract_transport_error(e),
+                                Err(_) => true,
+                                _ => false,
+                            };
+                            if transport_fail {
                                 self.endpoint.blacklist_read(idx);
                                 let (nidx, np) = self.endpoint.pool_pick();
                                 idx = nidx;
                                 reader = IStateReader::new(self.state_reader_addr, np);
-                                match reader.$call(chunk.clone()).call().await {
-                                    Ok(states) => all.extend(states),
-                                    Err(e2) => warn!(chunk_size = chunk.len(), "{} chunk retry failed: {}", $label, e2),
+                                match tokio::time::timeout(Self::CALL_DEADLINE, reader.$call(chunk.clone()).call()).await {
+                                    Ok(Ok(states)) => all.extend(states),
+                                    outcome2 => {
+                                        match &outcome2 {
+                                            Ok(Err(e2)) => {
+                                                warn!(chunk_size = chunk.len(), "{} chunk retry failed: {}", $label, e2);
+                                                if arb_rpc::is_contract_transport_error(e2) {
+                                                    self.endpoint.blacklist_read(idx);
+                                                } else {
+                                                    contract_fail = true;
+                                                }
+                                            }
+                                            Err(_) => {
+                                                warn!(chunk_size = chunk.len(), "{} chunk retry timed out", $label);
+                                                self.endpoint.blacklist_read(idx);
+                                            }
+                                            _ => {}
+                                        }
+                                        if contract_fail { break; }
+                                    }
                                 }
+                            } else {
+                                contract_fail = true;
+                                break;
                             }
                         }
                     }
+                }
+                if contract_fail && all.is_empty() {
+                    self.note_reader_contract_failure($label);
+                } else if !all.is_empty() {
+                    self.clear_reader_failure($label);
                 }
                 all
             }};
@@ -437,46 +549,118 @@ impl StateRefresher {
             debug!("state_reader unset — Multicall3 fallback mode (V2/V3 reads only)");
         }
 
+        // Methods proven dead on the deployed reader (contract-side failure on
+        // every chunk for READER_DEAD_AFTER refreshes) are skipped entirely —
+        // a guaranteed revert costs a full RTT every block. For V2/V3 the
+        // Multicall3 salvage becomes the primary reader and runs inside the
+        // same parallel join, so a dead reader adds zero extra round-trips.
+        let v2_dead = !reader_live || self.reader_method_dead("V2");
+        let v3_dead = !reader_live || self.reader_method_dead("V3");
+        let algebra_dead = !reader_live || self.reader_method_dead("Algebra");
+        let aero_dead = !reader_live || self.reader_method_dead("AeroV2");
+        let pcs_dead = !reader_live || self.reader_method_dead("PCS Stable");
+        let dodo_dead = !reader_live || self.reader_method_dead("DODO");
+        let wombat_dead = !reader_live || self.reader_method_dead("Wombat");
+
         let (v2_results, v3_results, algebra_results, aero_results,
-             pcs_results, dodo_results, wombat_results) = if !reader_live {
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
-        } else {
-            tokio::join!(
-            async { chunk_loop!("V2", v2_chunks, readV2) },
-            async { chunk_loop!("V3", v3_chunks, readV3) },
-            async { chunk_loop!("Algebra", algebra_chunks, readAlgebra) },
-            async { chunk_loop!("AeroV2", aero_chunks, readAeroV2) },
-            async { chunk_loop!("PCS Stable", pcs_chunks, readPcsStable) },
-            async { chunk_loop!("DODO", dodo_chunks, readDodoV2) },
+             pcs_results, dodo_results, wombat_results,
+             v2_mc, v3_mc, block) = tokio::join!(
             async {
-                if wombat_pools.is_empty() {
+                if v2_dead { Vec::new() } else { chunk_loop!("V2", v2_chunks, readV2) }
+            },
+            async {
+                if v3_dead { Vec::new() } else { chunk_loop!("V3", v3_chunks, readV3) }
+            },
+            async {
+                if algebra_dead { Vec::new() } else { chunk_loop!("Algebra", algebra_chunks, readAlgebra) }
+            },
+            async {
+                if aero_dead { Vec::new() } else { chunk_loop!("AeroV2", aero_chunks, readAeroV2) }
+            },
+            async {
+                if pcs_dead { Vec::new() } else { chunk_loop!("PCS Stable", pcs_chunks, readPcsStable) }
+            },
+            async {
+                if dodo_dead { Vec::new() } else { chunk_loop!("DODO", dodo_chunks, readDodoV2) }
+            },
+            async {
+                if wombat_dead || wombat_pools.is_empty() {
                     return Vec::new();
                 }
                 let (idx, provider) = self.endpoint.pool_pick();
                 let reader = IStateReader::new(self.state_reader_addr, provider);
-                match reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call().await {
-                    Ok(states) => states,
-                    Err(e) => {
-                        warn!("Wombat read failed: {e}");
-                        if arb_rpc::is_contract_transport_error(&e) {
+                match tokio::time::timeout(Self::CALL_DEADLINE, reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
+                    Ok(Ok(states)) => {
+                        self.clear_reader_failure("Wombat");
+                        states
+                    }
+                    outcome => {
+                        if let Ok(Err(e)) = &outcome {
+                            warn!("Wombat read failed: {e}");
+                        } else {
+                            warn!("Wombat read timed out");
+                        }
+                        let transport_fail = match &outcome {
+                            Ok(Err(e)) => arb_rpc::is_contract_transport_error(e),
+                            Err(_) => true,
+                            _ => false,
+                        };
+                        if transport_fail {
                             self.endpoint.blacklist_read(idx);
                             let (_, np) = self.endpoint.pool_pick();
                             let retry = IStateReader::new(self.state_reader_addr, np);
-                            match retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call().await {
-                                Ok(states) => states,
-                                Err(e2) => {
-                                    warn!("Wombat retry failed: {e2}");
+                            match tokio::time::timeout(Self::CALL_DEADLINE, retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
+                                Ok(Ok(states)) => states,
+                                outcome2 => {
+                                    match &outcome2 {
+                                        Ok(Err(e2)) => {
+                                            warn!("Wombat retry failed: {e2}");
+                                            if !arb_rpc::is_contract_transport_error(e2) {
+                                                self.note_reader_contract_failure("Wombat");
+                                            }
+                                        }
+                                        Err(_) => warn!("Wombat retry timed out"),
+                                        _ => {}
+                                    }
                                     Vec::new()
                                 }
                             }
                         } else {
+                            self.note_reader_contract_failure("Wombat");
                             Vec::new()
                         }
                     }
                 }
             },
-        )
-        };
+            async {
+                // Primary Multicall3 read when the V2 reader path is dead or unset.
+                if !v2_dead {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                for chunk in v2_addrs.chunks(Self::CHUNK_SIZE) {
+                    out.extend(self.multicall_v2(chunk).await);
+                }
+                out
+            },
+            async {
+                if !v3_dead {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                for chunk in v3_addrs.chunks(Self::CHUNK_SIZE) {
+                    out.extend(self.multicall_v3(chunk).await);
+                }
+                out
+            },
+            async {
+                tokio::time::timeout(Self::CALL_DEADLINE, self.endpoint.block_number())
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or(0)
+            },
+        );
 
         for s in &v2_results {
             let onchain_fee = s.fee as u32;
@@ -623,13 +807,50 @@ impl StateRefresher {
             updated += 1;
         }
 
-        // Multicall3 salvage: pools the reader missed (reverted chunks — the
-        // constant "chunk read failed" noise) or ALL V2/V3 pools in
-        // deployless mode. One aggregate3 per CHUNK_SIZE pools; per-pool
-        // allowFailure so dead pools drop out instead of sinking the batch.
+        // Multicall3 results fetched inside the join (primary reader when the
+        // deployed reader's method is dead or unset).
+        for (pool, r0, r1, t0, t1) in &v2_mc {
+            store.update(
+                *pool,
+                PoolState::V2(V2PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    reserve0: *r0,
+                    reserve1: *r1,
+                    fee_bps: self.fee_for_pool(pool),
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, sqrt_p, tick, liq, fee, t0, t1) in &v3_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *fee,
+                    fee_otz: None,
+                }),
+            );
+            updated += 1;
+        }
+
+        // Multicall3 salvage: pools the reader missed (partial chunk failures).
+        // Sequential — runs only when a live reader left gaps, which is rare.
+        // per-pool allowFailure so dead pools drop out instead of sinking
+        // the batch.
         {
             use std::collections::HashSet;
-            let seen_v2: HashSet<Address> = v2_results.iter().map(|s| s.pool).collect();
+            let mut seen_v2: HashSet<Address> = v2_results.iter().map(|s| s.pool).collect();
+            seen_v2.extend(v2_mc.iter().map(|t| t.0));
             let missing_v2: Vec<Address> =
                 v2_addrs.iter().copied().filter(|a| !seen_v2.contains(a)).collect();
             if !missing_v2.is_empty() {
@@ -656,7 +877,8 @@ impl StateRefresher {
                 }
             }
 
-            let seen_v3: HashSet<Address> = v3_results.iter().map(|s| s.pool).collect();
+            let mut seen_v3: HashSet<Address> = v3_results.iter().map(|s| s.pool).collect();
+            seen_v3.extend(v3_mc.iter().map(|t| t.0));
             let missing_v3: Vec<Address> =
                 v3_addrs.iter().copied().filter(|a| !seen_v3.contains(a)).collect();
             if !missing_v3.is_empty() {
@@ -689,7 +911,6 @@ impl StateRefresher {
             }
         }
 
-        let block = self.endpoint.block_number().await.unwrap_or(0);
         store.set_block(block);
 
         let elapsed = start.elapsed();
