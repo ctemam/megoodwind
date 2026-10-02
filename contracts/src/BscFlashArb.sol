@@ -137,6 +137,18 @@ interface IFlashLoanRecipient {
     ) external;
 }
 
+// Aave V3 Pool — identical flashLoanSimple/executeOperation interface on
+// every chain Aave V3 deploys to (premium set per-pool via FLASHLOAN_PREMIUM_TOTAL).
+interface IAaveV3Pool {
+    function flashLoanSimple(
+        address receiverAddress,
+        address asset,
+        uint256 amount,
+        bytes calldata params,
+        uint16 referralCode
+    ) external;
+}
+
 contract BscFlashArb is
     IUnlockCallback,
     IUniswapV3FlashCallback,
@@ -171,6 +183,8 @@ contract BscFlashArb is
     address private _expectedV3SwapPool;
     /// Balancer Vault address while a Vault flash loan is in flight; 0 otherwise.
     address private _balancerVault;
+    /// Aave V3 Pool address while an Aave flash loan is in flight; 0 otherwise.
+    address private _aavePool;
 
     // Per-pool metadata for protocols that need direction/index info
     // Key: keccak256(abi.encodePacked(pool, tokenIn))
@@ -208,7 +222,7 @@ contract BscFlashArb is
 
     // ============ Enums ============
 
-    enum Protocol { V3, V4, V2, PCS_STABLE, WOMBAT, DODO_V2, ALGEBRA, BALANCER }
+    enum Protocol { V3, V4, V2, PCS_STABLE, WOMBAT, DODO_V2, ALGEBRA, BALANCER, AAVE_V3 }
 
     // ============ Structs ============
 
@@ -441,6 +455,81 @@ contract BscFlashArb is
 
         uint256 gasUsed = gasStart - gasleft();
         emit ArbitrageExecuted(asset, amount, grossProfit, gasUsed, uint8(Protocol.BALANCER));
+    }
+
+    // ============ Aave V3 Flash Loan ============
+
+    /// Entry: borrow `amount` of `asset` via Aave V3 flashLoanSimple and
+    /// replay the swap plan inside executeOperation. Premium is charged by
+    /// the pool (typically 5-9 bps vs Balancer's 0%) — the identical
+    /// interface makes it the portable fallback on chains without Balancer
+    /// liquidity for the asset.
+    function executeAaveArbitrage(
+        address aavePool,
+        address asset,
+        uint256 amount,
+        SwapInstruction[] calldata swapInstructions,
+        uint256 deadline
+    ) external onlyOwner whenNotPaused checkGasPrice {
+        if (block.timestamp > deadline) revert SwapFailed("Transaction expired");
+        if (!supportedTokens[asset]) revert UnsupportedToken(asset);
+        if (amount == 0) revert InvalidAmount();
+        if (swapInstructions.length == 0) revert SwapFailed("No swaps");
+
+        _aavePool = aavePool;
+        _gasStart = gasleft();
+
+        IAaveV3Pool(aavePool).flashLoanSimple(
+            address(this), asset, amount,
+            abi.encode(swapInstructions), 0
+        );
+
+        _aavePool = address(0);
+        _gasStart = 0;
+    }
+
+    /// Aave V3 callback: run the swap plan, then approve the pool to pull
+    /// back amount+premium (Aave pulls via transferFrom, unlike Balancer
+    /// where we transfer to the Vault).
+    function executeOperation(
+        address asset,
+        uint256 amount,
+        uint256 premium,
+        address initiator,
+        bytes calldata params
+    ) external returns (bool) {
+        if (_aavePool == address(0) || msg.sender != _aavePool) revert Unauthorized();
+        if (initiator != address(this)) revert Unauthorized();
+        uint256 gasStart = _gasStart;
+
+        SwapInstruction[] memory swapInstructions =
+            abi.decode(params, (SwapInstruction[]));
+
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
+
+        for (uint256 i = 0; i < swapInstructions.length; i++) {
+            _dispatchSwap(swapInstructions[i]);
+        }
+
+        uint256 balanceAfter = IERC20(asset).balanceOf(address(this));
+        if (balanceAfter <= balanceBefore + premium) {
+            revert InsufficientProfit(0, minProfitBasisPoints);
+        }
+        uint256 grossProfit = balanceAfter - balanceBefore - premium;
+        uint256 requiredProfit = (amount * minProfitBasisPoints) / 10000;
+        if (grossProfit < requiredProfit) {
+            revert InsufficientProfit(grossProfit, requiredProfit);
+        }
+
+        // Aave pulls amount+premium via transferFrom after callback returns.
+        IERC20(asset).approve(_aavePool, amount + premium);
+
+        totalExecutions++;
+        totalProfit += grossProfit;
+
+        uint256 gasUsed = gasStart - gasleft();
+        emit ArbitrageExecuted(asset, amount, grossProfit, gasUsed, uint8(Protocol.AAVE_V3));
+        return true;
     }
 
     // ============ Swap Dispatcher ============

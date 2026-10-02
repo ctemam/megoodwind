@@ -2,6 +2,8 @@ mod config;
 mod metrics;
 mod pricing;
 mod runner;
+mod token_lists;
+mod token_safety;
 
 use anyhow::Result;
 use tracing::info;

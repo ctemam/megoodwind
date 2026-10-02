@@ -402,6 +402,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         token_decimals.insert(addr, dec);
     }
 
+    // Canonical token-list reconciliation (Uniswap Token Lists spec):
+    // verify symbol→address bindings and correct decimals metadata.
+    if let Some(registry) = crate::token_lists::fetch_registry(cfg.chain.chain_id).await {
+        crate::token_lists::reconcile(&registry, &tokens, &mut token_decimals);
+    }
+
     // Merge discovered pools/tokens from arb-discovery JSON files (async I/O)
     let discovery_store = DiscoveryStore::new(std::path::Path::new("discovery"));
     let chain_lower = chain_name.to_lowercase();
@@ -452,6 +458,34 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
         if merged > 0 {
             info!(merged, total = pool_infos.len(), "Merged discovered pools");
+        }
+    }
+
+    // GoPlus token-safety gate: drop pools whose tokens are flagged
+    // (honeypot, sell-blocked, heavy transfer tax) BEFORE they enter the
+    // execution graph. Fail-open on API outage — metadata must never
+    // kill the scanner.
+    {
+        let mut all_tokens: HashSet<Address> = HashSet::new();
+        for pc in &pool_configs {
+            all_tokens.extend(pc.token0.iter().copied());
+            all_tokens.extend(pc.token1.iter().copied());
+        }
+        let blocked = crate::token_safety::screen_tokens(cfg.chain.chain_id, &all_tokens).await;
+        if !blocked.is_empty() {
+            let before = pool_configs.len();
+            pool_configs.retain(|pc| {
+                !pc.token0.is_some_and(|t| blocked.contains(&t))
+                    && !pc.token1.is_some_and(|t| blocked.contains(&t))
+            });
+            pool_infos.retain(|pi| {
+                !blocked.contains(&pi.token0) && !blocked.contains(&pi.token1)
+            });
+            info!(
+                dropped = before - pool_configs.len(),
+                remaining = pool_configs.len(),
+                "GoPlus safety gate dropped pools"
+            );
         }
     }
 
