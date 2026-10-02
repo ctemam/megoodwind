@@ -16,14 +16,33 @@ const CHAINS = {
   base: { metrics: 'http://localhost:9101/metrics', rpc: 'https://base-rpc.publicnode.com', chainId: 8453, label: 'Base' },
 }
 
+const ENV_PATH = path.join(REPO, '.env')
 const env = {}
 try {
-  for (const line of fs.readFileSync(path.join(REPO, '.env'), 'utf8').split('\n')) {
+  for (const line of fs.readFileSync(ENV_PATH, 'utf8').split('\n')) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/)
     if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '')
   }
 } catch {}
-const LIVE = env.LIVE_COMMANDER_APPROVED === 'true'
+// Re-read per request: go-live flips the flag mid-process.
+function isLive() {
+  try {
+    return fs.readFileSync(ENV_PATH, 'utf8').split('\n').some(
+      l => l.replace(/\r$/, '').trim() === 'LIVE_COMMANDER_APPROVED=true')
+  } catch { return false }
+}
+
+
+function setEnvFlag(key, value) {
+  const lines = fs.existsSync(ENV_PATH)
+    ? fs.readFileSync(ENV_PATH, 'utf8').split('\n').map(l => l.replace(/\r$/, ''))
+    : []
+  const i = lines.findIndex(l => l.startsWith(`${key}=`))
+  if (i >= 0) lines[i] = `${key}=${value}`
+  else lines.push(`${key}=${value}`)
+  fs.writeFileSync(ENV_PATH, lines.filter((l, j) => l !== '' || j < lines.length - 1).join('\n'))
+  env[key] = value
+}
 
 const app = express()
 app.use(express.json())
@@ -48,7 +67,7 @@ app.get('/api/metrics', async (req, res) => {
   const chain = req.query.chain
   if (!CHAINS[chain]) return res.status(400).json({ error: 'unknown chain' })
   try {
-    res.json({ chain, live: LIVE, ...(await fetchMetrics(chain)) })
+    res.json({ chain, live: isLive(), ...(await fetchMetrics(chain)) })
   } catch (e) {
     res.status(502).json({ error: `runner ${chain} unreachable: ${e.message}` })
   }
@@ -62,7 +81,7 @@ app.get('/api/metrics/all', async (_req, res) => {
   const net = Object.values(out).reduce(
     (s, m) => s + (m ? m['arb_gross_profit_usd_total'] || 0 : 0), 0)
   recordProfit(net)
-  res.json({ live: LIVE, chains: out, profit: profitSummary(net) })
+  res.json({ live: isLive(), chains: out, profit: profitSummary(net) })
 })
 
 // Rolling profit history — the UI's "last 24h" mode needs a baseline from
@@ -130,7 +149,7 @@ app.get('/api/wallets', async (_req, res) => {
       }
     }
   }
-  res.json({ live: LIVE, wallets })
+  res.json({ live: isLive(), wallets })
 })
 
 // Currency conversion — CoinGecko free API (no key).
@@ -145,22 +164,120 @@ app.get('/api/prices', async (_req, res) => {
   }
 })
 
+// ── Deployment workflow: Preflight → Simulation → Go-live ──────────────
+// Simulation state persists beside the server so verification survives
+// restarts. Go-live rewrites .env + config TOMLs and restarts the runners
+// in live mode — which is exactly what auto-kills simulation.
+
+const SIM_STATE = path.join(__dirname, '.sim-state.json')
+let simState = { verified: false, verifiedAt: null }
+try { simState = { ...simState, ...JSON.parse(fs.readFileSync(SIM_STATE, 'utf8')) } } catch {}
+function saveSimState() { fs.writeFile(SIM_STATE, JSON.stringify(simState), () => {}) }
+
+app.get('/api/deploy/preflight', async (_req, res) => {
+  const checks = []
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    try {
+      const m = await fetchMetrics(c)
+      checks.push({ name: `${cfg.label} runner`, ok: true,
+        detail: `online · block ${m.arb_current_block?.toLocaleString() ?? '?'} · ${m.arb_pool_count ?? 0} pools · ${(m.arb_scan_latency_seconds_count || 0).toLocaleString()} scans` })
+    } catch (e) {
+      checks.push({ name: `${cfg.label} runner`, ok: false, detail: `unreachable: ${e.message}` })
+    }
+  }
+  for (const key of ['BSC_ARB_CONTRACT', 'BASE_ARB_CONTRACT', 'PIMLICO_API_KEY', 'PRIVATE_KEY']) {
+    const set = !!env[key]
+    checks.push({ name: `env ${key}`, ok: set, detail: set ? 'set' : 'missing from .env' })
+  }
+  res.json({
+    live: isLive(),
+    checks,
+    advisory: [
+      'Redeploy executors (ops/DEPLOY.md) — activates Balancer 0% + Aave V3 routes',
+      'Sponsor policy — ALLBRIGHTA_SPONSOR_POLICY_ID for gasless UserOps',
+      'Premium RPC keys — gen_rpc_pool.py --alchemy-key/… for 200+ node pool',
+    ],
+  })
+})
+
+app.get('/api/deploy/sim', (_req, res) => {
+  // Simulation = the running dry-run fleet; metrics are the sim evidence.
+  const chains = {}
+  Promise.all(Object.keys(CHAINS).map(async c => {
+    try {
+      const m = await fetchMetrics(c)
+      const evals = m.arb_paths_evaluated_total || 0
+      const hits = m.arb_profitable_found_total || 0
+      chains[c] = {
+        online: true, evals, hits,
+        hitRate: evals ? hits / evals : 0,
+        grossUsd: m.arb_gross_profit_usd_total || 0,
+        scans: m.arb_scan_latency_seconds_count || 0,
+        submits: m.arb_submit_attempts_total || 0,
+        landed: m.arb_submit_landed_total || 0,
+      }
+    } catch { chains[c] = { online: false } }
+  })).then(() => res.json({ live: isLive(), verified: simState.verified, verifiedAt: simState.verifiedAt, chains }))
+})
+
+// Commander attestation that simulation metrics are acceptable — the
+// SIMULATION_VERIFIED gate. Records locally and mirrors into .env.
+app.post('/api/simulation/verify', (_req, res) => {
+  simState.verified = true
+  simState.verifiedAt = new Date().toISOString()
+  saveSimState()
+  try { setEnvFlag('SIMULATION_VERIFIED', 'true') } catch {}
+  res.json({ verified: true, verifiedAt: simState.verifiedAt })
+})
+
+// Go-live requires sim verification first, then flips the engine out of
+// dry-run: LIVE_COMMANDER_APPROVED=true in .env, dry_run=false in both
+// chain TOMLs, and a PM2 restart — the restart IS the simulation kill.
+app.post('/api/deploy/golive', async (req, res) => {
+  if (req.body?.confirm !== 'GO_LIVE')
+    return res.status(400).json({ error: 'confirm must be GO_LIVE' })
+  if (!simState.verified)
+    return res.status(409).json({ error: 'simulation not verified — run Preflight → Simulation first' })
+  try {
+    setEnvFlag('LIVE_COMMANDER_APPROVED', 'true')
+    setEnvFlag('SIMULATION_VERIFIED', 'true')
+    const flipped = []
+    for (const f of ['config/bsc.toml', 'config/base.toml']) {
+      const p = path.join(REPO, f)
+      const t = fs.readFileSync(p, 'utf8')
+      if (t.includes('dry_run = true')) {
+        fs.writeFileSync(p, t.replace(/dry_run = true/, 'dry_run = false'))
+        flipped.push(f)
+      }
+    }
+    const { execFile } = await import('node:child_process')
+    execFile('pm2', ['restart', 'allbrightA-bsc', 'allbrightA-base', '--update-env'],
+      { timeout: 20000 }, () => {})
+    res.json({
+      ok: true, live: true, flipped,
+      note: 'Runners restarting in live mode — simulation auto-killed.',
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // Withdrawal — manual triggers a contract withdraw call; auto is a threshold
 // sweep config. Hard-gated on LIVE_COMMANDER_APPROVED like every other tx path.
 let autoCfg = { enabled: false, thresholdUsd: 100, to: null }
-app.get('/api/withdraw/config', (_req, res) => res.json({ live: LIVE, auto: autoCfg }))
+app.get('/api/withdraw/config', (_req, res) => res.json({ live: isLive(), auto: autoCfg }))
 app.post('/api/withdraw/auto', (req, res) => {
   autoCfg = { ...autoCfg, ...req.body }
-  res.json({ live: LIVE, auto: autoCfg, note: LIVE ? 'armed' : 'stored (dry-run; flips live with LIVE_COMMANDER_APPROVED)' })
+  res.json({ live: isLive(), auto: autoCfg, note: isLive() ? 'armed' : 'stored (dry-run; flips live with LIVE_COMMANDER_APPROVED)' })
 })
 app.post('/api/withdraw', async (req, res) => {
   const { chain, to, amountWei } = req.body || {}
   if (!CHAINS[chain]) return res.status(400).json({ error: 'unknown chain' })
-  if (!LIVE) return res.json({ dryRun: true, wouldCall: 'emergencyWithdraw', chain, to, amountWei })
+  if (!isLive()) return res.json({ dryRun: true, wouldCall: 'emergencyWithdraw', chain, to, amountWei })
   res.status(501).json({ error: 'live withdrawal requires Commander broadcast path — not enabled in this build' })
 })
 
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))
 
-app.listen(PORT, () => console.log(`dashboard proxy on :${PORT} (live=${LIVE})`))
+app.listen(PORT, () => console.log(`dashboard proxy on :${PORT} (live=${isLive()})`))

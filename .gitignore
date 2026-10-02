@@ -86,3 +86,4 @@ local/
 TODO.local.md
 NOTES.local.md
 apps/dashboard/server/.profit-history.json
+apps/dashboard/server/.sim-state.json
