@@ -7,11 +7,13 @@ import Wallet from './pages/Wallet.jsx'
 import Deployment from './pages/Deployment.jsx'
 import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
+import Report from './pages/Report.jsx'
 import Settings from './pages/Settings.jsx'
 
 const NAV = [
   ['/', '⌂', 'Dashboard'],
   ['/pnl', '◔', 'Profit & Loss'],
+  ['/report', '≣', 'Report'],
   ['/wallet', '◉', 'Wallet'],
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
@@ -74,6 +76,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/pnl" element={<PnL />} />
+          <Route path="/report" element={<Report />} />
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />

@@ -31,6 +31,18 @@ lazy_static::lazy_static! {
         "Total bundle submission attempts"
     ).unwrap();
 
+    pub static ref TOKEN_PROFIT_USD: CounterVec = register_counter_vec!(
+        "arb_token_profit_usd_total",
+        "Cumulative effective profit USD by flash token",
+        &["token"]
+    ).unwrap();
+
+    pub static ref PROFITABLE_BY_TOKEN: CounterVec = register_counter_vec!(
+        "arb_profitable_by_token_total",
+        "Profitable paths found by flash token",
+        &["token"]
+    ).unwrap();
+
     pub static ref SUBMIT_BY_VENUE: CounterVec = register_counter_vec!(
         "arb_submit_by_venue_total",
         "Submission attempts by venue and tier",

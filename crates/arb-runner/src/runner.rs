@@ -390,6 +390,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         })
         .collect();
 
+    let token_syms: HashMap<Address, String> = tokens
+        .iter()
+        .map(|(name, addr)| (*addr, name.clone()))
+        .collect();
     let mut token_usd_prices = token_usd_prices;
     let mut token_decimals: HashMap<Address, u32> = HashMap::new();
 
@@ -762,6 +766,13 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
         if !candidates.is_empty() {
             metrics::PROFITABLE_FOUND.inc_by(candidates.len() as f64);
+            for c in &candidates {
+                let sym = token_syms
+                    .get(&paths[c.path_id as usize].flash_token)
+                    .map(String::as_str)
+                    .unwrap_or("?");
+                metrics::PROFITABLE_BY_TOKEN.with_label_values(&[sym]).inc();
+            }
 
             let mut best_result = None;
             let mut best_path_idx = 0usize;
@@ -802,6 +813,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 if decision.accept {
                     metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);
+                    let sym = token_syms
+                        .get(&path.flash_token)
+                        .map(String::as_str)
+                        .unwrap_or("?");
+                    metrics::TOKEN_PROFIT_USD.with_label_values(&[sym]).inc_by(decision.effective_profit_usd);
                     if best_result.as_ref().map_or(true, |(_, d): &(arb_sim::SimResult, f64)| decision.effective_profit_usd > *d) {
                         best_path_idx = candidate.path_id as usize;
                         best_result = Some((opt_result, decision.effective_profit_usd));

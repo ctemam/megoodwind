@@ -123,6 +123,179 @@ async function sampleProfit() {
 sampleProfit()
 setInterval(sampleProfit, 30_000)
 
+// ── Metrics history — powers the Report page's selectable windows ──────
+// 60s snapshots of the counters the report analyzes. Raw for 48h, then
+// compacted to 15-min buckets; 90-day cap. Persisted like the profit log.
+const HIST_LOG = path.join(__dirname, '.metrics-history.json')
+let histLog = []
+try { histLog = JSON.parse(fs.readFileSync(HIST_LOG, 'utf8')) } catch {}
+
+const HIST_KEYS = [
+  'arb_paths_evaluated_total', 'arb_profitable_found_total',
+  'arb_gross_profit_usd_total', 'arb_net_profit_usd_total',
+  'arb_scan_latency_seconds_count', 'arb_scan_latency_seconds_sum',
+  'arb_state_refresh_seconds_count', 'arb_state_refresh_seconds_sum',
+  'arb_backrun_candidates_total', 'arb_submit_attempts_total',
+  'arb_warp_spend_usd_total', 'arb_current_block',
+]
+
+async function sampleHistory() {
+  const snap = { t: Date.now(), chains: {} }
+  for (const c of Object.keys(CHAINS)) {
+    try {
+      const m = await fetchMetrics(c)
+      const o = {}
+      for (const k of HIST_KEYS) o[k] = m[k] || 0
+      // Token-labeled counters arrive flattened as name{token="SYM"}.
+      for (const [k, v] of Object.entries(m)) {
+        if (k.startsWith('arb_profitable_by_token_total{') ||
+            k.startsWith('arb_token_profit_usd_total{')) o[k] = v
+      }
+      snap.chains[c] = o
+    } catch { /* chain offline — record nothing */ }
+  }
+  if (Object.keys(snap.chains).length === 0) return
+  const last = histLog[histLog.length - 1]
+  if (!last || snap.t - last.t >= 55_000) histLog.push(snap)
+  else Object.assign(last, snap)
+  // Compact: >48h → one sample per 15-min bucket; drop >90d.
+  const cutoff90 = snap.t - 90 * 86400e3
+  const cutoffRaw = snap.t - 48 * 3600e3
+  const buckets = new Map()
+  histLog = histLog.filter(s => s.t >= cutoff90).filter(s => {
+    if (s.t >= cutoffRaw) return true
+    const b = Math.floor(s.t / 900_000)
+    if (buckets.has(b)) return false
+    buckets.set(b, true)
+    return true
+  })
+  fs.writeFile(HIST_LOG, JSON.stringify(histLog), () => {})
+}
+sampleHistory()
+setInterval(sampleHistory, 60_000)
+
+const WINDOWS = { '1h': 3600e3, '6h': 6 * 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3, all: Infinity }
+
+app.get('/api/report', (req, res) => {
+  const w = WINDOWS[req.query.window] ?? WINDOWS['24h']
+  const now = Date.now()
+  const samples = w === Infinity ? histLog : histLog.filter(s => s.t >= now - w)
+  if (samples.length < 2) {
+    return res.json({ live: isLive(), window: req.query.window || '24h',
+      coverage_h: histLog.length ? (now - histLog[0].t) / 3600e3 : 0,
+      samples: samples.length, chains: {}, series: [], tokens: [], recommendations: [] })
+  }
+  const first = samples[0], last = samples[samples.length - 1]
+  const spanH = (last.t - first.t) / 3600e3 || 0
+  const chains = {}
+  const series = [] // per-sample totals for the time-series chart
+  const tokens = {}
+
+  for (const c of Object.keys(CHAINS)) {
+    const l = last.chains[c]
+    const snaps = samples.map(s => s.chains[c]).filter(Boolean)
+    if (!l || snaps.length < 2) { chains[c] = { online: !!l } ; continue }
+    // Counter-reset-tolerant delta: cumulative counters restart at 0 when a
+    // runner restarts, so accumulate only positive increments per key.
+    const prev = {}
+    const acc = {}
+    for (const m of snaps) {
+      for (const [k, v] of Object.entries(m)) {
+        if (k in prev) acc[k] = (acc[k] || 0) + Math.max(0, v - prev[k])
+        prev[k] = v
+      }
+    }
+    const d = k => acc[k] || 0
+    const evals = d('arb_paths_evaluated_total')
+    const hits = d('arb_profitable_found_total')
+    const latCnt = d('arb_scan_latency_seconds_count')
+    chains[c] = {
+      online: true,
+      evals, hits,
+      hitRate: evals ? hits / evals : 0,
+      grossUsd: d('arb_gross_profit_usd_total'),
+      netUsd: d('arb_net_profit_usd_total'),
+      grossPerHour: spanH ? d('arb_gross_profit_usd_total') / spanH : 0,
+      hitsPerHour: spanH ? hits / spanH : 0,
+      scans: latCnt,
+      avgScanMs: latCnt ? (d('arb_scan_latency_seconds_sum') / latCnt) * 1000 : 0,
+      avgRefreshMs: d('arb_state_refresh_seconds_count') ?
+        (d('arb_state_refresh_seconds_sum') / d('arb_state_refresh_seconds_count')) * 1000 : 0,
+      backruns: d('arb_backrun_candidates_total'),
+      submits: d('arb_submit_attempts_total'),
+      warpSpendUsd: d('arb_warp_spend_usd_total'),
+      blocks: d('arb_current_block'),
+    }
+    // per-token attribution for this chain (reset-tolerant via acc)
+    for (const [k, dv] of Object.entries(acc)) {
+      const tm = k.match(/^arb_(profitable_by_token|token_profit_usd)_total\{token="([^"]+)"\}$/)
+      if (!tm) continue
+      const [_, kind, sym] = tm
+      if (!dv) continue
+      const key = `${c}:${sym}`
+      tokens[key] = tokens[key] || { chain: c, token: sym, hits: 0, profitUsd: 0 }
+      if (kind === 'profitable_by_token') tokens[key].hits += dv
+      else tokens[key].profitUsd += dv
+    }
+  }
+
+  // Time series: cumulative *within the window*, reset-tolerant (runner
+  // restarts zero the counters — show accumulated increments, not dips).
+  const cum = {}
+  for (const s of samples) {
+    const pt = { t: s.t }
+    for (const c of Object.keys(CHAINS)) {
+      const m = s.chains[c]
+      if (!m) { pt[`${c}_gross`] = pt[`${c}_hits`] = pt[`${c}_scan_ms`] = null; continue }
+      cum[c] = cum[c] || { gross: 0, hits: 0, evals: 0, prev: {} }
+      const cc = cum[c]
+      for (const [k, nk] of [['arb_gross_profit_usd_total', 'gross'], ['arb_profitable_found_total', 'hits'], ['arb_paths_evaluated_total', 'evals']]) {
+        if (nk in cc.prev) cc[nk] += Math.max(0, (m[k] || 0) - cc.prev[nk])
+        cc.prev[nk] = m[k] || 0
+      }
+      pt[`${c}_gross`] = cc.gross
+      pt[`${c}_hits`] = cc.hits
+      pt[`${c}_evals`] = cc.evals
+      pt[`${c}_scan_ms`] = m.arb_scan_latency_seconds_count
+        ? (m.arb_scan_latency_seconds_sum / m.arb_scan_latency_seconds_count) * 1000 : null
+    }
+    series.push(pt)
+  }
+
+  // Recommendations — every rule reads the window's real numbers only.
+  const recs = []
+  const names = Object.keys(chains).filter(c => chains[c].online)
+  const rates = names.map(c => [c, chains[c].hitRate])
+  const top = rates.sort((a, b) => b[1] - a[1])[0]
+  const zeroHit = names.filter(c => chains[c].hits === 0)
+  if (top && top[1] > 0)
+    recs.push({ prio: 1, text: `${CHAINS[top[0]].label} leads at ${(top[1] * 100).toFixed(3)}% hit rate (${chains[top[0]].hits.toLocaleString()} profitable / ${chains[top[0]].evals.toLocaleString()} evals) — prioritize pool + token expansion on this chain first.` })
+  for (const c of zeroHit)
+    recs.push({ prio: 1, text: `${CHAINS[c].label} produced 0 profitable paths in the window — review pool set and token coverage before scaling it.` })
+  if (!isLive())
+    recs.push({ prio: 2, text: 'Engine is still dry-run — all profit figures are simulated. Verify simulation on Deployment, then go live when satisfied.' })
+  const slow = names.filter(c => chains[c].avgScanMs > 150)
+  for (const c of slow)
+    recs.push({ prio: 2, text: `${CHAINS[c].label} avg scan ${chains[c].avgScanMs.toFixed(0)}ms exceeds the 150ms floor — premium RPC keys (gen_rpc_pool.py) cut the public-endpoint tail.` })
+  for (const c of names) {
+    if (chains[c].submits > 0 && chains[c].warpSpendUsd > 0)
+      recs.push({ prio: 3, text: `${CHAINS[c].label} spent $${chains[c].warpSpendUsd.toFixed(2)} on paid Warp submits — tune the warp threshold if landed count stays low.` })
+  }
+  const tokArr = Object.values(tokens).sort((a, b) => b.profitUsd - a.profitUsd)
+  const totProfit = tokArr.reduce((s, t) => s + t.profitUsd, 0)
+  if (tokArr[0] && totProfit > 0 && tokArr[0].profitUsd / totProfit > 0.6)
+    recs.push({ prio: 3, text: `Profit is ${(tokArr[0].profitUsd / totProfit * 100).toFixed(0)}% concentrated in ${tokArr[0].token} — diversify flash-token coverage to reduce single-market dependence.` })
+  const coverage = (now - first.t) / 3600e3
+  if (w !== Infinity && coverage < w / 3600e3)
+    recs.push({ prio: 3, text: `History covers ${coverage.toFixed(1)}h of the selected window — longer windows fill in as the sampler runs.` })
+
+  res.json({
+    live: isLive(), window: req.query.window || '24h', span_h: spanH,
+    samples: samples.length, chains, series,
+    tokens: tokArr, recommendations: recs,
+  })
+})
+
 async function rpc(chain, method, params) {
   const r = await fetch(CHAINS[chain].rpc, {
     method: 'POST',
