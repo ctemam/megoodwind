@@ -232,6 +232,29 @@ impl StateRefresher {
         }
     }
 
+    /// One aggregate3 against the read pool with blacklist+retry on
+    /// transport failure — same failover pattern as the chunk loops.
+    async fn multicall_aggregate3(
+        &self,
+        calls: Vec<IMulticall3::Call3>,
+    ) -> Vec<IMulticall3::Result3> {
+        for attempt in 0..2 {
+            let (idx, provider) = self.endpoint.pool_pick();
+            let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
+            match mc.aggregate3(calls.clone()).call().await {
+                Ok(r) => return r,
+                Err(e) => {
+                    warn!(error = %e, attempt, "Multicall3 aggregate3 failed");
+                    if !arb_rpc::is_contract_transport_error(&e) || attempt == 1 {
+                        return Vec::new();
+                    }
+                    self.endpoint.blacklist_read(idx);
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Multicall3 read for V2 pools: reserves + token addresses in ONE
     /// aggregate3 (single network round-trip), allowFailure per call so a
     /// dead pool can't sink the batch — unlike the all-or-nothing
@@ -249,15 +272,10 @@ impl StateRefresher {
                 .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
             })
             .collect();
-        let provider = self.endpoint.provider();
-        let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-        let results = match mc.aggregate3(calls).call().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "Multicall3 V2 read failed");
-                return Vec::new();
-            }
-        };
+        let results = self.multicall_aggregate3(calls).await;
+        if results.len() != pools.len() * 3 {
+            return Vec::new();
+        }
         pools
             .iter()
             .enumerate()
@@ -300,15 +318,10 @@ impl StateRefresher {
                 .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
             })
             .collect();
-        let provider = self.endpoint.provider();
-        let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-        let results = match mc.aggregate3(calls).call().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "Multicall3 V3 read failed");
-                return Vec::new();
-            }
-        };
+        let results = self.multicall_aggregate3(calls).await;
+        if results.len() != pools.len() * 5 {
+            return Vec::new();
+        }
         pools
             .iter()
             .enumerate()
