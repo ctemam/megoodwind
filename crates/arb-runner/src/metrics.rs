@@ -16,6 +16,16 @@ lazy_static::lazy_static! {
         "Total profitable paths found"
     ).unwrap();
 
+    pub static ref GROSS_PROFIT_USD: Counter = register_counter!(
+        "arb_gross_profit_usd_total",
+        "Cumulative effective profit USD of profitable paths found"
+    ).unwrap();
+
+    pub static ref NET_PROFIT_USD: Counter = register_counter!(
+        "arb_net_profit_usd_total",
+        "Cumulative net profit USD of paths that passed the profit gate"
+    ).unwrap();
+
     pub static ref SUBMIT_ATTEMPTS: Counter = register_counter!(
         "arb_submit_attempts_total",
         "Total bundle submission attempts"
@@ -94,6 +104,10 @@ async fn metrics_handler() -> String {
 }
 
 pub fn start_metrics_server(port: u16) -> JoinHandle<()> {
+    // Register all lazy counters up front so exporters emit zero-valued
+    // series before the first event — dashboards rely on key presence.
+    let _ = GROSS_PROFIT_USD.get();
+    let _ = NET_PROFIT_USD.get();
     tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/metrics", axum::routing::get(metrics_handler))

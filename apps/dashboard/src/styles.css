@@ -1,0 +1,52 @@
+:root {
+  --bg: #0b0e14; --panel: #12161f; --panel2: #171d29; --line: #232a3a;
+  --txt: #e6e9f0; --dim: #8a93a6; --acc: #4f8cff; --good: #2fd17c; --bad: #ff5c6c;
+  --warn: #f2b542;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--txt); font: 14px/1.45 'Inter', system-ui, sans-serif; }
+#root { display: flex; min-height: 100vh; }
+nav { width: 190px; background: var(--panel); border-right: 1px solid var(--line); padding: 18px 12px; position: sticky; top: 0; height: 100vh; }
+nav .brand { font-weight: 700; font-size: 15px; letter-spacing: .4px; padding: 4px 10px 16px; }
+nav .brand span { color: var(--acc); }
+nav a { display: block; padding: 8px 10px; margin: 2px 0; border-radius: 8px; color: var(--dim); text-decoration: none; font-size: 13.5px; }
+nav a:hover { background: var(--panel2); color: var(--txt); }
+nav a.active { background: var(--panel2); color: var(--txt); border-left: 2px solid var(--acc); }
+main { flex: 1; padding: 18px 24px; min-width: 0; }
+header { display: flex; align-items: center; gap: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 18px; flex-wrap: wrap; }
+header h1 { font-size: 17px; font-weight: 600; }
+.pulse { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.pulse .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px var(--good); animation: p 2s infinite; }
+.pulse .dot.off { background: var(--dim); box-shadow: none; animation: none; }
+@keyframes p { 50% { opacity: .35; } }
+.pulse .val.neg { color: var(--bad); } .pulse .val.pos { color: var(--good); }
+.ctl { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+select, input, button { background: var(--panel2); border: 1px solid var(--line); color: var(--txt); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+button { cursor: pointer; } button:hover { border-color: var(--acc); }
+button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+.grid { display: grid; gap: 14px; }
+.cards { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.card .k { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.card .v { font-size: 22px; font-weight: 650; margin-top: 4px; }
+.card .s { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 14px; }
+.panel h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+td { padding: 10px; border-bottom: 1px solid var(--line); }
+tr.chain { cursor: pointer; } tr.chain:hover { background: var(--panel2); }
+tr.detail td { background: var(--panel2); font-size: 12.5px; color: var(--dim); }
+tr.total td { font-weight: 650; border-top: 2px solid var(--line); }
+.pos { color: var(--good); } .neg { color: var(--bad); } .dim { color: var(--dim); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; background: var(--panel2); border: 1px solid var(--line); }
+.tag.live { color: var(--good); border-color: var(--good); }
+.tag.dry { color: var(--warn); border-color: var(--warn); }
+.mono { font-family: ui-monospace, 'SF Mono', monospace; font-size: 12px; }
+.warn-box { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; color: var(--warn); font-size: 12.5px; margin-top: 10px; }
+.ok-box { border: 1px solid var(--good); border-radius: 8px; padding: 10px 14px; color: var(--good); font-size: 12.5px; margin-top: 10px; }
+.step { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.step .n { color: var(--acc); font-weight: 600; min-width: 20px; }
+.step code { background: var(--panel2); padding: 2px 6px; border-radius: 6px; font-size: 12px; }
+form.inline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+canvas { max-width: 100%; }

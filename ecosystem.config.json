@@ -23,6 +23,16 @@
       "env": {
         "METRICS_PORT": "9101"
       }
+    },
+    {
+      "name": "allbrightA-dashboard",
+      "script": "apps/dashboard/server/index.js",
+      "interpreter": "/home/ubuntu/.nvm/versions/node/v24.19.0/bin/node",
+      "env": {
+        "DASHBOARD_PORT": "9200"
+      },
+      "autorestart": true,
+      "max_restarts": 10
     }
   ]
 }

@@ -217,6 +217,10 @@ pub struct StateRefresher {
 
 impl StateRefresher {
     const CHUNK_SIZE: usize = 50;
+    /// Max Call3s per aggregate3 round-trip — public nodes reject oversized
+    /// eth_calls ("request is too complex") well before the gas cap. 60 calls
+    /// = 20 V2 or 12 V3 pools per round-trip.
+    const MC3_MAX_CALLS: usize = 60;
 
     pub fn new(
         endpoint: Arc<Endpoint>,
@@ -238,21 +242,29 @@ impl StateRefresher {
         &self,
         calls: Vec<IMulticall3::Call3>,
     ) -> Vec<IMulticall3::Result3> {
-        for attempt in 0..2 {
-            let (idx, provider) = self.endpoint.pool_pick();
-            let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-            match mc.aggregate3(calls.clone()).call().await {
-                Ok(r) => return r,
-                Err(e) => {
-                    warn!(error = %e, attempt, "Multicall3 aggregate3 failed");
-                    if !arb_rpc::is_contract_transport_error(&e) || attempt == 1 {
-                        return Vec::new();
+        let mut all = Vec::with_capacity(calls.len());
+        for batch in calls.chunks(Self::MC3_MAX_CALLS) {
+            let mut ok = None;
+            for attempt in 0..2 {
+                let (idx, provider) = self.endpoint.pool_pick();
+                let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
+                match mc.aggregate3(batch.to_vec()).call().await {
+                    Ok(r) => { ok = Some(r); break; }
+                    Err(e) => {
+                        warn!(error = %e, attempt, "Multicall3 aggregate3 failed");
+                        if !arb_rpc::is_contract_transport_error(&e) || attempt == 1 {
+                            return Vec::new();
+                        }
+                        self.endpoint.blacklist_read(idx);
                     }
-                    self.endpoint.blacklist_read(idx);
                 }
             }
+            match ok {
+                Some(r) => all.extend(r),
+                None => return Vec::new(),
+            }
         }
-        Vec::new()
+        all
     }
 
     /// Multicall3 read for V2 pools: reserves + token addresses in ONE

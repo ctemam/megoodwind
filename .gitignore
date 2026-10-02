@@ -45,6 +45,12 @@ contracts/out/
 contracts/broadcast/
 
 # -----------------------------------------------------------------------------
+# Node — dashboard dependencies and build output (regenerated via npm)
+# -----------------------------------------------------------------------------
+node_modules/
+apps/dashboard/dist/
+
+# -----------------------------------------------------------------------------
 # Python virtualenvs / caches (dashboard.py is pure stdlib but in case)
 # -----------------------------------------------------------------------------
 __pycache__/

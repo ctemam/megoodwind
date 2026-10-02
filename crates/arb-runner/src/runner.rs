@@ -800,6 +800,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
                 let decision = profit_gate.should_submit(&opt_result, path);
                 if decision.accept {
+                    metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
+                    metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     if best_result.as_ref().map_or(true, |(_, d): &(arb_sim::SimResult, f64)| decision.effective_profit_usd > *d) {
                         best_path_idx = candidate.path_id as usize;
                         best_result = Some((opt_result, decision.effective_profit_usd));
