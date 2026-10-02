@@ -230,6 +230,45 @@ def expand_mirrors(pattern: str) -> list[str]:
     return [pattern[: m.start()] + n + pattern[m.end():] for n in m.group(1).split(",")]
 
 
+def premium_urls(chain_id: int, keys: dict) -> list[str]:
+    """Expand provider API keys into endpoint candidates.
+
+    The free endpoint universe tops out far below the spec's 200+ nodes —
+    premium keys are what actually unlock it. Each key materializes a real,
+    verified endpoint; every candidate still passes the eth_chainId
+    handshake like any public node. Nothing is written unverified.
+    """
+    urls: list[str] = []
+    alchemy = keys.get("alchemy")
+    nodereal = keys.get("nodereal")
+    infura = keys.get("infura")
+    ankr = keys.get("ankr")
+    quicknodes = keys.get("quicknode", [])  # list of full endpoint URLs
+
+    if chain_id == 56:
+        if alchemy:
+            urls.append(f"https://bnb-mainnet.g.alchemy.com/v2/{alchemy}")
+        if nodereal:
+            urls.append(f"https://bsc-mainnet.nodereal.io/v1/{nodereal}")
+            urls.append(f"https://open-platform.nodereal.io/{nodereal}/bsc/")
+        if infura:
+            urls.append(f"https://bsc-mainnet.infura.io/v3/{infura}")
+        if ankr:
+            urls.append(f"https://rpc.ankr.com/bsc/{ankr}")
+        urls += [u for u in quicknodes if "bsc" in u or "bnb" in u]
+    elif chain_id == 8453:
+        if alchemy:
+            urls.append(f"https://base-mainnet.g.alchemy.com/v2/{alchemy}")
+        if nodereal:
+            urls.append(f"https://open-platform.nodereal.io/{nodereal}/base/")
+        if infura:
+            urls.append(f"https://base-mainnet.infura.io/v3/{infura}")
+        if ankr:
+            urls.append(f"https://rpc.ankr.com/base/{ankr}")
+        urls += [u for u in quicknodes if "base" in u]
+    return urls
+
+
 def write_wss_pool(path: str, urls: list[str]) -> None:
     with open(path) as f:
         text = f.read()
@@ -292,7 +331,23 @@ def main() -> int:
     ap.add_argument("--source", help="local chains.json instead of live fetch")
     ap.add_argument("--keep-existing", action="store_true",
                     help="merge generated list with any rpc_https_pool already in config")
+    ap.add_argument("--alchemy-key", help="Alchemy API key (BSC + Base endpoints)")
+    ap.add_argument("--nodereal-key", help="NodeReal API key (BSC + Base)")
+    ap.add_argument("--infura-key", help="Infura API key (BSC + Base)")
+    ap.add_argument("--ankr-key", help="Ankr API key (BSC + Base)")
+    ap.add_argument("--quicknode-url", action="append", default=[],
+                    help="Full QuickNode endpoint URL (repeatable)")
+    ap.add_argument("--url", action="append", default=[],
+                    help="Any extra endpoint URL to verify (repeatable)")
     args = ap.parse_args()
+
+    keys = {
+        "alchemy": args.alchemy_key,
+        "nodereal": args.nodereal_key,
+        "infura": args.infura_key,
+        "ankr": args.ankr_key,
+        "quicknode": args.quicknode_url,
+    }
 
     registry = fetch_registry(args.source)
     rc = 0
@@ -309,6 +364,12 @@ def main() -> int:
             for u in expand_mirrors(pattern):
                 if u not in cands:
                     cands.append(u)
+        premium = premium_urls(chain_id, keys) + list(args.url)
+        for u in premium:
+            if u not in cands:
+                cands.insert(0, u)  # premium endpoints verify first, lead the pool
+        if premium:
+            print(f"[{name}] +{len(premium)} premium/keyed candidates", file=sys.stderr)
         print(f"[{name}] chain {chain_id}: {len(cands)} candidate HTTPS endpoints", file=sys.stderr)
 
         verified: list[tuple[str, float]] = []

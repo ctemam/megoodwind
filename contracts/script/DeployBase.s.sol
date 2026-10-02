@@ -11,7 +11,7 @@ contract DeployBase is Script {
 
     // Base mainnet tokens
     address constant WETH   = 0x4200000000000000000000000000000000000006;
-    address constant USDbC  = 0xd9AAec86b65D86f6a7b5B1b0c42fFA531710b6Aa;
+    address constant USDbC  = 0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA;
     address constant USDC   = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
     address constant DAI    = 0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb;
     address constant cbETH  = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
