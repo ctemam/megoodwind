@@ -9,6 +9,7 @@ pub mod builder;
 pub mod presign;
 pub mod userop;
 pub mod pimlico;
+pub mod router;
 
 use alloy_primitives::{Address, B256, Bytes};
 use anyhow::Result;

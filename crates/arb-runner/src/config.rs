@@ -27,6 +27,17 @@ pub mod spec {
     pub const MEMPOOL_POLL_INTERVAL_MS: u64 = 5;
     pub const BASE_CHAIN_ID: u64 = 8453;
     pub const BSC_CHAIN_ID: u64 = 56;
+    /// Submission-routing deadlines (VenueRouter): private-builder RTT
+    /// budget on BSC — tighter since the slot is ~450ms; Base gets
+    /// sequencer slack on its 2s slot.
+    pub const BSC_MEV_SUBMIT_TIMEOUT_MS: u64 = 8;
+    pub const BASE_SUBMIT_TIMEOUT_MS: u64 = 250;
+    /// Block-construction slot cutoffs: skip the submit fan-out entirely
+    /// once this much of the slot has elapsed (bundle would land stale).
+    pub const BSC_SLOT_BUDGET_MS: u64 = 400;
+    pub const BASE_SLOT_BUDGET_MS: u64 = 1600;
+    /// Base sequencer state-read tick granularity.
+    pub const BASE_SEQUENCER_POLL_INTERVAL_MICROS: u64 = 800;
     /// Canonical Balancer Vault (same address on BSC and Base).
     pub const BALANCER_VAULT: &str = "0xBA12222222228d8Ba445958a75a0704d566BF2C8";
 }

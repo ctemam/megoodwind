@@ -974,6 +974,7 @@ dependencies = [
  "arb-paths",
  "arb-rpc",
  "async-trait",
+ "futures",
  "hex",
  "reqwest 0.12.28",
  "serde",

@@ -592,6 +592,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let high_ev = submitters.iter().filter(|s| s.tier() == SubmitTier::HighEvOnly).count();
     info!(always_on, high_ev, total = submitters.len(), "Submission layer initialized");
 
+    // Submission routing switch: per-chain submit RTT budget + slot cutoff,
+    // venue ordering by measured health, 60s bench on repeated misses.
+    let (submit_budget_ms, slot_budget_ms) = if cfg.chain.chain_id == spec::BASE_CHAIN_ID {
+        (spec::BASE_SUBMIT_TIMEOUT_MS, spec::BASE_SLOT_BUDGET_MS)
+    } else {
+        (spec::BSC_MEV_SUBMIT_TIMEOUT_MS, spec::BSC_SLOT_BUDGET_MS)
+    };
+    let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
+    info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
+
     let mut profit_gate = if smoke_test {
         ProfitGate::new(0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone())
     } else {
@@ -793,26 +803,21 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     warp_budget_usd, warp_spent_this_session
                                 ));
                             }
-                            let futures: Vec<_> = submitters.iter()
-                                .filter(|s| s.tier() == SubmitTier::AlwaysOn || (s.tier() == SubmitTier::HighEvOnly && use_high_ev))
-                                .map(|s| {
-                                    let b = bundle.clone();
-                                    async move {
-                                        metrics::SUBMIT_ATTEMPTS.inc();
-                                        metrics::SUBMIT_BY_VENUE.with_label_values(
-                                            &[s.venue_name(), if s.tier() == SubmitTier::AlwaysOn { "free" } else { "paid" }]
-                                        ).inc();
-                                        if s.tier() == SubmitTier::HighEvOnly {
-                                            metrics::WARP_SPEND_USD.inc_by(0.15);
-                                        }
-                                        (s.venue_name(), s.tier(), s.submit(&b).await)
-                                    }
-                                }).collect();
-
-                            let sub_results = futures::future::join_all(futures).await;
+                            let sub_results = router
+                                .submit_all(&bundle, use_high_ev, scan_start.elapsed())
+                                .await;
+                            for r in &sub_results {
+                                metrics::SUBMIT_ATTEMPTS.inc();
+                                metrics::SUBMIT_BY_VENUE.with_label_values(
+                                    &[r.venue, if r.tier == SubmitTier::AlwaysOn { "free" } else { "paid" }]
+                                ).inc();
+                                if r.tier == SubmitTier::HighEvOnly {
+                                    metrics::WARP_SPEND_USD.inc_by(0.15);
+                                }
+                            }
                             let mut any_hash = None;
                             let mut builder_sim_rejected = false;
-                            for (venue, tier, result) in sub_results {
+                            for arb_submit::router::RoutedSubmit { venue, tier, result, .. } in sub_results {
                                 match result {
                                     Ok(r) if r.success => {
                                         info!(venue, tier = ?tier, hash = ?r.bundle_hash, "Submitted");
@@ -987,19 +992,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
                                 ).await {
                                     endpoint.bump_nonce();
-                                    let futures: Vec<_> = submitters.iter()
-                                        .filter(|s| s.tier() == SubmitTier::AlwaysOn)
-                                        .map(|s| {
-                                            let b = bundle.clone();
-                                            async move { (s.venue_name(), s.submit(&b).await) }
-                                        }).collect();
-
-                                    let sub_results = futures::future::join_all(futures).await;
-                                    for (venue, result) in sub_results {
-                                        match result {
-                                            Ok(r) if r.success => debug!(venue, "Backrun submitted"),
-                                            Ok(r) => debug!(venue, error = ?r.error, "Backrun rejected"),
-                                            Err(e) => debug!(venue, error = %e, "Backrun error"),
+                                    let sub_results = router
+                                        .submit_all(&bundle, false, scan_start.elapsed())
+                                        .await;
+                                    for r in sub_results {
+                                        match r.result {
+                                            Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
+                                            Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
+                                            Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
                                         }
                                     }
                                 }
