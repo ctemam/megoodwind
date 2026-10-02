@@ -1,0 +1,28 @@
+{
+  "apps": [
+    {
+      "name": "allbrightA-bsc",
+      "script": "./target/release/arb-runner",
+      "args": "config/bsc.toml",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "2G",
+      "env": {
+        "METRICS_PORT": "9100"
+      }
+    },
+    {
+      "name": "allbrightA-base",
+      "script": "./target/release/arb-runner",
+      "args": "config/base.toml",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "2G",
+      "env": {
+        "METRICS_PORT": "9101"
+      }
+    }
+  ]
+}
