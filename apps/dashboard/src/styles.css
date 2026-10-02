@@ -22,6 +22,20 @@ nav a:hover { background: var(--panel2); color: var(--txt); }
 nav a.active { background: linear-gradient(90deg, #12365e, #0e2242); color: var(--acc2); border-left: 2px solid var(--acc); }
 nav .tagline { position: absolute; bottom: 16px; left: 14px; right: 14px; font-size: 10px; color: var(--dim); letter-spacing: .5px; }
 nav .tagline b { color: var(--gold); display: block; font-size: 11px; }
+nav { transition: width .18s ease; }
+nav.collapsed { width: 64px; padding: 18px 8px; }
+nav.collapsed .brand { justify-content: center; padding: 2px 0 18px; }
+nav.collapsed .brand > div { display: none; }
+nav.collapsed a { justify-content: center; gap: 0; padding: 10px 0; }
+nav.collapsed a .lbl { display: none; }
+nav.collapsed .tagline { display: none; }
+nav .collapse-btn {
+  position: absolute; bottom: 58px; left: 14px; right: 14px;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 8px; padding: 5px 0; font-size: 15px; line-height: 1;
+}
+nav .collapse-btn:hover { color: var(--acc2); border-color: var(--acc); }
+nav.collapsed .collapse-btn { left: 12px; right: 12px; }
 main { flex: 1; padding: 18px 24px; min-width: 0; }
 header { display: flex; align-items: center; gap: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 18px; flex-wrap: wrap; }
 header h1 { font-size: 17px; font-weight: 650; letter-spacing: .3px; }
@@ -30,6 +44,7 @@ header h1 { font-size: 17px; font-weight: 650; letter-spacing: .3px; }
 .pulse .dot.off { background: var(--dim); box-shadow: none; animation: none; }
 @keyframes p { 50% { opacity: .3; } }
 .pulse .val.neg { color: var(--bad); } .pulse .val.pos { color: var(--good); }
+.pulse .period { font-size: 11.5px; padding: 4px 8px; }
 .ctl { margin-left: auto; display: flex; gap: 10px; align-items: center; }
 .status-pill { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 7px 14px; font-size: 12px; }
 .status-pill .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 8px var(--good); }

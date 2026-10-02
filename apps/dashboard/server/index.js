@@ -59,8 +59,50 @@ app.get('/api/metrics/all', async (_req, res) => {
   for (const c of Object.keys(CHAINS)) {
     try { out[c] = await fetchMetrics(c) } catch { out[c] = null }
   }
-  res.json({ live: LIVE, chains: out })
+  const net = Object.values(out).reduce(
+    (s, m) => s + (m ? m['arb_gross_profit_usd_total'] || 0 : 0), 0)
+  recordProfit(net)
+  res.json({ live: LIVE, chains: out, profit: profitSummary(net) })
 })
+
+// Rolling profit history — the UI's "last 24h" mode needs a baseline from
+// 24h ago, which Prometheus counters can't express (they're cumulative).
+// Sampled in the background so the window builds even when nobody is
+// watching the UI; persisted so it survives dashboard restarts.
+const PROFIT_LOG = path.join(__dirname, '.profit-history.json')
+let profitLog = []
+try { profitLog = JSON.parse(fs.readFileSync(PROFIT_LOG, 'utf8')) } catch {}
+
+function recordProfit(net) {
+  const now = Date.now()
+  const last = profitLog[profitLog.length - 1]
+  if (last && now - last.t < 25_000) { last.t = now; last.net = net }
+  else profitLog.push({ t: now, net })
+  const cutoff = now - 48 * 3600e3
+  if (profitLog.length > 4000 || (profitLog[0] && profitLog[0].t < cutoff))
+    profitLog = profitLog.filter(s => s.t >= cutoff)
+  fs.writeFile(PROFIT_LOG, JSON.stringify(profitLog), () => {})
+}
+
+function profitSummary(netNow) {
+  const dayAgo = Date.now() - 24 * 3600e3
+  const base = profitLog.find(s => s.t >= dayAgo)
+  const dayFrom = base?.t ?? profitLog[0]?.t ?? null
+  const day = dayFrom != null ? netNow - (base ?? profitLog[0]).net : null
+  return { lifetime: netNow, day, day_from: dayFrom }
+}
+
+async function sampleProfit() {
+  try {
+    let net = 0
+    for (const c of Object.keys(CHAINS)) {
+      try { net += (await fetchMetrics(c))['arb_gross_profit_usd_total'] || 0 } catch {}
+    }
+    recordProfit(net)
+  } catch {}
+}
+sampleProfit()
+setInterval(sampleProfit, 30_000)
 
 async function rpc(chain, method, params) {
   const r = await fetch(CHAINS[chain].rpc, {

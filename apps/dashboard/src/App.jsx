@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { useApp, fmt } from './state.jsx'
 import Overview from './pages/Overview.jsx'
@@ -20,13 +20,15 @@ const NAV = [
 ]
 
 export default function App() {
-  const { refreshMs, setRefreshMs, currency, setCurrency, prices, all, history } = useApp()
-  const net = history.length ? history[history.length - 1].net : 0
+  const { refreshMs, setRefreshMs, currency, setCurrency, profitPeriod, setProfitPeriod, prices, all, history } = useApp()
+  const [collapsed, setCollapsed] = useState(false)
+  const net = (profitPeriod === 'day' ? all.profit?.day : all.profit?.lifetime)
+    ?? (history.length ? history[history.length - 1].net : 0)
   const online = Object.values(all.chains || {}).filter(Boolean).length
 
   return (
     <>
-      <nav>
+      <nav className={collapsed ? 'collapsed' : ''}>
         <div className="brand">
           <img src="/logo.png" alt="AB" />
           <div>
@@ -35,16 +37,24 @@ export default function App() {
           </div>
         </div>
         {NAV.map(([to, icon, label]) => (
-          <NavLink key={to} to={to} end={to === '/'}><span>{icon}</span>{label}</NavLink>
+          <NavLink key={to} to={to} end={to === '/'} title={label}>
+            <span className="ic">{icon}</span><span className="lbl">{label}</span>
+          </NavLink>
         ))}
+        <button className="collapse-btn" onClick={() => setCollapsed(c => !c)} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          {collapsed ? '»' : '«'}
+        </button>
         <div className="tagline"><b>Smarter Capital</b>Brighter Returns</div>
       </nav>
       <main>
         <header>
-          <h1>Total Profit Pulse</h1>
           <div className="pulse">
             <div className={`dot ${online ? '' : 'off'}`} />
             <span className={`val ${net >= 0 ? 'pos' : 'neg'}`}>{fmt(net, currency, prices)}</span>
+            <select className="period" value={profitPeriod} onChange={e => setProfitPeriod(e.target.value)} title="Profit window">
+              <option value="day">24h</option>
+              <option value="life">Lifetime</option>
+            </select>
           </div>
           <div className="status-pill">
             <div className="sd" style={online < 2 ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />

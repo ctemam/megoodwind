@@ -21,6 +21,7 @@ export function fmt(usd, currency, prices, digits = 4) {
 export function AppProvider({ children }) {
   const [refreshMs, setRefreshMs] = useState(5000)
   const [currency, setCurrency] = useState('USD')
+  const [profitPeriod, setProfitPeriod] = useState('life') // 'day' | 'life'
   const [prices, setPrices] = useState(null)
   const [all, setAll] = useState({ live: false, chains: {} })
   const [history, setHistory] = useState([]) // [{t, net}]
@@ -48,7 +49,7 @@ export function AppProvider({ children }) {
   }, [refreshMs])
 
   return (
-    <Ctx.Provider value={{ refreshMs, setRefreshMs, currency, setCurrency, prices, all, history }}>
+    <Ctx.Provider value={{ refreshMs, setRefreshMs, currency, setCurrency, profitPeriod, setProfitPeriod, prices, all, history }}>
       {children}
     </Ctx.Provider>
   )

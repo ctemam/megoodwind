@@ -85,3 +85,4 @@ scratch/
 local/
 TODO.local.md
 NOTES.local.md
+apps/dashboard/server/.profit-history.json
