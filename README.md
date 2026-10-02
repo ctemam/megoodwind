@@ -173,12 +173,18 @@ immediately — the failover is a provider swap, well under the 10ms spec
 ceiling. RPC-level errors (execution reverts) never bench an endpoint.
 
 `python3 ops/gen_rpc_pool.py --write --keep-existing` regenerates the pool:
-it pulls chainid.network + DefiLlama's Chainlist registry, probes every
-HTTPS candidate with `eth_chainId`, keeps correct-chain answers, and writes
-them latency-sorted into `config/*.toml`. Public registries yield ~25 BSC /
-~11 Base verified free endpoints — reaching the spec's 200+ node target
-requires paid provider keys (NodeReal/Alchemy/etc.); add them to the pool
-and the generator keeps them first with `--keep-existing`.
+it sweeps chainid.network, DefiLlama's Chainlist `extraRpcs.js`, the
+arddluma awesome-list directory, plus generated mirror families
+(ninicoin/defibit/bnbchain dataseed clusters, publicnode/drpc/omnia
+variants), probes every HTTPS candidate with `eth_chainId`, keeps
+correct-chain answers, and writes them latency-sorted into `config/*.toml`.
+Verified public yield: ~26 BSC / ~11 Base — free endpoints are largely
+dead, geo-blocked, or key-gated, so the 200+ node target still requires
+provider keys; drop them in the pool and `--keep-existing` leads with them.
+
+`[chain] rpc_wss_pool` feeds the mempool stream: BSC's publicnode WSS
+endpoints stream full pending-tx objects; on Base only
+`base.api.onfinality.io/public-ws` emits a live feed (verified 2026-10-02).
 
 ### Latency profile + heap audit (allbrightA)
 
@@ -189,6 +195,17 @@ runs two benches: (1) the V2 math kernel over a stack-only 3-hop path —
 **zero heap events** per evaluation and exits 1 on any allocation. Pool
 reads in the eval cycle are borrow-based (`PoolStore::get_ref`); the old
 clone-per-hop path allocated `Vec`s for Curve states on every hop.
+
+### Mempool ingestion telemetry (allbrightA)
+
+`MempoolWatcher` streams `newPendingTransactions` (full-tx objects) over a
+WSS provider pool, cycling to the next provider on connect failure, stream
+end, or >5ms queue backpressure (bounded send). Every decoded swap is
+timed arrival→processed; a rolling `[u64; 4096]` ring buffer reports
+p50/p99 every 500 events — live: **p50 2µs / p99 4µs** on
+`bsc-rpc.publicnode.com` vs the 5ms spec ceiling. The provider handle is
+held for the stream's lifetime (dropping it kills alloy's pubsub
+frontend). Dead seeds are pruned by `gen_rpc_pool.py`'s verified seed list.
 
 ### Compile-time spec constants (allbrightA)
 

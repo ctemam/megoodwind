@@ -4,38 +4,47 @@ name = "BSC"
 rpc_https = "${BSC_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-    "https://bsc.meowrpc.com",
-    "https://bsc-mainnet.public.blastapi.io",
-    "https://bsc.drpc.org",
-    "https://1rpc.io/bnb",
-    "https://bsc-dataseed.binance.org",
-    "https://0.48.club",
-    "https://rpc-bsc.48.club",
-    "https://bsc-dataseed2.bnbchain.org",
-    "https://bsc-dataseed3.bnbchain.org",
-    "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
-    "https://bsc-dataseed.bnbchain.org",
+    "https://bsc-mainnet.gateway.tatum.io",
     "https://bnb.api.onfinality.io/public",
+    "https://1rpc.io/bnb",
+    "https://bsc.drpc.org",
+    "https://bsc-mainnet.public.blastapi.io",
+    "https://bsc.meowrpc.com",
+    "https://rpc-bsc.48.club",
+    "https://0.48.club",
     "https://api-bsc-mainnet-full.n.dwellir.com/2ccf18bf-2916-4198-8856-42172854353c",
-    "https://bsc-dataseed3.ninicoin.io",
+    "https://bsc-dataseed.binance.org",
+    "https://bsc-dataseed.bnbchain.org",
+    "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
     "https://bsc-dataseed1.bnbchain.org",
     "https://binance.nodereal.io",
+    "https://bsc-dataseed2.bnbchain.org",
     "https://bsc-dataseed4.bnbchain.org",
-    "https://bsc-dataseed1.defibit.io",
+    "https://bsc-dataseed3.bnbchain.org",
+    "https://bsc-dataseed2.binance.org",
     "https://bsc.rpc.blxrbdn.com",
-    "https://bsc-dataseed1.ninicoin.io",
-    "https://bsc-dataseed2.ninicoin.io",
+    "https://bsc-dataseed3.ninicoin.io",
+    "https://bsc-dataseed1.binance.org",
     "https://bsc-dataseed4.defibit.io",
+    "https://bsc-dataseed1.defibit.io",
+    "https://bsc-dataseed2.ninicoin.io",
+    "https://bsc-dataseed4.ninicoin.io",
+    "https://bsc-dataseed1.ninicoin.io",
     "https://bsc-dataseed3.defibit.io",
     "https://bsc-dataseed2.defibit.io",
-    "https://bsc-dataseed4.ninicoin.io",
-    "https://bsc-mainnet.gateway.tatum.io",
-    "https://xrpc.cl/bsc",
+    "https://rpc.swiftnodes.io/rpc/bsc",
     "https://bsc.api.pocket.network",
     "https://api.zan.top/bsc-mainnet",
-    "https://rpc.swiftnodes.io/rpc/bsc",
+    "https://xrpc.cl/bsc",
 ]
 rpc_wss = "${BSC_WSS_URL}"
+# WSS pool for mempool stream — cycled on failure/backpressure
+rpc_wss_pool = [
+    "wss://bsc-rpc.publicnode.com",
+    "wss://bsc.publicnode.com",
+    "wss://bsc.drpc.org",
+]
+
 trader_rpc = "${BSC_TRADER_NODE}"   # Warp-enabled, $0.15/call — ONLY for tx submission
 arb_contract = "${BSC_ARB_CONTRACT}"
 state_reader = "${BSC_STATE_READER}"

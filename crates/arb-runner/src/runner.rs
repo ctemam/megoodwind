@@ -617,10 +617,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let dry_run_override = if smoke_test { false } else { cfg.scanner.dry_run };
 
     let (mempool_tx, mut mempool_rx) = mpsc::channel(1000);
-    let wss_url = cfg.chain.rpc_wss.clone();
+    let mut wss_urls = cfg.chain.rpc_wss_pool.clone();
+    wss_urls.retain(|u| !u.trim().is_empty());
+    if wss_urls.is_empty() {
+        wss_urls.push(cfg.chain.rpc_wss.clone());
+    }
     let mempool_chain_id = cfg.chain.chain_id;
+    info!(providers = wss_urls.len(), "Mempool WSS provider pool");
     tokio::spawn(async move {
-        let watcher = MempoolWatcher::new(&wss_url, mempool_chain_id);
+        let watcher = MempoolWatcher::new(&wss_urls, mempool_chain_id);
         if let Err(e) = watcher.start(mempool_tx).await {
             error!(error = %e, "Mempool watcher failed");
         }

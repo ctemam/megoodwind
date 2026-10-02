@@ -27,6 +27,96 @@ import urllib.request
 REGISTRY_URL = "https://chainid.network/chains.json"
 # DefiLlama's extra RPCs — the much larger maintained list Chainlist renders.
 EXTRA_RPCS_URL = "https://raw.githubusercontent.com/DefiLlama/chainlist/main/constants/extraRpcs.js"
+# Community-maintained provider directory (arddluma/awesome-list-rpc-nodes-providers).
+AWESOME_URL = "https://raw.githubusercontent.com/arddluma/awesome-list-rpc-nodes-providers/master/README.md"
+
+# Curated public load-balancer/mirror families per chain. These are known
+# public endpoint patterns from the community directories — each generated
+# variant is still handshake-verified before entering the pool.
+MIRROR_FAMILIES = {
+    56: [
+        "https://bsc-dataseed.binance.org",
+        "https://bsc-dataseed{1,2}.binance.org",
+        "https://bsc-dataseed{1,2,3,4}.bnbchain.org",
+        "https://bsc-dataseed{1,2,3,4}.ninicoin.io",
+        "https://bsc-dataseed{1,2,3,4}.defibit.io",
+        "https://bsc.publicnode.com",
+        "https://bsc-rpc.publicnode.com",
+        "https://binance.llamarpc.com",
+        "https://binance.nodereal.io",
+        "https://bsc.drpc.org",
+        "https://bsc.rpc.blxrbdn.com",
+        "https://bsc.blockpi.network/v1/rpc/public",
+        "https://bsc.api.onfinality.io/public",
+        "https://bnb.api.onfinality.io/public",
+        "https://bsc-mainnet.public.blastapi.io",
+        "https://bsc.meowrpc.com",
+        "https://1rpc.io/bnb",
+        "https://rpc.ankr.com/bsc",
+        "https://endpoints.omniatech.io/v1/bsc/mainnet/public",
+        "https://bsc-mainnet.gateway.tatum.io",
+        "https://api.zan.top/bsc-mainnet",
+        "https://bsc.api.pocket.network",
+        "https://bscrpc.com",
+        "https://bsc.rpcgator.com",
+        "https://public.stackup.sh/api/v1/node/bsc-mainnet",
+        "https://0.48.club",
+        "https://rpc-bsc.48.club",
+        "https://xrpc.cl/bsc",
+        "https://rpc.swiftnodes.io/rpc/bsc",
+        "https://bsc-mainnet.gateway.pokt.network/v1/lb/6136201a7bad1500343e248d",
+        "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
+        "https://api-bsc-mainnet-full.n.dwellir.com/2ccf18bf-2916-4198-8856-42172854353c",
+        "https://bsc.chainnodes.org",
+        "https://bnb.rpc.subquery.network/public",
+    ],
+    8453: [
+        "https://mainnet.base.org",
+        "https://base.publicnode.com",
+        "https://base-rpc.publicnode.com",
+        "https://base.llamarpc.com",
+        "https://base.drpc.org",
+        "https://base.rpc.blxrbdn.com",
+        "https://base.blockpi.network/v1/rpc/public",
+        "https://base.api.onfinality.io/public",
+        "https://base-mainnet.public.blastapi.io",
+        "https://base.meowrpc.com",
+        "https://1rpc.io/base",
+        "https://rpc.ankr.com/base",
+        "https://endpoints.omniatech.io/v1/base/mainnet/public",
+        "https://base.gateway.tenderly.co",
+        "https://base.gateway.tatum.io",
+        "https://api.zan.top/base-mainnet",
+        "https://base.api.pocket.network",
+        "https://base.nodies.app",
+        "https://base-pokt.nodies.app",
+        "https://public.stackup.sh/api/v1/node/base-mainnet",
+        "https://base.rpc.subquery.network/public",
+        "https://base.chainnodes.org",
+        "https://xrpc.cl/base",
+        "https://api.developer.coinbase.com/rpc/v1/base/Ajyky1REgqRiNiKzsV8GbqWnLFMqaNBL",
+    ],
+}
+
+# Public WSS candidates for the mempool stream pool (unverified here — the
+# watcher fast-fails dead entries and cycles to the next provider).
+# WSS seeds verified live against eth_subscribe newPendingTransactions
+# (2026-10-02): BSC publicnode endpoints stream FULL tx objects; onfinality
+# public-ws streams full txs on Base. Base publicnode/tenderly accept the
+# sub but emit no events — kept as backups only.
+WSS_SEEDS = {
+    56: [
+        "wss://bsc-rpc.publicnode.com",
+        "wss://bsc.publicnode.com",
+        "wss://bsc.drpc.org",
+    ],
+    8453: [
+        "wss://base.api.onfinality.io/public-ws",
+        "wss://base-rpc.publicnode.com",
+        "wss://base.publicnode.com",
+        "wss://base.gateway.tenderly.co",
+    ],
+}
 # Spec budget for the failover switch; endpoints slower than this at startup
 # are still kept (they're bench candidates) but sorted to the back.
 PROBE_TIMEOUT_S = 6
@@ -95,6 +185,69 @@ def extra_rpcs_urls(chain_id: int) -> list[str]:
     return urls
 
 
+def registry_wss(registry: list, chain_id: int) -> list[str]:
+    urls = []
+    for chain in registry:
+        if chain.get("chainId") != chain_id:
+            continue
+        for entry in chain.get("rpc", []):
+            url = entry.get("url", "") if isinstance(entry, dict) else entry
+            if isinstance(url, str) and url.startswith("wss://") and url not in urls:
+                urls.append(url.rstrip("/"))
+    return urls
+
+
+_AWESOME_HINTS = {56: ("bsc", "binance", "bnb"), 8453: ("base",)}
+
+
+def awesome_urls(chain_id: int) -> list[str]:
+    """Extract public endpoints for the chain from the awesome-list README."""
+    req = urllib.request.Request(AWESOME_URL, headers={"User-Agent": "allbrightA-rpcgen/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            text = r.read().decode()
+    except Exception as e:
+        print(f"awesome-list fetch failed: {e}", file=sys.stderr)
+        return []
+    hints = _AWESOME_HINTS.get(chain_id, ())
+    urls = []
+    for raw in re.findall(r'https?://[^\s)"|<>,\]]+', text):
+        u = raw.rstrip("/")
+        if not u.startswith("https://") or ENV_URL_RE.search(u):
+            continue
+        # keep only urls whose host/path names the chain (bsc/binance/bnb, base)
+        low = u.lower()
+        if any(h in low for h in hints) and u not in urls:
+            urls.append(u)
+    return urls
+
+
+def expand_mirrors(pattern: str) -> list[str]:
+    """'https://x{1,2,4}.y' -> ['https://x1.y', 'https://x2.y', 'https://x4.y']"""
+    m = re.search(r"\{([\d,]+)\}", pattern)
+    if not m:
+        return [pattern]
+    return [pattern[: m.start()] + n + pattern[m.end():] for n in m.group(1).split(",")]
+
+
+def write_wss_pool(path: str, urls: list[str]) -> None:
+    with open(path) as f:
+        text = f.read()
+    # Strip any existing rpc_wss_pool wherever it landed, then insert inside
+    # the [chain] table, right after the rpc_wss line.
+    text = re.sub(r'\n?# WSS pool for mempool stream[^\n]*\n?rpc_wss_pool\s*=\s*\[[^\]]*\]\n?|rpc_wss_pool\s*=\s*\[[^\]]*\]\n?',
+                  '', text, flags=re.S)
+    block = ("# WSS pool for mempool stream — cycled on failure/backpressure\n"
+             + "rpc_wss_pool = [\n" + "\n".join(f'    "{u}",' for u in urls) + "\n]\n")
+    m = re.search(r'^rpc_wss\s*=.*$', text, flags=re.M)
+    if m:
+        text = text[:m.end()] + "\n" + block + text[m.end():]
+    else:
+        raise RuntimeError(f"no rpc_wss anchor in {path}")
+    with open(path, "w") as f:
+        f.write(text)
+
+
 def probe(url: str, chain_id: int) -> tuple[str, float | None]:
     """POST eth_chainId; return (url, latency_s) if it answers correctly."""
     body = json.dumps(
@@ -149,6 +302,13 @@ def main() -> int:
         for u in extra_rpcs_urls(chain_id):
             if u not in cands:
                 cands.append(u)
+        for u in awesome_urls(chain_id):
+            if u not in cands:
+                cands.append(u)
+        for pattern in MIRROR_FAMILIES.get(chain_id, []):
+            for u in expand_mirrors(pattern):
+                if u not in cands:
+                    cands.append(u)
         print(f"[{name}] chain {chain_id}: {len(cands)} candidate HTTPS endpoints", file=sys.stderr)
 
         verified: list[tuple[str, float]] = []
@@ -179,6 +339,9 @@ def main() -> int:
 
         if args.write:
             rewrite_toml(cfg_path, urls)
+            wss = WSS_SEEDS.get(chain_id, []) + registry_wss(registry, chain_id)
+            wss = list(dict.fromkeys(wss))  # dedupe, keep seed order first
+            write_wss_pool(cfg_path, wss)
             print(f"[{name}] wrote {len(urls)} urls -> {cfg_path}", file=sys.stderr)
         else:
             print(f"# {name} (chain {chain_id}) — {len(urls)} verified endpoints")

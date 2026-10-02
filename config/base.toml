@@ -4,24 +4,33 @@ name = "Base"
 rpc_https = "${BASE_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-    "https://base.meowrpc.com",
-    "https://base-mainnet.public.blastapi.io",
-    "https://1rpc.io/base",
-    "https://base.drpc.org",
+    "https://base-mainnet.gateway.tatum.io",
     "https://mainnet.base.org",
+    "https://base.drpc.org",
+    "https://1rpc.io/base",
+    "https://base-mainnet.public.blastapi.io",
+    "https://base.meowrpc.com",
+    "https://base-pokt.nodies.app",
     "https://base-public.nodies.app",
-    "https://base.gateway.tenderly.co",
     "https://gateway.tenderly.co/public/base",
     "https://rpc.baseazul.dev",
     "https://base.api.onfinality.io/public",
+    "https://base.gateway.tenderly.co",
     "https://base.rpc.blxrbdn.com",
     "https://xrpc.cl/base",
-    "https://base-mainnet.gateway.tatum.io",
     "https://rpc.swiftnodes.io/rpc/base",
-    "https://base.api.pocket.network",
     "https://api.zan.top/base-mainnet",
+    "https://base.api.pocket.network",
 ]
 rpc_wss = "${BASE_WSS_URL}"
+# WSS pool for mempool stream — cycled on failure/backpressure
+rpc_wss_pool = [
+    "wss://base.api.onfinality.io/public-ws",
+    "wss://base-rpc.publicnode.com",
+    "wss://base.publicnode.com",
+    "wss://base.gateway.tenderly.co",
+]
+
 trader_rpc = "${BASE_TRADER_NODE}"   # Standard Trader node, $0.15/call — ONLY for tx submission
 arb_contract = "${BASE_ARB_CONTRACT}"
 state_reader = "${BASE_STATE_READER}"

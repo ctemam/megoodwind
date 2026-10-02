@@ -10,6 +10,10 @@ pub struct ChainConfig {
     /// 60s blacklist on 429/timeout). Empty = rpc_https only.
     #[serde(default)]
     pub rpc_https_pool: Vec<String>,
+    /// WSS provider pool for the mempool stream — watcher cycles to the next
+    /// entry on stream failure or >5ms backpressure. Falls back to rpc_wss.
+    #[serde(default)]
+    pub rpc_wss_pool: Vec<String>,
     pub rpc_wss: String,
     /// Expensive Trader/Warp endpoint — used ONLY for eth_sendRawTransaction.
     /// On Chainstack Trader nodes each call costs ~$0.15, so never use this for reads.
