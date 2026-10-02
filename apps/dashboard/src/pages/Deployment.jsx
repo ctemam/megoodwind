@@ -18,6 +18,8 @@ export default function Deployment() {
   const chains = all.chains || {}
   const [preflight] = useApi('/api/deploy/preflight', refreshMs)
   const [sim, setSim] = useApi('/api/deploy/sim', refreshMs)
+  const [deploys] = useApi('/api/deploy/instances', refreshMs)
+  const [sort, setSort] = useState({ key: 'registered_at', dir: -1 })
   const [confirm, setConfirm] = useState('')
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -121,6 +123,56 @@ export default function Deployment() {
             {result?.ok && <div className="ok-box">{result.note} Flipped: {result.flipped?.join(', ') || 'already live'}</div>}
           </>
         )}
+      </div>
+
+      {/* ── Deployment registry — auto-registered instances ── */}
+      <div className="panel">
+        <h3>Deployment registry</h3>
+        <table>
+          <thead>
+            <tr>
+              {[
+                ['id', 'ID'], ['instance', 'Instance'], ['chain', 'Chain'],
+                ['contract', 'Contract'], ['reader', 'State reader'],
+                ['commit', 'Commit'], ['mode', 'Mode'], ['online', 'Status'],
+                ['pid', 'PID'], ['uptime_ms', 'Uptime'], ['restarts', 'Restarts'],
+                ['registered_at', 'Registered'],
+              ].map(([k, label]) => (
+                <th key={k} style={{ cursor: 'pointer', userSelect: 'none' }}
+                  onClick={() => setSort(s => ({ key: k, dir: s.key === k ? -s.dir : 1 }))}>
+                  {label}{sort.key === k ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(deploys?.instances || [])
+              .slice()
+              .sort((a, b) => {
+                const va = a[sort.key], vb = b[sort.key]
+                if (va == null && vb == null) return 0
+                if (va == null) return 1
+                if (vb == null) return -1
+                return (va > vb ? 1 : va < vb ? -1 : 0) * sort.dir
+              })
+              .map(r => (
+                <tr key={r.id}>
+                  <td className="mono">{r.id}</td>
+                  <td>{r.instance}</td>
+                  <td>{LABEL[r.chain] || r.chain}</td>
+                  <td className="mono" title={r.contract}>{r.contract ? `${r.contract.slice(0, 8)}…${r.contract.slice(-6)}` : '—'}</td>
+                  <td className="mono" title={r.reader}>{r.reader ? `${r.reader.slice(0, 8)}…${r.reader.slice(-6)}` : '—'}</td>
+                  <td className="mono">{r.commit || '—'}</td>
+                  <td><span className={`tag ${r.mode === 'LIVE' ? 'live' : 'dry'}`}>{r.mode}</span></td>
+                  <td><span className={`tag ${r.online ? 'live' : ''}`}>{r.online ? 'online' : 'down'}</span></td>
+                  <td className="mono">{r.pid ?? '—'}</td>
+                  <td className="mono">{r.uptime_ms != null ? `${Math.floor(r.uptime_ms / 60000)}m` : '—'}</td>
+                  <td className="mono">{r.restarts ?? '—'}</td>
+                  <td className="mono">{r.registered_at ? new Date(r.registered_at).toLocaleString() : '—'}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )

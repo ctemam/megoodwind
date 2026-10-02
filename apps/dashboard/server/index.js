@@ -262,6 +262,66 @@ app.post('/api/deploy/golive', async (req, res) => {
   }
 })
 
+// ── Deployment registry ────────────────────────────────────────────────
+// Auto-registers every deployment instance the proxy observes: keyed on
+// (chain, executor contract, binary commit), so a redeploy or a new build
+// appends a fresh row with its own id + timestamp — nothing manual.
+const DEPLOY_LOG = path.join(__dirname, '.deployments.json')
+let deployRegistry = []
+try { deployRegistry = JSON.parse(fs.readFileSync(DEPLOY_LOG, 'utf8')) } catch {}
+
+function pm2Status() {
+  return new Promise(resolve => {
+    import('node:child_process').then(({ execFile }) =>
+      execFile('pm2', ['jlist'], { timeout: 8000 }, (_e, out) => {
+        try { resolve(JSON.parse(out)) } catch { resolve([]) }
+      })).catch(() => resolve([]))
+  })
+}
+
+app.get('/api/deploy/instances', async (_req, res) => {
+  const procs = await pm2Status()
+  let commit = null
+  try {
+    const { execFileSync } = await import('node:child_process')
+    commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO }).toString().trim()
+  } catch {}
+  const now = Date.now()
+  const rows = []
+  let dirty = false
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    const proc = procs.find(p => p.name === `allbrightA-${c}`)
+    const contract = env[`${c.toUpperCase()}_ARB_CONTRACT`] || null
+    const reader = env[`${c.toUpperCase()}_STATE_READER`] || null
+    const key = `${c}:${contract}:${commit}`
+    let row = deployRegistry.find(r => r.key === key)
+    if (!row) {
+      row = {
+        key,
+        id: `dep-${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        instance: `allbrightA-${c}`,
+        chain: c,
+        contract,
+        reader,
+        commit,
+        registered_at: new Date(now).toISOString(),
+      }
+      deployRegistry.push(row)
+      dirty = true
+    }
+    rows.push({
+      ...row,
+      mode: isLive() ? 'LIVE' : 'dry-run',
+      online: !!proc && proc.pm2_env?.status === 'online',
+      pid: proc?.pid ?? null,
+      uptime_ms: proc?.pm2_env?.pm_uptime ? now - proc.pm2_env.pm_uptime : null,
+      restarts: proc?.pm2_env?.unstable_restarts ?? proc?.pm2_env?.restart_time ?? null,
+    })
+  }
+  if (dirty) fs.writeFile(DEPLOY_LOG, JSON.stringify(deployRegistry), () => {})
+  res.json({ live: isLive(), instances: rows })
+})
+
 // Withdrawal — manual triggers a contract withdraw call; auto is a threshold
 // sweep config. Hard-gated on LIVE_COMMANDER_APPROVED like every other tx path.
 let autoCfg = { enabled: false, thresholdUsd: 100, to: null }
