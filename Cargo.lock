@@ -877,6 +877,7 @@ name = "arb-rpc"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-json-rpc",
  "alloy-network",
  "alloy-primitives",
  "alloy-provider",

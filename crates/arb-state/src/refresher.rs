@@ -208,17 +208,54 @@ fn partition_pools(configs: &[PoolConfig]) -> (Vec<Address>, Vec<Address>, Vec<A
     (v2, v3, algebra, aero, pcs_stable, wombat, dodo)
 }
 
+/// Per-reader-method circuit breaker: a method that fails with a
+/// non-transport error (revert, ABI decode) on every chunk for
+/// DEAD_AFTER refreshes in a row is proven dead on this deployment — its
+/// bytecode predates the interface. Skipping the call avoids
+/// guaranteed-wasted round-trips every block.
+#[derive(Default)]
+struct MethodCircuitBreaker {
+    streaks: std::sync::Mutex<std::collections::HashMap<&'static str, u8>>,
+}
+
+impl MethodCircuitBreaker {
+    /// Consecutive refreshes in which a reader method must fail on every
+    /// chunk before it is skipped for the rest of the session.
+    const DEAD_AFTER: u8 = 2;
+
+    /// Increment the contract-failure streak; warn once when the method
+    /// crosses the dead threshold.
+    fn note_failure(&self, label: &'static str) {
+        let mut m = self.streaks.lock().unwrap();
+        let n = m.entry(label).or_insert(0);
+        *n = n.saturating_add(1);
+        if *n == Self::DEAD_AFTER {
+            warn!(method = label, "StateReader method dead on this deployment — skipping call (Multicall3 covers V2/V3)");
+        }
+    }
+
+    /// Reset a method's streak on any successful chunk read.
+    fn clear(&self, label: &'static str) {
+        self.streaks.lock().unwrap().remove(label);
+    }
+
+    /// True once a method has failed contract-side for DEAD_AFTER
+    /// consecutive refreshes.
+    fn is_dead(&self, label: &'static str) -> bool {
+        self.streaks
+            .lock()
+            .unwrap()
+            .get(label)
+            .is_some_and(|n| *n >= Self::DEAD_AFTER)
+    }
+}
+
 pub struct StateRefresher {
     endpoint: Arc<Endpoint>,
     state_reader_addr: Address,
     pool_configs: Vec<PoolConfig>,
     chain_id: u64,
-    /// Per-reader-method consecutive contract-failure streaks. A method that
-    /// fails with a non-transport error (revert, ABI decode) on every chunk
-    /// for READER_DEAD_AFTER refreshes in a row is proven dead for this
-    /// session — its bytecode predates the interface. Skipping the call
-    /// avoids guaranteed-wasted round-trips every block.
-    reader_fail_streaks: std::sync::Mutex<std::collections::HashMap<&'static str, u8>>,
+    reader_breaker: MethodCircuitBreaker,
 }
 
 impl StateRefresher {
@@ -227,9 +264,6 @@ impl StateRefresher {
     /// eth_calls ("request is too complex") well before the gas cap. 60 calls
     /// = 20 V2 or 12 V3 pools per round-trip.
     const MC3_MAX_CALLS: usize = 60;
-    /// Consecutive refreshes in which a reader method must fail on every
-    /// chunk before it is skipped for the rest of the session.
-    const READER_DEAD_AFTER: u8 = 2;
     /// Per-call deadline for every read. Public endpoints have bimodal tail
     /// latency (~150ms healthy vs 500ms+ slow): an unbounded slow pick holds
     /// the whole parallel join hostage. A call past the deadline benches the
@@ -247,35 +281,25 @@ impl StateRefresher {
             state_reader_addr,
             pool_configs,
             chain_id,
-            reader_fail_streaks: std::sync::Mutex::new(std::collections::HashMap::new()),
+            reader_breaker: MethodCircuitBreaker::default(),
         }
     }
 
     /// Increment the contract-failure streak for a reader method; warn once
     /// when it crosses the dead threshold.
     fn note_reader_contract_failure(&self, label: &'static str) {
-        let mut m = self.reader_fail_streaks.lock().unwrap();
-        let n = m.entry(label).or_insert(0);
-        *n = n.saturating_add(1);
-        if *n == Self::READER_DEAD_AFTER {
-            warn!(method = label, "StateReader method dead on this deployment — skipping call (Multicall3 covers V2/V3)");
-        }
+        self.reader_breaker.note_failure(label);
     }
 
     /// Reset a method's streak on any successful chunk read.
     fn clear_reader_failure(&self, label: &'static str) {
-        let mut m = self.reader_fail_streaks.lock().unwrap();
-        m.remove(label);
+        self.reader_breaker.clear(label);
     }
 
-    /// True once a reader method has failed contract-side for
-    /// READER_DEAD_AFTER consecutive refreshes.
+    /// True once a reader method has failed contract-side for the
+    /// consecutive-failure threshold.
     fn reader_method_dead(&self, label: &'static str) -> bool {
-        self.reader_fail_streaks
-            .lock()
-            .unwrap()
-            .get(label)
-            .is_some_and(|n| *n >= Self::READER_DEAD_AFTER)
+        self.reader_breaker.is_dead(label)
     }
 
     /// One aggregate3 against the read pool with blacklist+retry on
@@ -1025,5 +1049,27 @@ mod tests {
         let (v2, v3, algebra, aero, pcs, wombat, dodo) = partition_pools(&configs);
         assert!(v2.is_empty() && v3.is_empty() && algebra.is_empty() && aero.is_empty()
                 && pcs.is_empty() && wombat.is_empty() && dodo.is_empty());
+    }
+
+    #[test]
+    fn test_breaker_dead_after_threshold() {
+        let cb = MethodCircuitBreaker::default();
+        cb.note_failure("V2");
+        assert!(!cb.is_dead("V2"), "one bad refresh must not kill a method");
+        cb.note_failure("V2");
+        assert!(cb.is_dead("V2"));
+        assert!(cb.is_dead("V2"), "dead methods stay dead for the session");
+        assert!(!cb.is_dead("V3"), "breakers are per-method");
+    }
+
+    #[test]
+    fn test_breaker_resets_on_success() {
+        let cb = MethodCircuitBreaker::default();
+        cb.note_failure("V2");
+        cb.note_failure("V2");
+        cb.clear("V2");
+        assert!(!cb.is_dead("V2"), "a successful read clears the streak");
+        cb.note_failure("V2");
+        assert!(!cb.is_dead("V2"), "counter restarts — needs a fresh streak");
     }
 }

@@ -431,3 +431,54 @@ impl Endpoint {
         Ok(*pending.tx_hash())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_json_rpc::ErrorPayload;
+
+    fn err_resp(code: i64, msg: &'static str) -> RpcError<TransportErrorKind> {
+        RpcError::ErrorResp(ErrorPayload {
+            code,
+            message: msg.into(),
+            data: None,
+        })
+    }
+
+    #[test]
+    fn not_supported_responses_bench_endpoint() {
+        // -32601 method not found (puissant-style builders in the read pool)
+        assert!(is_transport_error(&err_resp(
+            -32601,
+            "the method eth_call does not exist/is not available"
+        )));
+        // -32000 "not supported" variants (meowrpc-style)
+        assert!(is_transport_error(&err_resp(
+            -32000,
+            "The method eth_call is not supported."
+        )));
+    }
+
+    #[test]
+    fn legit_rpc_errors_do_not_bench() {
+        // Reverts, complexity limits and quota errors are valid RPC-level
+        // responses — they say nothing about endpoint capability.
+        assert!(!is_transport_error(&err_resp(3, "execution reverted")));
+        assert!(!is_transport_error(&err_resp(
+            -32602,
+            "request is too complex/large, try lesser input"
+        )));
+        assert!(!is_transport_error(&err_resp(-32000, "some other server error")));
+        assert!(!is_transport_error(&err_resp(
+            -32001,
+            "usage limit for current plan"
+        )));
+    }
+
+    #[test]
+    fn transport_failures_bench() {
+        let e: RpcError<TransportErrorKind> =
+            RpcError::Transport(TransportErrorKind::BackendGone);
+        assert!(is_transport_error(&e));
+    }
+}
