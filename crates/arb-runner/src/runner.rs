@@ -31,7 +31,7 @@ use arb_submit::pimlico::{PimlicoConfig, PimlicoSubmitter};
 use arb_submit::presign::PresignPool;
 use arb_submit::{SubmitTier, Submitter};
 
-use crate::config::AppConfig;
+use crate::config::{spec, AppConfig};
 use crate::metrics;
 
 const CIRCUIT_BREAKER_MAX_REVERTS: u32 = 3;
@@ -493,9 +493,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         .filter_map(|(name, bounds)| tokens.get(name).map(|&addr| (addr, (U256::from(bounds.min), U256::from(bounds.max)))))
         .collect();
 
-    let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts);
+    let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
+        .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
     let paths = enumerator.enumerate();
-    info!(total_paths = paths.len(), "Path enumeration complete");
+    info!(total_paths = paths.len(), max_hops = spec::MAX_PATH_HOPS, "Path enumeration complete");
 
     let presign_pool = PresignPool::new(&paths, cfg.chain.chain_id);
 
@@ -510,9 +511,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
     // ===== Submitters =====
     let mut submitters: Vec<Box<dyn Submitter>> = Vec::new();
-    let chain_label: &'static str = if cfg.chain.chain_id == 8453 { "Base" } else { "BSC" };
+    let chain_label: &'static str = if cfg.chain.chain_id == spec::BASE_CHAIN_ID { "Base" } else { "BSC" };
 
-    if cfg.chain.chain_id == 56 {
+    if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         if let Some(url) = is_nonempty(&cfg.submission.puissant_url) {
             submitters.push(Box::new(PuissantSubmitter::new(url)));
             info!("48Club Puissant v2 configured");
@@ -595,12 +596,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         ProfitGate::new(0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone())
     } else {
         ProfitGate::new(
-            cfg.scanner.min_profit_bps, cfg.gate.min_profit_usd,
+            cfg.scanner.min_profit_bps, crate::config::min_profit_usd_floor(cfg.gate.min_profit_usd),
             cfg.gate.safety_margin_bps, cfg.gate.stable_pool_extra_margin_bps,
             token_usd_prices.clone(), token_decimals.clone(),
         )
     };
-    info!(min_bps = cfg.scanner.min_profit_bps, min_usd = cfg.gate.min_profit_usd, "Profit gate initialized");
+    info!(min_bps = cfg.scanner.min_profit_bps, min_usd = crate::config::min_profit_usd_floor(cfg.gate.min_profit_usd), "Profit gate initialized");
 
     let warp_threshold_usd = cfg.submission.warp_threshold_usd;
     let warp_budget_usd = cfg.submission.warp_budget_usd;

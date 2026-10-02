@@ -11,12 +11,13 @@ fn simulate_profit(path: &PathTemplate, amount: U256, store: &PoolStore) -> U256
     let mut current = amount;
 
     for hop in &path.hops {
-        let pool_state = match store.get(&hop.pool) {
-            Some(s) => s,
+        // Zero-copy borrow — cloning pool states here allocates on the heap.
+        let pool_state = match store.get_ref(&hop.pool) {
+            Some(r) => r,
             None => return U256::ZERO,
         };
 
-        let out = match &pool_state {
+        let out = match &*pool_state {
             PoolState::V2(s) => s.quote(hop.token_in, current).unwrap_or(U256::ZERO),
             PoolState::V3(s) => s.quote(hop.token_in, current).unwrap_or(U256::ZERO),
             PoolState::Curve(s) => s.quote(hop.token_in, current).unwrap_or(U256::ZERO),
@@ -49,7 +50,7 @@ pub fn path_max_flash(
     let mut min_cap = default_max;
 
     for hop in &path.hops {
-        let reserve_in = match store.get(&hop.pool) {
+        let reserve_in = match store.get_ref(&hop.pool).as_deref() {
             Some(PoolState::V2(s)) => {
                 if hop.token_in == s.token0 { s.reserve0 } else { s.reserve1 }
             }

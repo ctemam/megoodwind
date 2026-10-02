@@ -29,6 +29,16 @@ impl PoolStore {
         self.pools.get(address).map(|r| r.value().clone())
     }
 
+    /// Zero-copy read for the hot eval path: returns a borrow guard, no clone.
+    /// `CurvePoolState` contains Vecs — cloning it per hop allocates on the heap
+    /// thousands of times per block. Hold the guard only for the hop's duration.
+    pub fn get_ref(
+        &self,
+        address: &Address,
+    ) -> Option<dashmap::mapref::one::Ref<'_, Address, PoolState>> {
+        self.pools.get(address)
+    }
+
     pub fn get_all(&self) -> Vec<(Address, PoolState)> {
         self.pools
             .iter()

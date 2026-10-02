@@ -6,6 +6,31 @@ use serde::Deserialize;
 use arb_core::types::Protocol;
 use arb_rpc::ChainConfig;
 
+/// Compile-time spec primitives (docs/AGENTS_SPEC.md §2 + scoring matrix).
+/// These are `const` so the compiler inlines/vectorizes the gate and math
+/// expressions — no runtime config lookups inside the calculation cycle.
+pub mod spec {
+    /// Minimum margin threshold per execution (USD).
+    pub const MIN_NET_PROFIT_USD: f64 = 1.50;
+    /// 3-hop depth limitation.
+    pub const MAX_PATH_HOPS: usize = 3;
+    /// Prioritize 0% borrow-fee venues.
+    pub const BALANCER_FEE_ZERO: bool = true;
+    pub const DODO_FEE_ZERO: bool = true;
+    /// Core processing execution ceiling.
+    pub const TARGET_MATH_LATENCY_MICROS: u64 = 5;
+    /// Node failover switch time budget.
+    pub const RPC_MAX_LATENCY_MS: u64 = 10;
+    /// Seconds an RPC node is blacklisted after a 429/timeout.
+    pub const RPC_BLACKLIST_SECS: u64 = 60;
+    /// Mempool ingestion polling resolution.
+    pub const MEMPOOL_POLL_INTERVAL_MS: u64 = 5;
+    pub const BASE_CHAIN_ID: u64 = 8453;
+    pub const BSC_CHAIN_ID: u64 = 56;
+    /// Canonical Balancer Vault (same address on BSC and Base).
+    pub const BALANCER_VAULT: &str = "0xBA12222222228d8Ba445958a75a0704d566BF2C8";
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub chain: ChainConfig,
@@ -96,6 +121,12 @@ pub struct SubmissionConfig {
     /// routes through the ERC-4337 UserOperation assembler. Default FALSE.
     #[serde(default = "default_false")]
     pub strict_4337: bool,
+}
+
+/// Effective profit floor: the spec's compile-time constant is the hard
+/// floor; TOML can only raise it, never lower it.
+pub fn min_profit_usd_floor(cfg_value: f64) -> f64 {
+    cfg_value.max(spec::MIN_NET_PROFIT_USD)
 }
 
 fn default_warp_threshold() -> f64 { 50.0 }

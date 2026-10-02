@@ -164,18 +164,40 @@ UserOperation JSON against live infra. Read-only; never broadcasts.
 
 ### RPC read pool + failover (allbrightA)
 
-`[chain] rpc_https_pool` lists free public read endpoints
-(7 configured on BSC, 6 on Base). The `Endpoint` round-robins reads across
+`[chain] rpc_https_pool` lists validated read endpoints
+(30 on BSC, 16 on Base — see generator below). Startup handshakes run in
+parallel (5s budget each). The `Endpoint` round-robins reads across
 healthy endpoints; any transport failure (HTTP 429, timeout, conn refused)
 benches that endpoint for **60s** and the call retries on the next endpoint
 immediately — the failover is a provider swap, well under the 10ms spec
 ceiling. RPC-level errors (execution reverts) never bench an endpoint.
 
-### Latency profile (allbrightA)
+`python3 ops/gen_rpc_pool.py --write --keep-existing` regenerates the pool:
+it pulls chainid.network + DefiLlama's Chainlist registry, probes every
+HTTPS candidate with `eth_chainId`, keeps correct-chain answers, and writes
+them latency-sorted into `config/*.toml`. Public registries yield ~25 BSC /
+~11 Base verified free endpoints — reaching the spec's 200+ node target
+requires paid provider keys (NodeReal/Alchemy/etc.); add them to the pool
+and the generator keeps them first with `--keep-existing`.
+
+### Latency profile + heap audit (allbrightA)
 
 `RUSTFLAGS="-C target-cpu=native" cargo run --release --bin latency_profile`
-benchmarks the production V2 math kernel over a stack-only 3-hop path and
-fails if a full eval exceeds the spec's 5µs ceiling (~200ns measured).
+runs two benches: (1) the V2 math kernel over a stack-only 3-hop path —
+~186ns vs the 5µs ceiling; (2) a counting-allocator audit of the real
+`evaluate_path` over a live `PoolStore` (V2 + V3 + Curve states) — asserts
+**zero heap events** per evaluation and exits 1 on any allocation. Pool
+reads in the eval cycle are borrow-based (`PoolStore::get_ref`); the old
+clone-per-hop path allocated `Vec`s for Curve states on every hop.
+
+### Compile-time spec constants (allbrightA)
+
+`arb_runner::config::spec` holds the spec's gate/math primitives as `const`:
+`MIN_NET_PROFIT_USD=1.50` (hard floor — TOML can only raise it),
+`MAX_PATH_HOPS=3` (path enumerator cap), `TARGET_MATH_LATENCY_MICROS=5`,
+`RPC_MAX_LATENCY_MS=10`, `RPC_BLACKLIST_SECS=60`, `MEMPOOL_POLL_INTERVAL_MS=5`,
+fee-zero venue flags, and both chain IDs. Runtime TOML is kept only for
+environment wiring (RPC URLs, wallet/env names, venue toggles).
 
 ### Balancer Vault flash route (allbrightA)
 

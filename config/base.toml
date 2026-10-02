@@ -4,12 +4,22 @@ name = "Base"
 rpc_https = "${BASE_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-  "${BASE_RPC_URL}",
-  "https://mainnet.base.org",
-  "https://base.drpc.org",
-  "https://1rpc.io/base",
-  "https://base-mainnet.public.blastapi.io",
-  "https://base.meowrpc.com",
+    "https://base.meowrpc.com",
+    "https://base-mainnet.public.blastapi.io",
+    "https://1rpc.io/base",
+    "https://base.drpc.org",
+    "https://mainnet.base.org",
+    "https://base-public.nodies.app",
+    "https://base.gateway.tenderly.co",
+    "https://gateway.tenderly.co/public/base",
+    "https://rpc.baseazul.dev",
+    "https://base.api.onfinality.io/public",
+    "https://base.rpc.blxrbdn.com",
+    "https://xrpc.cl/base",
+    "https://base-mainnet.gateway.tatum.io",
+    "https://rpc.swiftnodes.io/rpc/base",
+    "https://base.api.pocket.network",
+    "https://api.zan.top/base-mainnet",
 ]
 rpc_wss = "${BASE_WSS_URL}"
 trader_rpc = "${BASE_TRADER_NODE}"   # Standard Trader node, $0.15/call — ONLY for tx submission

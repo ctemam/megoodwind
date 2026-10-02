@@ -22,9 +22,10 @@ pub fn evaluate_path(path: &PathTemplate, store: &PoolStore) -> Option<SimResult
     let mut current_amount = path.flash_amount;
 
     for hop in &path.hops {
-        let pool_state = store.get(&hop.pool)?;
+        // Zero-copy borrow — cloning pool states here allocates on the heap.
+        let pool_ref = store.get_ref(&hop.pool)?;
 
-        let amount_out = match &pool_state {
+        let amount_out = match &*pool_ref {
             PoolState::V2(state) => state.quote(hop.token_in, current_amount).ok()?,
             PoolState::V3(state) => state.quote(hop.token_in, current_amount).ok()?,
             PoolState::Curve(state) => state.quote(hop.token_in, current_amount).ok()?,

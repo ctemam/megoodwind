@@ -107,26 +107,36 @@ impl Endpoint {
         let mut blacklist = Vec::with_capacity(n);
         let mut kept_urls = Vec::with_capacity(n);
 
-        for url in read_urls {
-            let provider = ProviderBuilder::new().connect_http(url.parse()?);
-            match provider.get_chain_id().await {
-                Ok(detected) if detected == chain_id => {
-                    info!(chain_id, endpoint = url, "Read endpoint connected");
-                    read_pool.push(provider);
+        // Parallel handshake probe — sequential probing stalls startup for big pools.
+        let probes: Vec<_> = read_urls
+            .iter()
+            .map(|url| {
+                let url = url.to_string();
+                async move {
+                    match url.parse() {
+                        Ok(parsed) => {
+                            let provider = ProviderBuilder::new().connect_http(parsed);
+                            let result = tokio::time::timeout(
+                                Duration::from_secs(5),
+                                provider.get_chain_id(),
+                            )
+                            .await;
+                            (url, Some(provider), result.ok().and_then(|r| r.ok()))
+                        }
+                        Err(_) => (url, None, None),
+                    }
+                }
+            })
+            .collect();
+        for (url, provider, detected) in futures::future::join_all(probes).await {
+            match detected {
+                Some(d) if d == chain_id => {
+                    read_pool.push(provider.unwrap());
                     blacklist.push(None);
-                    kept_urls.push(url.to_string());
+                    kept_urls.push(url);
                 }
-                Ok(detected) => {
-                    warn!(
-                        endpoint = url,
-                        expected = chain_id,
-                        got = detected,
-                        "Read endpoint dropped: chain id mismatch"
-                    );
-                }
-                Err(e) => {
-                    warn!(endpoint = url, error = %e, "Read endpoint unreachable at startup — skipped");
-                }
+                Some(d) => warn!(endpoint = %url, expected = chain_id, got = d, "Read endpoint dropped: chain id mismatch"),
+                None => warn!(endpoint = %url, "Read endpoint unreachable at startup — skipped"),
             }
         }
 
