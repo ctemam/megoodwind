@@ -10,13 +10,13 @@ import Infra from './pages/Infra.jsx'
 import Settings from './pages/Settings.jsx'
 
 const NAV = [
-  ['/', 'Overview'],
-  ['/pnl', 'Profit & Loss'],
-  ['/wallet', 'Wallet'],
-  ['/deploy', 'Deployment'],
-  ['/opps', 'Opportunities'],
-  ['/infra', 'Infrastructure'],
-  ['/settings', 'Settings'],
+  ['/', '⌂', 'Dashboard'],
+  ['/pnl', '◔', 'Profit & Loss'],
+  ['/wallet', '◉', 'Wallet'],
+  ['/deploy', '▣', 'Deployment'],
+  ['/opps', '⚡', 'Opportunities'],
+  ['/infra', '⛓', 'Infrastructure'],
+  ['/settings', '⚙', 'Settings'],
 ]
 
 export default function App() {
@@ -27,10 +27,17 @@ export default function App() {
   return (
     <>
       <nav>
-        <div className="brand">allbright<span>A</span></div>
-        {NAV.map(([to, label]) => (
-          <NavLink key={to} to={to} end={to === '/'}>{label}</NavLink>
+        <div className="brand">
+          <img src="/logo.png" alt="AB" />
+          <div>
+            <div className="name">ALLBRIGHT</div>
+            <div className="sub">Arbitrage Intelligence</div>
+          </div>
+        </div>
+        {NAV.map(([to, icon, label]) => (
+          <NavLink key={to} to={to} end={to === '/'}><span>{icon}</span>{label}</NavLink>
         ))}
+        <div className="tagline"><b>Smarter Capital</b>Brighter Returns</div>
       </nav>
       <main>
         <header>
@@ -38,9 +45,10 @@ export default function App() {
           <div className="pulse">
             <div className={`dot ${online ? '' : 'off'}`} />
             <span className={`val ${net >= 0 ? 'pos' : 'neg'}`}>{fmt(net, currency, prices)}</span>
-            <span className="dim" style={{ fontSize: 12 }}>
-              {online}/2 runners online · {all.live ? 'LIVE' : 'dry-run'}
-            </span>
+          </div>
+          <div className="status-pill">
+            <div className="sd" style={online < 2 ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
+            <div><b>{online === 2 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/2 runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
           </div>
           <div className="ctl">
             <select value={currency} onChange={e => setCurrency(e.target.value)}>
@@ -62,6 +70,11 @@ export default function App() {
           <Route path="/infra" element={<Infra />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
+        <div className="footer-strip">
+          <div className="seg"><b>AllBright</b> · Autonomous Arbitrage Engine</div>
+          <div className="seg">Scan → Evaluate → Execute → Settle</div>
+          <div className="seg" style={{ marginLeft: 'auto' }}>Flash Loan · DeFi Arbitrage · MEV-aware</div>
+        </div>
       </main>
     </>
   )
