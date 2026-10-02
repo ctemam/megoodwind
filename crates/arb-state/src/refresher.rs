@@ -202,8 +202,34 @@ impl StateRefresher {
         let (v2_addrs, v3_addrs, algebra_addrs, aero_addrs,
              pcs_stable_addrs, wombat_addrs, dodo_addrs) = self.partition_by_type();
 
-        let provider = self.endpoint.provider();
-        let reader = IStateReader::new(self.state_reader_addr, provider);
+        // Each async block picks its own provider from the read pool and fails
+        // over to the next healthy endpoint on a transport error (429/timeout).
+        macro_rules! chunk_loop {
+            ($label:literal, $chunks:expr, $call:ident) => {{
+                let mut all = Vec::new();
+                let (mut idx, provider) = self.endpoint.pool_pick();
+                let mut reader = IStateReader::new(self.state_reader_addr, provider);
+                for chunk in &$chunks {
+                    match reader.$call(chunk.clone()).call().await {
+                        Ok(states) => all.extend(states),
+                        Err(e) => {
+                            warn!(chunk_size = chunk.len(), "{} chunk read failed: {}", $label, e);
+                            if arb_rpc::is_contract_transport_error(&e) {
+                                self.endpoint.blacklist_read(idx);
+                                let (nidx, np) = self.endpoint.pool_pick();
+                                idx = nidx;
+                                reader = IStateReader::new(self.state_reader_addr, np);
+                                match reader.$call(chunk.clone()).call().await {
+                                    Ok(states) => all.extend(states),
+                                    Err(e2) => warn!(chunk_size = chunk.len(), "{} chunk retry failed: {}", $label, e2),
+                                }
+                            }
+                        }
+                    }
+                }
+                all
+            }};
+        }
 
         let v2_chunks: Vec<_> = v2_addrs.chunks(Self::CHUNK_SIZE)
             .map(|c| c.to_vec())
@@ -236,75 +262,36 @@ impl StateRefresher {
 
         let (v2_results, v3_results, algebra_results, aero_results,
              pcs_results, dodo_results, wombat_results) = tokio::join!(
-            async {
-                let mut all = Vec::new();
-                for chunk in &v2_chunks {
-                    match reader.readV2(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "V2 chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
-            async {
-                let mut all = Vec::new();
-                for chunk in &v3_chunks {
-                    match reader.readV3(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "V3 chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
-            async {
-                let mut all = Vec::new();
-                for chunk in &algebra_chunks {
-                    match reader.readAlgebra(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "Algebra chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
-            async {
-                let mut all = Vec::new();
-                for chunk in &aero_chunks {
-                    match reader.readAeroV2(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "AeroV2 chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
-            async {
-                let mut all = Vec::new();
-                for chunk in &pcs_chunks {
-                    match reader.readPcsStable(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "PCS Stable chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
-            async {
-                let mut all = Vec::new();
-                for chunk in &dodo_chunks {
-                    match reader.readDodoV2(chunk.clone()).call().await {
-                        Ok(states) => all.extend(states),
-                        Err(e) => warn!(chunk_size = chunk.len(), "DODO chunk read failed: {e}"),
-                    }
-                }
-                all
-            },
+            async { chunk_loop!("V2", v2_chunks, readV2) },
+            async { chunk_loop!("V3", v3_chunks, readV3) },
+            async { chunk_loop!("Algebra", algebra_chunks, readAlgebra) },
+            async { chunk_loop!("AeroV2", aero_chunks, readAeroV2) },
+            async { chunk_loop!("PCS Stable", pcs_chunks, readPcsStable) },
+            async { chunk_loop!("DODO", dodo_chunks, readDodoV2) },
             async {
                 if wombat_pools.is_empty() {
                     return Vec::new();
                 }
+                let (idx, provider) = self.endpoint.pool_pick();
+                let reader = IStateReader::new(self.state_reader_addr, provider);
                 match reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call().await {
                     Ok(states) => states,
                     Err(e) => {
                         warn!("Wombat read failed: {e}");
-                        Vec::new()
+                        if arb_rpc::is_contract_transport_error(&e) {
+                            self.endpoint.blacklist_read(idx);
+                            let (_, np) = self.endpoint.pool_pick();
+                            let retry = IStateReader::new(self.state_reader_addr, np);
+                            match retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call().await {
+                                Ok(states) => states,
+                                Err(e2) => {
+                                    warn!("Wombat retry failed: {e2}");
+                                    Vec::new()
+                                }
+                            }
+                        } else {
+                            Vec::new()
+                        }
                     }
                 }
             },

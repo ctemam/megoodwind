@@ -344,8 +344,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     info!(address = %signer.address(), "Wallet loaded");
 
     let trader_url = cfg.chain.trader_rpc.as_deref();
+    let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
+    if read_urls.is_empty() {
+        read_urls.push(cfg.chain.rpc_https.as_str());
+    }
     let endpoint = Arc::new(
-        Endpoint::new(&cfg.chain.rpc_https, &cfg.chain.rpc_wss, trader_url, cfg.chain.chain_id).await?,
+        Endpoint::new_pooled(&read_urls, &cfg.chain.rpc_wss, trader_url, cfg.chain.chain_id).await?,
     );
 
     let tokens: HashMap<String, Address> = cfg
@@ -568,6 +572,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 }
             }
             None => warn!("pimlico_enabled=true but pimlico_bundler_url is empty — disabled"),
+        }
+    }
+
+    // Spec Account Abstraction Rule: strict mode drops every legacy venue so
+    // all execution routes through the ERC-4337 UserOperation assembler.
+    if cfg.submission.strict_4337 {
+        if let Some(venue) = pimlico_venue.clone() {
+            submitters.clear();
+            submitters.push(Box::new(venue));
+            warn!("strict_4337: legacy venues disabled — all execution via ERC-4337 UserOperations");
+        } else {
+            warn!("strict_4337 set but Pimlico venue unavailable — keeping legacy venues");
         }
     }
 

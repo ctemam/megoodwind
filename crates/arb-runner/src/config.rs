@@ -91,6 +91,11 @@ pub struct SubmissionConfig {
     pub sponsor_policy_id_env: Option<String>,
     /// CREATE2 salt for the counterfactual smart account. Default 0.
     pub smart_account_salt: Option<u64>,
+    /// Spec Account Abstraction Rule: when true and the Pimlico venue is
+    /// available, legacy bundle/direct venues are disabled and ALL execution
+    /// routes through the ERC-4337 UserOperation assembler. Default FALSE.
+    #[serde(default = "default_false")]
+    pub strict_4337: bool,
 }
 
 fn default_warp_threshold() -> f64 { 50.0 }

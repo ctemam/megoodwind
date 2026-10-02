@@ -15,6 +15,10 @@ path = "src/bin/validate_pools.rs"
 name = "verify4337"
 path = "src/bin/verify4337.rs"
 
+[[bin]]
+name = "latency_profile"
+path = "src/bin/latency_profile.rs"
+
 [dependencies]
 arb-core = { workspace = true }
 arb-state = { workspace = true }

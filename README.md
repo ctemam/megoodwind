@@ -151,14 +151,39 @@ ETH/BNB for gas. Per chain, in `config/*.toml` under `[submission]`:
   When set, the submitter asks `pm_sponsorUserOperation` first and falls back
   to self-funded when sponsorship is unavailable.
 
-The account's `execute()` call wraps the arb contract call; the op is signed
+The account's `execute()` call wraps the arb call; the op is signed
 with the owner key over the EIP-191 digest of the v0.6 `userOpHash`
 (SimpleAccount validation). With `dry_run = true` the assembled op is logged
-via `preview()` and never broadcast.
+via `preview()` and never broadcast. `strict_4337 = true` in `[submission]`
+drops every legacy bundle/direct venue so all execution routes through the
+UserOperation assembler (spec Account Abstraction Rule).
 
 Preflight without scanning — `cargo run --release --bin verify4337 -- config/bsc.toml`
 assembles, gas-quotes, optionally sponsors, signs, and prints the full
 UserOperation JSON against live infra. Read-only; never broadcasts.
+
+### RPC read pool + failover (allbrightA)
+
+`[chain] rpc_https_pool` lists free public read endpoints
+(7 configured on BSC, 6 on Base). The `Endpoint` round-robins reads across
+healthy endpoints; any transport failure (HTTP 429, timeout, conn refused)
+benches that endpoint for **60s** and the call retries on the next endpoint
+immediately — the failover is a provider swap, well under the 10ms spec
+ceiling. RPC-level errors (execution reverts) never bench an endpoint.
+
+### Latency profile (allbrightA)
+
+`RUSTFLAGS="-C target-cpu=native" cargo run --release --bin latency_profile`
+benchmarks the production V2 math kernel over a stack-only 3-hop path and
+fails if a full eval exceeds the spec's 5µs ceiling (~200ns measured).
+
+### Balancer Vault flash route (allbrightA)
+
+Both arb contracts gained `executeBalancerArbitrage` + `receiveFlashLoan`
+(0% borrow fee — Balancer Vault `0xBA12222222228d8Ba445958a75a0704d566BF2C8`
+is canonical on BSC and Base), reusing the same `SwapInstruction` plan and
+`_dispatchSwap` core. Requires a contract redeploy to activate on-chain —
+deployed contracts are unchanged.
 
 ### PM2 (allbrightA)
 

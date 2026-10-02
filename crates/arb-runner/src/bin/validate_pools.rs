@@ -33,8 +33,12 @@ async fn main() -> Result<()> {
     let cfg = config::load_config(config_path)?;
     info!(chain = %cfg.chain.name, "Validating pools from {config_path}");
 
+    let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
+    if read_urls.is_empty() {
+        read_urls.push(cfg.chain.rpc_https.as_str());
+    }
     let endpoint = Arc::new(
-        Endpoint::new(&cfg.chain.rpc_https, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?,
+        Endpoint::new_pooled(&read_urls, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?,
     );
 
     let tokens: HashMap<String, Address> = cfg

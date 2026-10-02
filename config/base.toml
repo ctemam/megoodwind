@@ -2,6 +2,15 @@
 chain_id = 8453
 name = "Base"
 rpc_https = "${BASE_RPC_URL}"
+# Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
+rpc_https_pool = [
+  "${BASE_RPC_URL}",
+  "https://mainnet.base.org",
+  "https://base.drpc.org",
+  "https://1rpc.io/base",
+  "https://base-mainnet.public.blastapi.io",
+  "https://base.meowrpc.com",
+]
 rpc_wss = "${BASE_WSS_URL}"
 trader_rpc = "${BASE_TRADER_NODE}"   # Standard Trader node, $0.15/call — ONLY for tx submission
 arb_contract = "${BASE_ARB_CONTRACT}"
@@ -52,6 +61,7 @@ pimlico_enabled      = true
 pimlico_bundler_url  = "https://api.pimlico.io/v2/base/rpc?apikey=${PIMLICO_API_KEY}"
 sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
 # entry_point / account_factory default to canonical v0.6 addresses.
+strict_4337          = true   # spec: route ALL execution through the UserOp assembler
 
 [token_usd_prices]
 WETH = 2500.0

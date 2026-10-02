@@ -50,8 +50,12 @@ async fn main() -> Result<()> {
     let signer: PrivateKeySigner = private_key.parse()?;
     info!(owner = %signer.address(), "wallet loaded");
 
+    let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
+    if read_urls.is_empty() {
+        read_urls.push(cfg.chain.rpc_https.as_str());
+    }
     let endpoint = Arc::new(
-        Endpoint::new(&cfg.chain.rpc_https, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?,
+        Endpoint::new_pooled(&read_urls, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?,
     );
 
     let pim_cfg = PimlicoConfig::from_parts(

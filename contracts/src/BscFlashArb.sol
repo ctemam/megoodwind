@@ -117,13 +117,34 @@ interface IAlgebraSwapCallback {
 
 // ============ Main Contract ============
 
+
+// Balancer Vault flash loan — 0% borrow fee (allbrightA spec: Liquidity Sourcing).
+interface IBalancerVault {
+    function flashLoan(
+        address recipient,
+        address[] memory tokens,
+        uint256[] memory amounts,
+        bytes memory userData
+    ) external;
+}
+
+interface IFlashLoanRecipient {
+    function receiveFlashLoan(
+        IERC20[] memory tokens,
+        uint256[] memory amounts,
+        uint256[] memory feeAmounts,
+        bytes memory userData
+    ) external;
+}
+
 contract BscFlashArb is
     IUnlockCallback,
     IUniswapV3FlashCallback,
     IUniswapV3SwapCallback,
     IPancakeV3FlashCallback,
     IPancakeV3SwapCallback,
-    IAlgebraSwapCallback
+    IAlgebraSwapCallback,
+    IFlashLoanRecipient
 {
     using SafeERC20 for IERC20;
 
@@ -148,6 +169,8 @@ contract BscFlashArb is
     uint256 private _currentAmount;
     uint256 private _gasStart;
     address private _expectedV3SwapPool;
+    /// Balancer Vault address while a Vault flash loan is in flight; 0 otherwise.
+    address private _balancerVault;
 
     // Per-pool metadata for protocols that need direction/index info
     // Key: keccak256(abi.encodePacked(pool, tokenIn))
@@ -185,7 +208,7 @@ contract BscFlashArb is
 
     // ============ Enums ============
 
-    enum Protocol { V3, V4, V2, PCS_STABLE, WOMBAT, DODO_V2, ALGEBRA }
+    enum Protocol { V3, V4, V2, PCS_STABLE, WOMBAT, DODO_V2, ALGEBRA, BALANCER }
 
     // ============ Structs ============
 
@@ -331,6 +354,93 @@ contract BscFlashArb is
         emit ArbitrageExecuted(asset, amount, grossProfit, gasUsed, uint8(Protocol.V4));
 
         return "";
+    }
+
+
+    // ============ Balancer Vault Flash Loan (0% borrow) ============
+
+    /// Entry: borrow `amount` of `asset` from the Balancer Vault and replay the
+    /// swap plan inside the callback. Vault is canonical on BSC and Base
+    /// (0xBA12222222228d8Ba445958a75a0704d566BF2C8).
+    function executeBalancerArbitrage(
+        address balancerVault,
+        address asset,
+        uint256 amount,
+        SwapInstruction[] calldata swapInstructions,
+        uint256 deadline
+    ) external onlyOwner whenNotPaused checkGasPrice {
+        if (block.timestamp > deadline) revert SwapFailed("Transaction expired");
+        if (!supportedTokens[asset]) revert UnsupportedToken(asset);
+        if (amount == 0) revert InvalidAmount();
+        if (swapInstructions.length == 0) revert SwapFailed("No swaps");
+
+        _balancerVault = balancerVault;
+        _gasStart = gasleft();
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = asset;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = amount;
+
+        IBalancerVault(balancerVault).flashLoan(
+            address(this), tokens, amounts,
+            abi.encode(asset, amount, swapInstructions)
+        );
+
+        _balancerVault = address(0);
+        _gasStart = 0;
+    }
+
+    /// Balancer Vault callback: runs the swap plan, then repays amount+fee
+    /// (fee is 0 on the Vault) back to the Vault.
+    function receiveFlashLoan(
+        IERC20[] memory tokens,
+        uint256[] memory amounts,
+        uint256[] memory feeAmounts,
+        bytes memory userData
+    ) external override {
+        if (_balancerVault == address(0) || msg.sender != _balancerVault) revert Unauthorized();
+        uint256 gasStart = _gasStart;
+
+        (
+            address asset,
+            uint256 amount,
+            SwapInstruction[] memory swapInstructions
+        ) = abi.decode(userData, (address, uint256, SwapInstruction[]));
+
+        if (tokens.length != 1 || amounts.length != 1 || feeAmounts.length != 1) {
+            revert SwapFailed("Bad flash params");
+        }
+        if (address(tokens[0]) != asset || amounts[0] != amount) {
+            revert SwapFailed("Flash params mismatch");
+        }
+
+        // Vault has already transferred the borrowed tokens; balanceBefore
+        // includes them, so profit = gain over the repay obligation.
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
+
+        for (uint256 i = 0; i < swapInstructions.length; i++) {
+            _dispatchSwap(swapInstructions[i]);
+        }
+
+        uint256 fee = feeAmounts[0];
+        uint256 balanceAfter = IERC20(asset).balanceOf(address(this));
+        if (balanceAfter <= balanceBefore + fee) {
+            revert InsufficientProfit(0, minProfitBasisPoints);
+        }
+        uint256 grossProfit = balanceAfter - balanceBefore - fee;
+        uint256 requiredProfit = (amount * minProfitBasisPoints) / 10000;
+        if (grossProfit < requiredProfit) {
+            revert InsufficientProfit(grossProfit, requiredProfit);
+        }
+
+        IERC20(asset).safeTransfer(msg.sender, amount + fee);
+
+        totalExecutions++;
+        totalProfit += grossProfit;
+
+        uint256 gasUsed = gasStart - gasleft();
+        emit ArbitrageExecuted(asset, amount, grossProfit, gasUsed, uint8(Protocol.BALANCER));
     }
 
     // ============ Swap Dispatcher ============

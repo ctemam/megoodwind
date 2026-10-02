@@ -2,6 +2,16 @@
 chain_id = 56
 name = "BSC"
 rpc_https = "${BSC_RPC_URL}"
+# Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
+rpc_https_pool = [
+  "${BSC_RPC_URL}",
+  "https://bsc-dataseed.binance.org",
+  "https://bsc-dataseed1.defibit.io",
+  "https://1rpc.io/bnb",
+  "https://bsc.drpc.org",
+  "https://bsc-mainnet.public.blastapi.io",
+  "https://bsc.meowrpc.com",
+]
 rpc_wss = "${BSC_WSS_URL}"
 trader_rpc = "${BSC_TRADER_NODE}"   # Warp-enabled, $0.15/call — ONLY for tx submission
 arb_contract = "${BSC_ARB_CONTRACT}"
@@ -61,6 +71,7 @@ pimlico_enabled      = true
 pimlico_bundler_url  = "https://api.pimlico.io/v2/binance/rpc?apikey=${PIMLICO_API_KEY}"
 sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
 # entry_point / account_factory default to canonical v0.6 addresses.
+strict_4337          = true   # spec: route ALL execution through the UserOp assembler
 
 [token_usd_prices]
 USDT = 1.0
