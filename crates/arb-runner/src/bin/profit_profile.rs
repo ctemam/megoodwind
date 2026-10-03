@@ -361,6 +361,7 @@ async fn main() -> Result<()> {
             }
             let mut n_ver = 0u32;
             let mut verified_out: Vec<(String, f64)> = Vec::new();
+            let mut eval_out: Vec<(String, f64)> = Vec::new();
             let ids: Vec<(String, Vec<String>)> = strat
                 .records
                 .values()
@@ -417,6 +418,70 @@ async fn main() -> Result<()> {
                         n_ver += 1;
                     }
                     verified_out.push((id.clone(), best_usd));
+                }
+                eval_out.push((id.clone(), best_usd));
+            }
+            // ---- Complete pending opportunity records with sim outcomes.
+            // Commander directive: a record is actionable only when OUR
+            // simulator reproduces positive net — leader evidence alone is
+            // never sufficient. Passing clears route_untracked (the covered
+            // portion carried the reproduction); no_victim_context stands.
+            {
+                let opp_dir = format!("data/leaders/{}", cfg.chain.name);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64).unwrap_or(0);
+                let mut opps = arb_core::opportunity::load_opportunities(&opp_dir);
+                for (id, usd) in &eval_out {
+                    let prefix = format!("{}/{id}/", cfg.chain.name);
+                    let mut o = match opps.iter()
+                        .filter(|o| o.opportunity_id.starts_with(&prefix))
+                        .max_by_key(|o| o.unix_ms)
+                    {
+                        Some(o) => { let mut c = o.clone(); c.unix_ms = now_ms; c }
+                        None => arb_core::opportunity::ActionableOpportunity::new(
+                            &cfg.chain.name, id,
+                            id.split('/').next().unwrap_or(""), "sim_eval",
+                            ids.iter().find(|(i, _)| i == id)
+                                .map(|(_, r)| r.clone()).unwrap_or_default()),
+                    };
+                    if *usd > 0.0 {
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Pass;
+                        o.allbright_net_usd = *usd;
+                        if o.rejection_reason == "route_untracked" {
+                            o.rejection_reason.clear();
+                        }
+                        if o.is_actionable() {
+                            o.execution_status =
+                                arb_core::opportunity::ExecutionStatus::Ready;
+                            arb_leaders::OPPORTUNITY_TOTAL
+                                .with_label_values(&[cfg.chain.name.as_str(), "actionable"])
+                                .inc();
+                        }
+                        arb_leaders::OPPORTUNITY_TOTAL
+                            .with_label_values(&[cfg.chain.name.as_str(), "replay_positive"])
+                            .inc();
+                        println!(
+                            "LEADER_OPPORTUNITY {} allbright_net_usd={usd:.1} \
+                             sim=pass exec={:?}",
+                            o.opportunity_id, o.execution_status);
+                    } else {
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Fail;
+                        o.execution_status =
+                            arb_core::opportunity::ExecutionStatus::None;
+                        if o.rejection_reason.is_empty() {
+                            o.rejection_reason = "negative_net_after_gas".into();
+                            arb_leaders::OPPORTUNITY_REJECTED
+                                .with_label_values(&[cfg.chain.name.as_str(), "negative_net_after_gas"])
+                                .inc();
+                        }
+                    }
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[cfg.chain.name.as_str(), "replay_attempts"])
+                        .inc();
+                    let _ = o.append_jsonl(&opp_dir);
                 }
             }
             if n_ver > 0 || !ids.is_empty() {

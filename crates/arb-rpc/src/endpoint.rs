@@ -500,6 +500,27 @@ impl Endpoint {
         Ok((out, skipped))
     }
 
+    /// Tx hash at `index` in `block` — used to identify the victim/orderflow
+    /// tx a leader backran (the sibling at index-1 in the same block).
+    pub async fn get_tx_hash_at_index(
+        &self,
+        block: u64,
+        index: u64,
+    ) -> Result<Option<alloy_primitives::B256>> {
+        let raw: Option<serde_json::Value> = self
+            .with_failover(|p| async move {
+                p.raw_request(
+                    "eth_getTransactionByBlockNumberAndIndex".into(),
+                    (format!("0x{block:x}"), format!("0x{index:x}")),
+                )
+                .await
+            })
+            .await?;
+        Ok(raw
+            .and_then(|v| v.get("hash").and_then(|h| h.as_str()).map(String::from))
+            .and_then(|h| h.parse().ok()))
+    }
+
     /// Get native balance from the read pool.
     pub async fn get_balance(&self, address: Address) -> Result<U256> {
         Ok(self.with_failover(|p| async move { p.get_balance(address).await }).await?)

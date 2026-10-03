@@ -435,6 +435,9 @@ async fn main() -> Result<()> {
         let mut hop = 0u32;
         let mut route_pools: std::collections::HashSet<Address> =
             std::collections::HashSet::new();
+        let mut ordered_pools: Vec<Address> = Vec::new();
+        let mut first_token = String::new();
+        let mut last_token = String::new();
         for log in receipt.inner.logs() {
             let topics = log.topics();
             if topics.len() != 3 || topics[0] != TRANSFER_SIG {
@@ -456,9 +459,15 @@ async fn main() -> Result<()> {
             };
             for a in [from, to] {
                 if a != *addr && !s_contracts.contains(&a) && a != token {
-                    route_pools.insert(a);
+                    if route_pools.insert(a) {
+                        ordered_pools.push(a);
+                    }
                 }
             }
+            if first_token.is_empty() {
+                first_token = format!("{token:#x}");
+            }
+            last_token = format!("{token:#x}");
             println!(
                 "LEADER_ROUTE {addr:#x} class={class} tx={best_tx:#x} \
                  hop={hop} token={token:#x} {} -> {} amt={amount}",
@@ -498,6 +507,55 @@ async fn main() -> Result<()> {
             route_pools.len(),
             missing.join(",")
         );
+
+        // ---- Actionable opportunity record (Commander directive): the
+        // intelligence product is an executable opportunity, not a wallet
+        // scorecard. Geometry + victim context + leader outcome land here;
+        // our own simulator completes allbright_net/reproducibility in the
+        // profiler's verify pass.
+        let mut opp = arb_core::opportunity::ActionableOpportunity::new(
+            &chain,
+            &format!("{addr:#x}/{class}"),
+            &format!("{addr:#x}"),
+            &format!("{best_tx:#x}"),
+            ordered_pools.iter().map(|p| format!("{p:#x}")).collect(),
+        );
+        opp.target_block = receipt.block_number.unwrap_or(0);
+        opp.leader_net_usd = wallet.2.best_tx_usd;
+        opp.token_in = first_token;
+        opp.token_out = last_token;
+        if let Some(idx) = receipt.transaction_index {
+            if idx > 0 {
+                if let Ok(Some(v)) =
+                    endpoint.get_tx_hash_at_index(opp.target_block, idx - 1).await
+                {
+                    opp.victim_tx = format!("{v:#x}");
+                }
+            }
+        }
+        if opp.victim_tx.is_empty() {
+            opp.rejection_reason = "no_victim_context".into();
+        } else if covered < route_pools.len() {
+            opp.rejection_reason = "route_untracked".into();
+        }
+        println!(
+            "LEADER_OPPORTUNITY {} victim={} pools={} leader_net_usd={:.1} \
+             sim=pending reason={}",
+            opp.opportunity_id,
+            if opp.victim_tx.is_empty() { "—" } else { &opp.victim_tx },
+            opp.route_pools.len(),
+            opp.leader_net_usd,
+            if opp.rejection_reason.is_empty() { "none" } else { &opp.rejection_reason },
+        );
+        arb_leaders::OPPORTUNITY_TOTAL
+            .with_label_values(&[chain.as_str(), "decoded"])
+            .inc();
+        if !opp.rejection_reason.is_empty() {
+            arb_leaders::OPPORTUNITY_REJECTED
+                .with_label_values(&[chain.as_str(), opp.rejection_reason.as_str()])
+                .inc();
+        }
+        let _ = opp.append_jsonl(&data_dir);
     }
     if sh_pools_total > 0 {
         println!(

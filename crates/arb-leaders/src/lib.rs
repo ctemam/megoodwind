@@ -141,6 +141,23 @@ lazy_static! {
         &["chain"]
     )
     .unwrap();
+    /// Actionable-opportunity funnel (Commander directive): the product is an
+    /// executable opportunity, not a wallet scorecard. Stages: decoded
+    /// (route+context emitted by leader_scan), replay_attempts /
+    /// replay_positive (historical reproduction), shadow_positive (live-state
+    /// sim positive), submitted, landed, settled, plus {reason} rejections.
+    pub static ref OPPORTUNITY_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "arb_opportunity_total",
+        "Actionable-opportunity records by stage (per chain, stage)",
+        &["chain", "stage"]
+    )
+    .unwrap();
+    pub static ref OPPORTUNITY_REJECTED: IntCounterVec = register_int_counter_vec!(
+        "arb_opportunity_rejected_total",
+        "Opportunity rejections by machine-readable reason (per chain)",
+        &["chain", "reason"]
+    )
+    .unwrap();
 }
 
 /// One row of the `[leaders]` wallet table in a chain TOML.

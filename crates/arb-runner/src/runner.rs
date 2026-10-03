@@ -963,6 +963,29 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         })
     };
 
+    // Opportunity bridge (Commander directive): sim-verified leader route
+    // templates feed live evaluation. Only route geometry crosses — never
+    // leader calldata/recipients/nonces. A template is READY when our own
+    // simulator reproduced positive net through its route pools.
+    let ready_templates: Vec<(String, std::collections::HashSet<Address>)> = {
+        let dir = format!("data/leaders/{chain_label}");
+        arb_core::opportunity::load_opportunities(&dir)
+            .into_iter()
+            .filter(|o| o.is_actionable()
+                || o.execution_status == arb_core::opportunity::ExecutionStatus::Ready)
+            .map(|o| (
+                o.opportunity_id.clone(),
+                o.route_pools.iter().filter_map(|p| p.parse::<Address>().ok())
+                    .collect::<std::collections::HashSet<Address>>(),
+            ))
+            .filter(|(_, s)| !s.is_empty())
+            .collect()
+    };
+    if !ready_templates.is_empty() {
+        info!(chain = chain_label, templates = ready_templates.len(),
+            "opportunity bridge armed — verified leader routes feed live evaluation");
+    }
+
     if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         if let Some(url) = is_nonempty(&cfg.submission.puissant_url) {
             submitters.push(Box::new(PuissantSubmitter::new(url)));
@@ -1641,6 +1664,32 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     })
                     .collect();
                 screened.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Opportunity bridge: a pending victim touching a sim-verified
+                // leader route template gets template-overlapping paths
+                // evaluated first — the leader's proven geometry takes the
+                // limited optimization slots over generic enumeration.
+                let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                    ready_templates.iter()
+                        .filter(|(_, pools)| hit_pools.iter().any(|p| pools.contains(p)))
+                        .collect();
+                if !matched.is_empty() {
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[chain_label, "matched_live"])
+                        .inc();
+                    // Template overlap first, sim-probe score breaks ties.
+                    screened.sort_by(|a, b| {
+                        let ov = |i: usize| paths[i].hops.iter()
+                            .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                            .count();
+                        ov(b.0).cmp(&ov(a.0)).then(b.1.cmp(&a.1))
+                    });
+                    debug!(
+                        victim = %pending.tx_hash,
+                        templates = matched.len(),
+                        "OPPORTUNITY_MATCH victim touches verified leader route"
+                    );
+                }
                 for &(pidx, _) in screened.iter().take(20) {
                     let path = &paths[pidx];
                     if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
@@ -1756,6 +1805,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     bundle.backrun_tx = Some(pending.tx_hash);
                                 }
                                 endpoint.bump_nonce();
+                                if !matched.is_empty() {
+                                    // A verified leader route matched this
+                                    // victim and survived gate+probe to a
+                                    // real submission — count the capture.
+                                    arb_leaders::OPPORTUNITY_TOTAL
+                                        .with_label_values(&[chain_label, "submitted"])
+                                        .inc();
+                                }
                                 let sub_results = router
                                     .submit_all(&bundle, false, scan_start.elapsed())
                                     .await;

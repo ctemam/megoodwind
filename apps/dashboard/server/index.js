@@ -1714,6 +1714,41 @@ app.get('/api/wallet-intelligence', async (req, res) => {
   res.json(out)
 })
 
+// Actionable opportunities — the intelligence product per Commander directive:
+// executable records (route + victim + sim outcome), not wallet statistics.
+// Reads data/leaders/<chain>/_opportunities.jsonl, dedupes by id keeping the
+// latest record, plus the live arb_opportunity_* funnel counters.
+app.get('/api/opportunities', async (req, res) => {
+  const out = { live: isLive(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    const dir = path.join(REPO, 'data', 'leaders', cfg.label)
+    const byId = {}
+    for (const o of readJsonl(path.join(dir, '_opportunities.jsonl'))) {
+      if (o?.opportunity_id) byId[o.opportunity_id] = o
+    }
+    const rows = Object.values(byId)
+      .sort((a, b) => (b.allbright_net_usd || 0) - (a.allbright_net_usd || 0)
+        || (b.unix_ms || 0) - (a.unix_ms || 0))
+    let funnel = null
+    try {
+      const m = await fetchMetrics(c)
+      funnel = {}
+      for (const [k, v] of Object.entries(m)) {
+        if (k.startsWith('arb_opportunity_total{')) {
+          const stage = k.match(/stage="([^"]+)"/)?.[1]
+          if (stage) funnel[stage] = (funnel[stage] || 0) + v
+        }
+        if (k.startsWith('arb_opportunity_rejected_total{')) {
+          const reason = k.match(/reason="([^"]+)"/)?.[1]
+          if (reason) funnel[`rejected_${reason}`] = (funnel[`rejected_${reason}`] || 0) + v
+        }
+      }
+    } catch { funnel = null }
+    out.chains[c] = { online: funnel != null, funnel, rows }
+  }
+  res.json(out)
+})
+
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))
 
