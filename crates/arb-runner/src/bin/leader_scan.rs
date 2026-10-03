@@ -1,0 +1,191 @@
+//! leader_scan — outcome-driven leader discovery (EigenPhi-style).
+//!
+//! The mempool-frequency scorer finds RETAIL bots — real top wallets either
+//! submit privately (never appearing in the pending stream) or trade too
+//! rarely to score. This scans MINED blocks instead: every sender's net
+//! ERC-20 Transfer deltas per tx are computed from block receipts and
+//! ranked by realized USD. A wallet earns the "leader" title by measured
+//! profit, not by looking bot-shaped in the mempool.
+//!
+//! Usage:
+//!   leader_scan <config.toml> [--blocks N] [--top K] [--from BLOCK]
+//!
+//! Rows: LEADER_SCAN (per-wallet aggregate), LEADER_SCAN_TX (largest txs).
+
+use std::collections::HashMap;
+
+use alloy_primitives::{Address, B256, U256};
+use anyhow::Result;
+
+use arb_rpc::Endpoint;
+
+#[path = "../config.rs"]
+mod config;
+
+/// keccak256("Transfer(address,address,uint256)") — verified on-chain.
+const TRANSFER_SIG: B256 = alloy_primitives::b256!(
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+);
+
+#[derive(Default)]
+struct SenderAgg {
+    net_usd: f64,
+    gas_usd: f64,
+    txs: u32,
+    unpriced_flows: u32,
+    /// Largest single-tx net — separates sustained profit from one lucky hit.
+    best_tx_usd: f64,
+    best_tx: Option<B256>,
+    /// Tokens touched (arb bots trade many pairs; accumulators concentrate).
+    tokens: std::collections::HashSet<Address>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    let args: Vec<String> = std::env::args().collect();
+    let cfg_path = args.get(1).cloned().unwrap_or_else(|| "config/bsc.toml".into());
+    let opt = |name: &str, def: usize| -> usize {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(def)
+    };
+    let n_blocks = opt("--blocks", 200);
+    let top_k = opt("--top", 15);
+    let from_block = opt("--from", 0) as u64;
+
+    let cfg = config::load_config(&cfg_path)?;
+    let chain = cfg.chain.name.clone();
+
+    let tokens: HashMap<String, Address> = cfg
+        .tokens
+        .iter()
+        .filter_map(|(s, a)| a.parse::<Address>().ok().map(|a| (s.clone(), a)))
+        .collect();
+    let priced_addrs: HashMap<Address, f64> = cfg
+        .token_usd_prices
+        .iter()
+        .filter_map(|(sym, &price)| tokens.get(sym).map(|&a| (a, price)))
+        .collect();
+    let native_usd = ["WBNB", "WETH", "WPOL", "ETH"]
+        .iter()
+        .find_map(|s| cfg.token_usd_prices.get(*s).copied())
+        .unwrap_or(0.0);
+
+    let mut read_urls: Vec<&str> = cfg
+        .chain
+        .rpc_https_pool
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if !cfg.chain.rpc_https.is_empty() {
+        read_urls.push(cfg.chain.rpc_https.as_str());
+    }
+    let endpoint = Endpoint::new_pooled(&read_urls, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?;
+
+    async fn fetch_decimals(ep: &Endpoint, token: Address) -> u32 {
+        match ep
+            .eth_call_timed(token, alloy_primitives::Bytes::from_static(&[0x31, 0x3c, 0xe5, 0x67]))
+            .await
+        {
+            Ok((out, _)) if out.len() >= 32 => {
+                U256::from_be_slice(&out[..32]).try_into().unwrap_or(18)
+            }
+            _ => 18,
+        }
+    }
+
+    let latest = endpoint.block_number().await?;
+    let hi = if from_block > 0 { from_block } else { latest };
+    let lo = hi.saturating_sub(n_blocks as u64);
+    println!(
+        "LEADER_SCAN chain={chain} scanning blocks {lo}..{hi} \
+         priced_tokens={}",
+        priced_addrs.len()
+    );
+
+    let mut senders: HashMap<Address, SenderAgg> = HashMap::new();
+    let mut dec_cache: HashMap<Address, u32> = HashMap::new();
+    let mut n_receipts = 0u64;
+
+    for block in (lo..=hi).rev() {
+        let Some(receipts) = endpoint.get_block_receipts(block).await? else {
+            continue;
+        };
+        n_receipts += receipts.len() as u64;
+        for receipt in &receipts {
+            if !receipt.status() {
+                continue;
+            }
+            let sender = receipt.from;
+            let mut net_usd = 0.0f64;
+            let mut unpriced = 0u32;
+            for log in receipt.inner.logs() {
+                let topics = log.topics();
+                if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+                    continue;
+                }
+                let from = Address::from_word(topics[1]);
+                let to = Address::from_word(topics[2]);
+                if from != sender && to != sender {
+                    continue;
+                }
+                let token = log.address();
+                let amount = U256::from_be_slice(log.data().data.as_ref());
+                let raw = amount.to_string().parse::<f64>().unwrap_or(0.0)
+                    * if to == sender { 1.0 } else { -1.0 };
+                if !dec_cache.contains_key(&token) {
+                    let d = fetch_decimals(&endpoint, token).await;
+                    dec_cache.insert(token, d);
+                }
+                match priced_addrs.get(&token) {
+                    Some(&price) => {
+                        net_usd += raw / 10f64.powi(dec_cache[&token] as i32) * price;
+                    }
+                    None => unpriced += 1,
+                }
+                senders.entry(sender).or_default().tokens.insert(token);
+            }
+            if senders.get(&sender).map(|s| s.tokens.is_empty()).unwrap_or(true)
+                && !senders.contains_key(&sender)
+            {
+                continue; // no token flow — plain transfer/contract call
+            }
+            let gas_usd =
+                receipt.gas_used as f64 * receipt.effective_gas_price as f64 / 1e18 * native_usd;
+            let agg = senders.entry(sender).or_default();
+            agg.txs += 1;
+            agg.gas_usd += gas_usd;
+            agg.net_usd += net_usd;
+            agg.unpriced_flows += unpriced;
+            if net_usd > agg.best_tx_usd {
+                agg.best_tx_usd = net_usd;
+                agg.best_tx = Some(receipt.transaction_hash);
+            }
+        }
+    }
+
+    // Rank by realized net after gas — profit is the metric, not volume.
+    let mut ranked: Vec<_> = senders
+        .into_iter()
+        .map(|(a, s)| (a, s.net_usd - s.gas_usd, s))
+        .collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    println!("LEADER_SCAN receipts={n_receipts} senders_with_flows={}", ranked.len());
+    for (addr, net_after_gas, s) in ranked.iter().take(top_k) {
+        let best = s
+            .best_tx
+            .map(|h| format!("{h:#x}"))
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "LEADER_SCAN {addr:#x} net_after_gas={net_after_gas:.4} \
+             net_usd={:.4} gas_usd={:.4} txs={} tokens={} best_tx_usd={:.4} \
+             best={best} unpriced={}",
+            s.net_usd, s.gas_usd, s.txs, s.tokens.len(), s.best_tx_usd, s.unpriced_flows
+        );
+    }
+    Ok(())
+}

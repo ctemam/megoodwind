@@ -459,6 +459,17 @@ impl Endpoint {
             .await?)
     }
 
+    /// All receipts for one block in a single call (eth_getBlockReceipts) —
+    /// outcome attribution scans use this to rank senders by realized P&L.
+    pub async fn get_block_receipts(
+        &self,
+        block: u64,
+    ) -> Result<Option<Vec<alloy::rpc::types::TransactionReceipt>>> {
+        Ok(self
+            .with_failover(|p| async move { p.get_block_receipts(block.into()).await })
+            .await?)
+    }
+
     /// Get native balance from the read pool.
     pub async fn get_balance(&self, address: Address) -> Result<U256> {
         Ok(self.with_failover(|p| async move { p.get_balance(address).await }).await?)
