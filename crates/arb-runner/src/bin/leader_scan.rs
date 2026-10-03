@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, B256, U256};
+use alloy_provider::Provider as _;
 use anyhow::Result;
 
 use arb_rpc::Endpoint;
@@ -458,23 +459,53 @@ async fn main() -> Result<()> {
     );
     let mut n_v2 = 0u32;
     let mut n_v3 = 0u32;
+    let mut n_thin = 0u32;
     let addr_of = |sel: [u8; 4]| alloy_primitives::Bytes::from(sel.to_vec());
     let mut new_tokens: Vec<String> = Vec::new();
     for (addr, hits) in cand.iter().take(80) {
-        let v3 = endpoint
+        let slot0 = endpoint
             .eth_call_timed(*addr, addr_of([0x38, 0x50, 0xc7, 0xbd]))
             .await
-            .map(|(o, _)| o.len() >= 32 * 7)
-            .unwrap_or(false);
-        let v2 = !v3
-            && endpoint
-                .eth_call_timed(*addr, addr_of([0x09, 0x02, 0xf1, 0xac]))
-                .await
-                .map(|(o, _)| o.len() >= 32 * 3)
-                .unwrap_or(false);
+            .ok()
+            .map(|(o, _)| o);
+        let reserves = endpoint
+            .eth_call_timed(*addr, addr_of([0x09, 0x02, 0xf1, 0xac]))
+            .await
+            .ok()
+            .map(|(o, _)| o);
+        let v3 = slot0.as_ref().map(|o| o.len() >= 32 * 7).unwrap_or(false);
+        let v2 = !v3 && reserves.as_ref().map(|o| o.len() >= 32 * 3).unwrap_or(false);
         if !v2 && !v3 {
             continue;
         }
+        // Provenance gate (counterfeit-pool defense): sham/honeypot pools
+        // typically hold dust liquidity on one side. V2: both reserves must
+        // clear a raw floor; V3: liquidity() must be non-trivial.
+        let prov = if v3 {
+            endpoint
+                .eth_call_timed(*addr, addr_of([0x1a, 0x68, 0x65, 0x02]))
+                .await
+                .ok()
+                .and_then(|(o, _)| o.get(..32).map(|b| U256::from_be_slice(b)))
+                .map(|liq| if liq > U256::from(10_000u64) { "deep" } else { "thin" })
+                .unwrap_or("suspect")
+        } else {
+            reserves
+                .as_ref()
+                .and_then(|o| {
+                    let r0 = o.get(0..32).map(|b| U256::from_be_slice(b));
+                    let r1 = o.get(32..64).map(|b| U256::from_be_slice(b));
+                    r0.zip(r1)
+                })
+                .map(|(r0, r1)| {
+                    if r0 > U256::from(100_000u64) && r1 > U256::from(100_000u64) {
+                        "deep"
+                    } else {
+                        "thin"
+                    }
+                })
+                .unwrap_or("suspect")
+        };
         let kind = if v3 { "v3" } else { "v2" };
         if v3 { n_v3 += 1 } else { n_v2 += 1 }
         // token0()/token1() + v3 fee() resolved on-chain — merge-ready rows.
@@ -500,6 +531,21 @@ async fn main() -> Result<()> {
         } else {
             25
         };
+        // Token sanity: a pool side pointing at a non-contract address means a
+        // counterfeit or malformed pair — never import those.
+        let mut prov = prov;
+        for t in [t0, t1].into_iter().flatten() {
+            let code = endpoint
+                .pool_pick()
+                .1
+                .get_code_at(t)
+                .await
+                .map(|c| c.len() > 100)
+                .unwrap_or(false);
+            if !code {
+                prov = "suspect";
+            }
+        }
         let mut sym = |a: Option<Address>| -> String {
             match a {
                 Some(a) => {
@@ -519,8 +565,12 @@ async fn main() -> Result<()> {
         let s0 = sym(t0);
         let s1 = sym(t1);
         println!(
-            "LEADER_POOL {addr:#x} protocol={kind} hits={hits} {s0}/{s1} fee_bps={fee_bps}"
+            "LEADER_POOL {addr:#x} protocol={kind} hits={hits} prov={prov} {s0}/{s1} fee_bps={fee_bps}"
         );
+        if prov != "deep" {
+            n_thin += 1;
+            continue;
+        }
         pools_toml.push_str(&format!(
             "[[pools]]\nname = \"AUTO_{s0}_{s1}_{fee_bps}\"\n\
              address = \"{addr:#x}\"\nprotocol = \"{kind}\"\n\
@@ -543,7 +593,7 @@ async fn main() -> Result<()> {
     let pools_path = format!("{data_dir}/_pools.toml");
     std::fs::write(&pools_path, &pools_toml)?;
     println!(
-        "LEADER_POOLS exported v2={n_v2} v3={n_v3} -> {pools_path}"
+        "LEADER_POOLS exported v2={n_v2} v3={n_v3} thin_or_suspect={n_thin} -> {pools_path}"
     );
 
     let path = format!("{data_dir}/_scanned.jsonl");
