@@ -1,3 +1,35 @@
+## Commander Directive: Rapid Industry Research Before Action
+
+Whenever the Commander issues a command, the responsible agent or lead
+architect MUST perform a concise, professional rapid-research pass before
+answering or executing.
+
+The research pass MUST:
+
+- Identify current industry-standard practices relevant to the command.
+- Prefer authoritative sources: official standards, vendor documentation,
+  primary technical papers, and maintained project documentation.
+- Distinguish verified facts, repository evidence, assumptions, and unknowns.
+- Identify applicable risks, constraints, and alternatives.
+- Produce concise bullet-point findings before proposing execution.
+- Update the relevant skills/knowledge documentation when the research reveals
+  a reusable practice, changed standard, or implementation lesson.
+- Avoid delaying urgent safety, incident-response, or rollback actions; in those
+  cases, stabilize first and research immediately afterward.
+- Never claim research was performed when sources were not checked.
+
+Required response structure:
+
+1. **Research findings**
+2. **Repository impact**
+3. **Recommended decision**
+4. **Implementation plan**
+5. **Verification and rollback**
+
+External research is required wherever it can affect architecture, security,
+production operations, financial risk, compliance, or a new technology choice;
+routine commands need only a repository-evidence pass.
+
 ## Complete PM2 Logging Framework Integration
 The complete, merged production deployment folder for allbrightA is fully written below. This layout includes an integrated terminal monitoring dashboard module and active console emitters within src/main.rs.
 Your Windsurf Builder Agent now has 100% of the files needed to clone, auto-verify sub-5μs speed constraints, compile, and execute with active PM2 runtime telemetry.

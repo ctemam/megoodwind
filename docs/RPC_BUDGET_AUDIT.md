@@ -129,6 +129,12 @@ Fields per attempt: `chain, endpoint, method, timestamp, request_success,
 transport_failure, rpc_error, retry_count, latency_ms, cost_class
 (free|paid|pimlico|builder)`.
 
+**Landed so far:** `arb_rpc_http_attempts_total{endpoint, outcome}` — a tower
+metrics service stacked innermost (retry→throttle→metrics→HTTP) counts every
+physical HTTP round-trip including retries. Still pending: `method` label
+extraction, per-chain buckets, `budget_remaining`/`budget_exhausted` gauges
+(need declared per-endpoint quotas, which the endpoint set does not publish).
+
 ## 6. Per-endpoint rate cap (implemented)
 
 `ThrottleLayer` (alloy's governor-backed standard layer) now wraps every

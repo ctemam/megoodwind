@@ -32,3 +32,29 @@ RUSTFLAGS="-C target-cpu=native" cargo test --release --manifest-path ./allbrigh
 
 Would you like me to generate a pre-configured reading prompt that you can feed into Windsurf to force it to crawl and parse these documentation URLs before it begins editing the code?
 
+
+------------------------------
+## Continuous Research and Skill Maintenance
+
+Every agent task keeps skills at industry cutting edge: before executing a
+Commander command, perform rapid research on industry practice for the subject
+(see `AGENTS_SPEC.md` → Commander Directive), present findings as concise
+bullets, and fold reusable results back into this document's matrices.
+
+Source quality order:
+
+1. Standards and specifications (EIPs, ERCs, protocol specs).
+2. Official vendor/project documentation (alloy, Pimlico, builder APIs).
+3. Primary technical papers and reference implementations.
+4. Reputable engineering references (official books, maintained guides).
+5. Secondary commentary — only when clearly labeled as such.
+
+Rules:
+
+- A reusable practice, changed standard, or implementation lesson MUST be
+  recorded in the relevant skill row or knowledge file.
+- Findings must label themselves: [verified], [repo evidence], [assumption],
+  [unknown].
+- Substantial research results are filed under `docs/research/YYYY-MM-DD-<topic>.md`
+  with sources, findings, decision, implementation impact, and verification.
+- Never record a practice as industry-standard without a checked source.
