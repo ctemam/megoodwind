@@ -17,7 +17,7 @@
 //! Usage: cargo run --release --bin profit_profile -- <config.toml> [cycles]
 //! Default: 3 cycles. Every line is prefixed so `grep` slices cleanly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
@@ -361,7 +361,7 @@ async fn main() -> Result<()> {
             }
             let mut n_ver = 0u32;
             let mut verified_out: Vec<(String, f64)> = Vec::new();
-            let mut eval_out: Vec<(String, f64)> = Vec::new();
+            let mut eval_out: Vec<(String, f64, bool)> = Vec::new();
             let ids: Vec<(String, Vec<String>)> = strat
                 .records
                 .values()
@@ -391,6 +391,7 @@ async fn main() -> Result<()> {
                     .collect();
                 ranked.sort_unstable_by(|&a, &b| cand[&b].cmp(&cand[&a]));
                 let mut best_usd = 0.0;
+                let mut best_pools: HashSet<Address> = HashSet::new();
                 for &pi in ranked.iter().take(30) {
                     let path = &paths[pi];
                     let (min_a, token_max) = flash_bounds
@@ -405,34 +406,45 @@ async fn main() -> Result<()> {
                             let usd = usd_value(
                                 prof, &path.flash_token,
                                 &token_usd_prices, &token_decimals);
-                            if usd > best_usd { best_usd = usd; }
+                            if usd > best_usd {
+                                best_usd = usd;
+                                best_pools = path.hops.iter().map(|h| h.pool).collect();
+                            }
                         }
                     }
                 }
+                // Honest coverage: the reproduction only counts if the winning
+                // path traverses EVERY pool in the leader's route — overlap on
+                // one pool is a different trade, not a replay.
+                let route_covered = !route.is_empty() && route.iter().all(|p| {
+                    p.parse::<Address>().map(|a| best_pools.contains(&a)).unwrap_or(false)
+                });
                 if best_usd > 0.0 {
                     arb_leaders::LEADER_SHADOW_POSITIVE
                         .with_label_values(&[cfg.chain.name.as_str()])
                         .inc();
-                    if strat.mark_verified(id, best_usd, VERIFY_CAP_USD) {
+                    // Promotion to bounded_live requires reproducing the
+                    // leader's literal route, not just a profitable neighbor.
+                    if route_covered && strat.mark_verified(id, best_usd, VERIFY_CAP_USD) {
                         println!("VERIFY {id} profit_usd={best_usd:.1} cap_usd={VERIFY_CAP_USD} -> bounded_live");
                         n_ver += 1;
                     }
                     verified_out.push((id.clone(), best_usd));
                 }
-                eval_out.push((id.clone(), best_usd));
+                eval_out.push((id.clone(), best_usd, route_covered));
             }
             // ---- Complete pending opportunity records with sim outcomes.
             // Commander directive: a record is actionable only when OUR
-            // simulator reproduces positive net — leader evidence alone is
-            // never sufficient. Passing clears route_untracked (the covered
-            // portion carried the reproduction); no_victim_context stands.
+            // simulator reproduces positive net ON THE LEADER'S OWN ROUTE —
+            // leader evidence alone is never sufficient, and a profitable
+            // neighbor path is a different trade (route_partially_covered).
             {
                 let opp_dir = format!("data/leaders/{}", cfg.chain.name);
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as u64).unwrap_or(0);
                 let mut opps = arb_core::opportunity::load_opportunities(&opp_dir);
-                for (id, usd) in &eval_out {
+                for (id, usd, covered) in &eval_out {
                     let prefix = format!("{}/{id}/", cfg.chain.name);
                     let mut o = match opps.iter()
                         .filter(|o| o.opportunity_id.starts_with(&prefix))
@@ -445,11 +457,33 @@ async fn main() -> Result<()> {
                             ids.iter().find(|(i, _)| i == id)
                                 .map(|(_, r)| r.clone()).unwrap_or_default()),
                     };
-                    if *usd > 0.0 {
+                    if *usd > 0.0 && !covered {
+                        // Positive sim but not on the leader's literal route:
+                        // record the signal, block actionability honestly.
                         o.simulation_status =
                             arb_core::opportunity::SimulationStatus::Pass;
                         o.allbright_net_usd = *usd;
-                        if o.rejection_reason == "route_untracked" {
+                        if o.rejection_reason.is_empty()
+                            || o.rejection_reason == "route_untracked" {
+                            o.rejection_reason = "route_partially_covered".into();
+                            arb_leaders::OPPORTUNITY_REJECTED
+                                .with_label_values(&[cfg.chain.name.as_str(), "route_partially_covered"])
+                                .inc();
+                        }
+                        // A rejection reason makes the record non-actionable —
+                        // downgrade any stale Ready from an earlier weaker gate.
+                        if !o.is_actionable()
+                            && o.execution_status
+                                == arb_core::opportunity::ExecutionStatus::Ready {
+                            o.execution_status =
+                                arb_core::opportunity::ExecutionStatus::None;
+                        }
+                    } else if *usd > 0.0 {
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Pass;
+                        o.allbright_net_usd = *usd;
+                        if o.rejection_reason == "route_untracked"
+                            || o.rejection_reason == "route_partially_covered" {
                             o.rejection_reason.clear();
                         }
                         if o.is_actionable() {
