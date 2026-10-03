@@ -73,6 +73,7 @@ async fn main() -> Result<()> {
     let arb_contract: Address = cfg.chain.arb_contract.parse()?;
     let bundle = Bundle {
         signed_txs: vec![],
+        victim_tx: None,
         target_block: 0,
         chain_id: cfg.chain.chain_id,
         backrun_tx: None,

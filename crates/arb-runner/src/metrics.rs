@@ -120,6 +120,14 @@ lazy_static::lazy_static! {
         "Pending swaps matched for backrun evaluation"
     ).unwrap();
 
+    /// Backrun bundles that found no ordering-aware venue to carry them
+    /// (e.g. strict_4337 leaves only the UserOp bundler, which cannot order
+    /// after a victim tx).
+    pub static ref BACKRUN_NO_VENUE: Counter = register_counter!(
+        "arb_backrun_no_venue_total",
+        "Backrun bundles dropped: no bundle-capable submit venue configured"
+    ).unwrap();
+
     pub static ref BACKRUN_SUBMITTED: Counter = register_counter!(
         "arb_backrun_submitted_total",
         "Backrun bundles submitted"

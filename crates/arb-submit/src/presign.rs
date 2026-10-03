@@ -159,6 +159,7 @@ impl PresignPool {
 
         Ok(Bundle {
             signed_txs: vec![buf],
+        victim_tx: None,
             target_block,
             chain_id: self.chain_id,
             backrun_tx: None,

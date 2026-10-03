@@ -1551,21 +1551,35 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 path_id = path.id, profit_bps,
                                 pending_router = pending.decoded.router,
                                 pending_tx = %pending.tx_hash,
+                                victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
                                 "Backrun candidate found"
                             );
                             metrics::BACKRUN_SUBMITTED.inc();
 
-                            // Build and submit as regular (non-bundle) for now.
-                            // True 2-tx backrun bundles require target tx raw bytes
-                            // which we don't always have from the watcher.
+                            // Build a true [victim, ours] ordered bundle: the
+                            // watcher streams full pending txs, so the victim's
+                            // signed bytes are available — bundle venues prepend
+                            // them and our tx lands immediately after the victim.
                             let target_block = block_number + 1;
-                            if let Ok(bundle) = presign_pool.build_fast(
+                            if let Ok(mut bundle) = presign_pool.build_fast(
                                 path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
                             ).await {
+                                if !pending.raw_tx.is_empty() {
+                                    bundle.victim_tx = Some(pending.raw_tx.clone());
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                }
                                 endpoint.bump_nonce();
                                 let sub_results = router
                                     .submit_all(&bundle, false, scan_start.elapsed())
                                     .await;
+                                if sub_results.is_empty() && bundle.victim_tx.is_some() {
+                                    metrics::BACKRUN_NO_VENUE.inc();
+                                    warn!(
+                                        "Backrun bundle dropped: no bundle-capable venue \
+                                         (strict_4337 leaves only the UserOp bundler, which \
+                                         cannot order after a victim tx)"
+                                    );
+                                }
                                 for r in sub_results {
                                     match r.result {
                                         Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
