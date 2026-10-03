@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import url from 'node:url'
 import { execFileSync } from 'node:child_process'
+import os from 'node:os'
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 const REPO = path.resolve(__dirname, '../../..')
@@ -761,10 +762,57 @@ app.get('/api/config/chains/:chain/health', async (req, res) => {
   res.json(v)
 })
 
+// Fleet capacity — how much headroom remains for additional chains/tokens/
+// pools. "Theoretical capacity" = the machine's CPU + memory and each chain's
+// scan-budget utilization (avg scan vs block time). Alert bands: >80% warn,
+// >90% critical.
+app.get('/api/config/capacity', (_req, res) => {
+  const cpus = os.cpus().length
+  const cpuPct = Math.min(1, os.loadavg()[0] / cpus)
+  const memPct = 1 - os.freemem() / os.totalmem()
+  const chains = {}
+  for (const c of Object.keys(CONFIG_FILES)) {
+    let cfg
+    try { cfg = parseChainConfig(c) } catch { continue }
+    const snaps = histLog.filter(s => s.t >= Date.now() - 3600e3).map(s => s.chains[c]).filter(Boolean)
+    const prev = {}, acc = {}
+    for (const m of snaps) for (const [k, v] of Object.entries(m)) {
+      if (k in prev) acc[k] = (acc[k] || 0) + Math.max(0, v - prev[k]); prev[k] = v
+    }
+    const scans = acc['arb_scan_latency_seconds_count'] || 0
+    const avgScanMs = scans ? (acc['arb_scan_latency_seconds_sum'] / scans) * 1000 : 0
+    chains[c] = {
+      avg_scan_ms: avgScanMs, block_time_ms: cfg.block_time_ms,
+      utilization: cfg.block_time_ms ? avgScanMs / cfg.block_time_ms : 0,
+      pools: cfg.pools.length, tokens: Object.keys(cfg.tokens).length,
+      online: !!(histLog[histLog.length - 1]?.chains[c]),
+    }
+  }
+  const scanUtil = Math.max(0, ...Object.values(chains).map(c => c.utilization))
+  let runners = []
+  try {
+    runners = JSON.parse(execFileSync('pm2', ['jlist'], { timeout: 8000 }).toString())
+      .filter(p => p.name?.startsWith('allbrightA-'))
+      .map(p => ({ name: p.name, cpu: p.monit?.cpu ?? 0, mem_mb: Math.round((p.monit?.memory || 0) / 1048576) }))
+  } catch {}
+  const fleet = Math.max(cpuPct, memPct, scanUtil)
+  res.json({
+    cpu_pct: cpuPct, mem_pct: memPct, cpus,
+    mem_used_gb: +((os.totalmem() - os.freemem()) / 1073741824).toFixed(1),
+    mem_total_gb: +(os.totalmem() / 1073741824).toFixed(1),
+    load1: os.loadavg()[0],
+    scan_util: scanUtil, chains, runners,
+    fleet_capacity_pct: fleet,
+    band: fleet > 0.9 ? 'critical' : fleet > 0.8 ? 'warning' : 'normal',
+    // estimated additional chain slots before the tightest dimension saturates
+    headroom_chains: fleet >= 1 ? 0 : Math.max(0, Math.floor((0.8 - fleet) / Math.max(0.01, fleet / Math.max(1, Object.keys(chains).length)))),
+  })
+})
+
 app.post('/api/config/drafts', (req, res) => {
   const { chain, type, payload } = req.body || {}
-  if (!CONFIG_FILES[chain]) return res.status(400).json({ error: 'unknown chain' })
-  if (!['endpoint', 'token', 'pool'].includes(type)) return res.status(400).json({ error: 'type must be endpoint|token|pool' })
+  if (type === 'chain' ? false : !CONFIG_FILES[chain]) return res.status(400).json({ error: 'unknown chain' })
+  if (!['endpoint', 'token', 'pool', 'chain'].includes(type)) return res.status(400).json({ error: 'type must be endpoint|token|pool|chain' })
   const d = { id: `dft-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     chain, type, payload, status: 'draft', created_at: Date.now(), checks: [] }
   drafts.push(d); saveDrafts()
@@ -776,9 +824,38 @@ app.get('/api/config/drafts', (_req, res) => res.json(drafts.slice(-50).reverse(
 
 async function validateDraft(d) {
   const checks = []
-  const cfg = parseChainConfig(d.chain)
   const add = (name, ok, detail) => checks.push({ name, ok, detail })
   const p = d.payload || {}
+  if (d.type === 'chain') {
+    // New-chain onboarding draft — probes the declared RPC against the
+    // declared chain ID; prerequisites (contract, env keys) are advisory.
+    const name = (p.name || '').trim().toLowerCase()
+    const cid = +(p.chain_id || 0)
+    const url = (p.rpc_url || '').trim()
+    add('name format', /^[a-z][a-z0-9-]{1,15}$/.test(name), name || 'missing')
+    add('config slot free', !CONFIG_FILES[name] && !fs.existsSync(path.join(REPO, 'config', `${name}.toml`)),
+      CONFIG_FILES[name] ? 'already configured' : 'new')
+    add('chain_id', cid > 0, cid || 'missing')
+    try {
+      const got = parseInt(await rpcCall(null, 'eth_chainId', [], 3000, [url]), 16)
+      add('eth_chainId matches', got === cid, `got ${got}, want ${cid}`)
+      const blk = parseInt(await rpcCall(null, 'eth_blockNumber', [], 3000, [url]), 16)
+      add('block progressing', blk > 0, `block ${blk}`)
+    } catch (e) { add('rpc answers', false, e.message) }
+    const keyBase = name.toUpperCase().replace(/-/g, '_')
+    add('env: RPC+WSS urls', !!(env[`${keyBase}_RPC_URL`] && env[`${keyBase}_WSS_URL`]),
+      env[`${keyBase}_RPC_URL`] ? 'set' : `needs ${keyBase}_RPC_URL / _WSS_URL`)
+    add('env: executor contract', !!env[`${keyBase}_ARB_CONTRACT`],
+      env[`${keyBase}_ARB_CONTRACT`] ? env[`${keyBase}_ARB_CONTRACT`].slice(0, 12) + '…' : `needs ${keyBase}_ARB_CONTRACT (deploy via ops/DEPLOY.md)`)
+    const fleet = Math.max(Math.min(1, os.loadavg()[0] / os.cpus().length),
+      1 - os.freemem() / os.totalmem())
+    add('capacity headroom', fleet < 0.9,
+      `fleet at ${(fleet * 100).toFixed(0)}% — warn>80%, blocked>90%`)
+    d.checks = checks; d.validated_at = Date.now()
+    d.status = checks.every(x => x.ok) ? 'validated' : 'rejected'
+    return checks
+  }
+  const cfg = parseChainConfig(d.chain)
   if (d.type === 'endpoint') {
     const u = (p.url || '').trim()
     add('https URL', /^https:\/\//.test(u), u ? 'https scheme required for probing' : 'missing url')
@@ -877,6 +954,15 @@ app.post('/api/config/drafts/:id/simulate', async (req, res) => {
       if (!liq) { try { liq = decodeUint(await ethCall(d.chain, p.address, SEL.slot0)) } catch {} }
       add('live reserves/state', liq !== null && liq > 0n, liq ? 'liquidity present' : 'empty/unreadable')
     }
+    if (d.type === 'chain') {
+      // Re-probe the declared RPC + re-check fleet capacity — a chain may
+      // only be onboarded when the machine has headroom (<90%).
+      const blk = parseInt(await rpcCall(null, 'eth_blockNumber', [], 3000, [p.rpc_url]), 16)
+      add('rpc stable', blk > 0, `block ${blk}`)
+      const fleet = Math.max(Math.min(1, os.loadavg()[0] / os.cpus().length),
+        1 - os.freemem() / os.totalmem())
+      add('fleet headroom <90%', fleet < 0.9, `${(fleet * 100).toFixed(0)}%`)
+    }
   } catch (e) { add('simulation probe', false, e.message) }
   d.sim = sim
   d.simulated_at = Date.now()
@@ -890,6 +976,62 @@ app.post('/api/config/drafts/:id/apply', (req, res) => {
   if (!d) return res.status(404).json({ error: 'no draft' })
   if (d.status !== 'sim_passed') return res.status(409).json({ error: 'simulate first', status: d.status })
   const p = d.payload || {}
+  if (d.type === 'chain') {
+    // Scaffold the new chain's config; the runner starts once the Commander
+    // deploys the executor and fills the env keys (audited either way).
+    const name = (p.name || '').trim().toLowerCase()
+    const file = path.join(REPO, 'config', `${name}.toml`)
+    const scaffold = `[chain]
+chain_id = ${p.chain_id}
+name = "${name.toUpperCase()}"
+rpc_https = "\${${name.toUpperCase()}_RPC_URL}"
+rpc_https_pool = [
+    "${p.rpc_url}",
+]
+rpc_wss = "\${${name.toUpperCase()}_WSS_URL}"
+rpc_wss_pool = []
+trader_rpc = ""
+arb_contract = "\${${name.toUpperCase()}_ARB_CONTRACT}"
+state_reader = "\${${name.toUpperCase()}_STATE_READER}"
+block_time_ms = ${p.block_time_ms || 2000}
+scan_budget_ms = 800
+
+[wallet]
+private_key_env = "PRIVATE_KEY"
+
+[scanner]
+flash_tokens = []
+min_profit_bps = 3
+min_initial_bps = 2
+optimization_iterations = 30
+dry_run = true
+
+[gate]
+min_profit_usd = 0.50
+safety_margin_bps = 10
+stable_pool_extra_margin_bps = 5
+
+[submission]
+strict_4337 = true
+direct_fallback = false
+
+[tokens]
+`
+    try {
+      fs.writeFileSync(file, scaffold)
+      d.status = 'applied'; d.applied_at = Date.now(); saveDrafts()
+      audit('draft.apply', { id: d.id, ok: true, scaffolded: file })
+      return res.json({ ok: true, draft: d, scaffolded: `config/${name}.toml`,
+        next_steps: [
+          `deploy executor on ${name} (ops/DEPLOY.md)`,
+          `set ${name.toUpperCase()}_RPC_URL / _WSS_URL / _ARB_CONTRACT / _STATE_READER in .env`,
+          `add pm2 app allbrightA-${name} (interpreter target/release/arb-runner, config ${file})`,
+        ] })
+    } catch (e) {
+      audit('draft.apply', { id: d.id, ok: false, error: e.message })
+      return res.status(500).json({ error: `scaffold failed: ${e.message}` })
+    }
+  }
   const file = tomlPath(d.chain)
   let t = readToml(d.chain)
   try {

@@ -24,6 +24,7 @@ export default function ChainConfig() {
   const [tick, setTick] = useState(0)
   const reload = () => setTick(t => t + 1)
   const chains = useApi('/api/config/chains', tick)
+  const capacity = useApi('/api/config/capacity', tick)
   const health = useApi(`/api/config/chains/${chain}/health`, `${chain}:${tick}`)
   const drafts = useApi('/api/config/drafts', tick)
   const audit = useApi('/api/config/audit', tick)
@@ -60,6 +61,49 @@ export default function ChainConfig() {
         <div className="card"><div className="k">Endpoints</div><div className="v">{cfg ? cfg.rpc_https_pool.length + cfg.rpc_wss_pool.length : '—'}</div><div className="s">{cfg?.rpc_https_pool.length} HTTPS · {cfg?.rpc_wss_pool.length} WSS</div></div>
         <div className="card"><div className="k">Coverage</div><div className="v">{cfg ? `${cfg.pools.length} pools` : '—'}</div><div className="s">{cfg ? `${Object.keys(cfg.tokens).length} tokens · ${Object.keys(cfg.dexes).length} protocols` : ''}</div></div>
       </div>
+
+      {/* ── Fleet capacity — expansion headroom, 80% warn / 90% critical ── */}
+      {capacity && (
+        <div className="panel">
+          <h3>Fleet capacity — expansion headroom</h3>
+          {capacity.band !== 'normal' && (
+            <div style={{ padding: '8px 12px', marginBottom: 10, borderRadius: 6, fontSize: 13,
+              background: capacity.band === 'critical' ? 'rgba(255,80,80,.12)' : 'rgba(255,180,0,.1)',
+              color: capacity.band === 'critical' ? 'var(--neg)' : 'var(--warn)' }}>
+              {capacity.band === 'critical'
+                ? `⚠ CRITICAL: fleet at ${(capacity.fleet_capacity_pct * 100).toFixed(0)}% of theoretical capacity (>90%) — expansion will degrade live scanning`
+                : `⚠ WARNING: fleet at ${(capacity.fleet_capacity_pct * 100).toFixed(0)}% of theoretical capacity (>80%) — plan expansion carefully`}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+            <div style={{ flex: 1, height: 14, background: '#12203d', borderRadius: 7, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.min(100, capacity.fleet_capacity_pct * 100)}%`, height: '100%', transition: 'width .4s',
+                background: capacity.fleet_capacity_pct > 0.9 ? 'var(--neg)' : capacity.fleet_capacity_pct > 0.8 ? 'var(--warn)' : 'var(--acc)' }} />
+            </div>
+            <b style={{ fontSize: 15, color: capacity.fleet_capacity_pct > 0.9 ? 'var(--neg)' : capacity.fleet_capacity_pct > 0.8 ? 'var(--warn)' : 'var(--acc)' }}>
+              {(capacity.fleet_capacity_pct * 100).toFixed(0)}%
+            </b>
+          </div>
+          <div style={{ display: 'flex', gap: 24, fontSize: 12.5, color: 'var(--dim)', flexWrap: 'wrap' }}>
+            <span>CPU {(capacity.cpu_pct * 100).toFixed(0)}% (load {capacity.load1?.toFixed(2)}/{capacity.cpus} cores)</span>
+            <span>MEM {(capacity.mem_pct * 100).toFixed(0)}% ({capacity.mem_used_gb}/{capacity.mem_total_gb} GB)</span>
+            <span>Scan util {(capacity.scan_util * 100).toFixed(1)}% of block budget</span>
+            <span>Est. headroom: <b style={{ color: 'var(--txt)' }}>~{capacity.headroom_chains} more chain{capacity.headroom_chains === 1 ? '' : 's'}</b> at current load</span>
+          </div>
+          {capacity.chains && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--dim)' }}>
+              {Object.entries(capacity.chains).map(([c, m]) => (
+                <span key={c} style={{ marginRight: 18 }}>
+                  {c.toUpperCase()}: {(m.utilization * 100).toFixed(1)}% ({m.avg_scan_ms.toFixed(0)}ms / {m.block_time_ms}ms) · {m.pools}p {m.tokens}t
+                </span>
+              ))}
+              {capacity.runners?.length > 0 && capacity.runners.map(r => (
+                <span key={r.name} style={{ marginRight: 18 }}>{r.name}: {r.cpu.toFixed(0)}%cpu {r.mem_mb}MB</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Capacity & health ── */}
       <div className="panel">
@@ -138,12 +182,18 @@ export default function ChainConfig() {
       {/* ── Expansion drafts ── */}
       <div className="panel">
         <h3>Expansion drafts — add tokens, pools, endpoints</h3>
-        <form className="inline" onSubmit={e => { e.preventDefault(); act('/api/config/drafts', { chain, type: ftype, payload: fields }); setFields({}) }}>
+        <form className="inline" onSubmit={e => { e.preventDefault(); act('/api/config/drafts', { chain: ftype === 'chain' ? (fields.name || 'new') : chain, type: ftype, payload: fields }); setFields({}) }}>
           <select value={ftype} onChange={e => setFtype(e.target.value)}>
             <option value="token">Token</option>
             <option value="pool">DEX pool</option>
             <option value="endpoint">RPC endpoint</option>
+            <option value="chain">New chain</option>
           </select>
+          {ftype === 'chain' && <>
+            <input placeholder="name (e.g. arbitrum)" value={fields.name || ''} onChange={f('name')} style={{ width: 150 }} />
+            <input placeholder="chain id" value={fields.chain_id || ''} onChange={f('chain_id')} style={{ width: 90 }} />
+            <input placeholder="https://…rpc" value={fields.rpc_url || ''} onChange={f('rpc_url')} style={{ minWidth: 260 }} />
+          </>
           {ftype === 'endpoint' && <input placeholder="https://…" value={fields.url || ''} onChange={f('url')} style={{ minWidth: 320 }} />}
           {ftype === 'token' && <>
             <input placeholder="symbol (e.g. CAKE)" value={fields.symbol || ''} onChange={f('symbol')} />
@@ -162,7 +212,7 @@ export default function ChainConfig() {
           <table style={{ marginTop: 10 }}>
             <thead><tr><th>Draft</th><th>Type</th><th>Payload</th><th>Status</th><th>Checks</th><th>Actions</th></tr></thead>
             <tbody>
-              {drafts.filter(d => d.chain === chain).map(d => (
+              {drafts.filter(d => d.type === 'chain' || d.chain === chain).map(d => (
                 <tr key={d.id}>
                   <td className="mono" style={{ fontSize: 11 }}>{d.id}</td>
                   <td>{d.type}</td>
@@ -177,7 +227,7 @@ export default function ChainConfig() {
                     {d.status === 'validated' || d.status === 'sim_failed'
                       ? <button disabled={busy} onClick={() => act(`/api/config/drafts/${d.id}/simulate`)}>Simulate</button> : null}
                     {d.status === 'sim_passed'
-                      ? <button className="primary" disabled={busy} onClick={() => act(`/api/config/drafts/${d.id}/apply`)}>Apply + restart</button> : null}
+                      ? <button className="primary" disabled={busy} onClick={() => act(`/api/config/drafts/${d.id}/apply`)}>{d.type === 'chain' ? 'Apply (scaffold)' : 'Apply + restart'}</button> : null}
                   </td>
                 </tr>
               ))}
