@@ -66,6 +66,20 @@ async fn main() -> Result<()> {
     let n_blocks = opt("--blocks", 200);
     let top_k = opt("--top", 15);
     let from_block = opt("--from", 0) as u64;
+    // --class atomic|bundle|any: restrict output/export to wallets matching
+    // the proven leader profiles (atomic-arb contract traders and
+    // bundle backrunners). Default 'any' = no filter.
+    let class_filter = args
+        .iter()
+        .position(|a| a == "--class")
+        .and_then(|i| args.get(i + 1).cloned())
+        .unwrap_or_else(|| "any".into());
+    let min_net: f64 = args
+        .iter()
+        .position(|a| a == "--min-net")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
 
     let cfg = config::load_config(&cfg_path)?;
     let chain = cfg.chain.name.clone();
@@ -214,8 +228,42 @@ async fn main() -> Result<()> {
         .collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    println!("LEADER_SCAN receipts={n_receipts} senders_with_flows={}", ranked.len());
-    for (addr, net_after_gas, s) in ranked.iter().take(top_k) {
+    println!("LEADER_SCAN receipts={n_receipts} senders_with_flows={} class={class_filter}", ranked.len());
+    let data_dir = format!("data/leaders/{chain}");
+    let _ = std::fs::create_dir_all(&data_dir);
+    let mut export = String::new();
+    let mut shown = 0usize;
+    for (addr, net_after_gas, s) in ranked.iter() {
+        let class = if s.atomic_txs > 0 {
+            "atomic_arb"
+        } else if s.private_hits > 0 {
+            "bundle_backrunner"
+        } else {
+            "trader"
+        };
+        if class_filter != "any" && !class.starts_with(&class_filter) {
+            continue;
+        }
+        if *net_after_gas < min_net {
+            continue;
+        }
+        // Auto-target: profitable wallets of the two proven profiles are
+        // exported for the observation registry (observe -> replay -> forge).
+        if *net_after_gas > 0.0 && (s.atomic_txs > 0 || s.private_hits > 0) {
+            export.push_str(&format!(
+                "{{\"address\":\"{addr:#x}\",\"class\":\"{class}\",\
+                 \"net_after_gas_usd\":{net_after_gas:.4},\
+                 \"atomic_txs\":{},\"private_hits\":{},\
+                 \"best_tx\":\"{}\"}}\n",
+                s.atomic_txs,
+                s.private_hits,
+                s.best_tx.map(|h| format!("{h:#x}")).unwrap_or_default()
+            ));
+        }
+        if shown >= top_k {
+            continue;
+        }
+        shown += 1;
         let best = s
             .best_tx
             .map(|h| format!("{h:#x}"))
@@ -223,10 +271,16 @@ async fn main() -> Result<()> {
         println!(
             "LEADER_SCAN {addr:#x} net_after_gas={net_after_gas:.4} \
              net_usd={:.4} gas_usd={:.4} txs={} tokens={} best_tx_usd={:.4} \
-             best={best} unpriced={} private_hits={} atomic={} trades={}",
+             best={best} unpriced={} private_hits={} atomic={} trades={} class={class}",
             s.net_usd, s.gas_usd, s.txs, s.tokens.len(), s.best_tx_usd,
             s.unpriced_flows, s.private_hits, s.atomic_txs, s.trade_txs
         );
     }
+    let path = format!("{data_dir}/_scanned.jsonl");
+    let n_targets = export.lines().count();
+    if n_targets > 0 {
+        std::fs::write(&path, &export)?;
+    }
+    println!("LEADER_SCAN exported {n_targets} targeted wallets -> {path}");
     Ok(())
 }
