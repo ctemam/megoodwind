@@ -23,7 +23,35 @@ pub struct DecodedSwap {
     /// them (V3 packed paths); `hop_fees[i]` is the fee of `path[i] -> path[i+1]`.
     /// Empty for V2/aggregator decodes.
     pub hop_fees: Vec<u32>,
+    /// Set when the tx calls `swap()` directly on a pool contract instead of
+    /// going through a router — `to` IS the pool, so projection needs no
+    /// pair/fee matching at all.
+    pub direct: Option<DirectSwap>,
     pub pools_touched: Vec<Address>,
+}
+
+/// A swap() call made directly on a pool contract (bots and aggregator
+/// executors routinely skip the router). The callee is the pool itself.
+#[derive(Debug, Clone)]
+pub enum DirectSwap {
+    /// swap(uint256 amount0Out, uint256 amount1Out, address to, bytes data) —
+    /// UniswapV2-family pools (Pancake/Biswap/Aero volatile). The calldata
+    /// carries the exact OUTPUT; the input is recovered via `get_amount_in`
+    /// against the pool's current reserves — fully precise either way.
+    V2 {
+        pool: Address,
+        amount0_out: U256,
+        amount1_out: U256,
+    },
+    /// swap(address recipient, bool zeroForOne, int256 amountSpecified,
+    /// uint160 sqrtPriceLimitX96, bytes data) — UniswapV3-family pools
+    /// (incl. Algebra & Slipstream, same signature). Only exact-input calls
+    /// (amountSpecified > 0) are decodable without a quoter.
+    V3 {
+        pool: Address,
+        zero_for_one: bool,
+        amount_in: U256,
+    },
 }
 
 fn read_u256(data: &[u8], word: usize) -> Option<U256> {
@@ -305,6 +333,67 @@ fn decode_unoswap(data: &[u8]) -> Option<DecodedRoute> {
     Some(DecodedRoute { path: vec![src_token], first_hop_fee: None, hop_fees: Vec::new(), amount_in: amount })
 }
 
+/// swap(uint256 amount0Out, uint256 amount1Out, address to, bytes data) called
+/// directly on a V2-family pool. Exactly one of amount0Out/amount1Out is
+/// nonzero in a real call; both-zero and both-set calldata is rejected.
+fn decode_v2_pool_swap(pool: Address, data: &[u8]) -> Option<DecodedSwap> {
+    if data.len() < 4 * 32 {
+        return None;
+    }
+    let amount0_out = read_u256(data, 0)?;
+    let amount1_out = read_u256(data, 1)?;
+    if amount0_out.is_zero() == amount1_out.is_zero() {
+        return None;
+    }
+    Some(DecodedSwap {
+        router: "V2Pool_swap",
+        token_in: None,
+        token_out: None,
+        amount_in: None,
+        path: Vec::new(),
+        first_hop_fee: None,
+        hop_fees: Vec::new(),
+        direct: Some(DirectSwap::V2 {
+            pool,
+            amount0_out,
+            amount1_out,
+        }),
+        pools_touched: vec![pool],
+    })
+}
+
+/// swap(address recipient, bool zeroForOne, int256 amountSpecified,
+/// uint160 sqrtPriceLimitX96, bytes data) called directly on a V3-family pool
+/// (UniV3, Algebra, Slipstream share this signature). Only exact-input calls
+/// decode: amountSpecified > 0. Exact-output calls are skipped — their input
+/// can't be recovered without simulating the pool.
+fn decode_v3_pool_swap(pool: Address, data: &[u8]) -> Option<DecodedSwap> {
+    if data.len() < 5 * 32 {
+        return None;
+    }
+    let zero_for_one = !read_u256(data, 1)?.is_zero();
+    let amount_in = read_u256(data, 2)?;
+    // int256 two's complement: top bit set = negative (exact-out) — skip.
+    if amount_in.is_zero() || amount_in > (U256::MAX >> 1) {
+        return None;
+    }
+    Some(DecodedSwap {
+        router: "V3Pool_swap",
+        token_in: None,
+        token_out: None,
+        amount_in: Some(amount_in),
+        path: Vec::new(),
+        first_hop_fee: None,
+        hop_fees: Vec::new(),
+        direct: Some(DirectSwap::V3 {
+            pool,
+            zero_for_one,
+            amount_in,
+        }),
+        pools_touched: vec![pool],
+    })
+}
+
 impl TxDecoder {
     pub fn new() -> Self {
         Self {
@@ -325,6 +414,13 @@ impl TxDecoder {
                 // Universal Router
                 ([0x35, 0x93, 0x56, 0x4c], "UniversalRouter_execute"),
                 ([0x3f, 0x62, 0x19, 0x2f], "UniversalRouter_execute_deadline"),
+                // Direct pool calls: swap() on the pool contract itself.
+                ([0x02, 0x2c, 0x0d, 0x9f], "V2Pool_swap"),
+                ([0x12, 0x8a, 0xcb, 0x08], "V3Pool_swap"),
+                // multicall wrappers (PCS V3 router & friends).
+                ([0xac, 0x96, 0x50, 0xd8], "Multicall"),
+                ([0x5a, 0xe4, 0x01, 0xdc], "Multicall_deadline"),
+                ([0x27, 0xdc, 0x29, 0x7e], "Multicall_prevBlockHash"),
                 // PancakeSwap SmartRouter
                 ([0x5c, 0x11, 0xd7, 0x95], "PCS_swap"),
                 // 1inch v5/v6
@@ -343,6 +439,10 @@ impl TxDecoder {
     }
 
     pub fn decode(&self, to: Address, value: U256, input: &[u8]) -> Option<DecodedSwap> {
+        self.decode_inner(to, value, input, 0)
+    }
+
+    fn decode_inner(&self, to: Address, value: U256, input: &[u8], depth: usize) -> Option<DecodedSwap> {
         if input.len() < 4 {
             return None;
         }
@@ -358,6 +458,28 @@ impl TxDecoder {
         trace!(router = router_name, to = %to, "Decoded pending swap tx");
 
         let data = &input[4..];
+
+        // Direct pool swap() calls: `to` is the pool — no pair guessing.
+        match router_name {
+            "V2Pool_swap" => return decode_v2_pool_swap(to, data),
+            "V3Pool_swap" => return decode_v3_pool_swap(to, data),
+            // multicall(bytes[]) wrappers — routers (esp. PCS V3) batch their
+            // calls; unwrap each element and decode the first swap found.
+            "Multicall" => {
+                if depth == 0 {
+                    return self.decode_multicall(to, value, data, 0);
+                }
+                return None;
+            }
+            "Multicall_deadline" | "Multicall_prevBlockHash" => {
+                if depth == 0 {
+                    return self.decode_multicall(to, value, data, 1);
+                }
+                return None;
+            }
+            _ => {}
+        }
+
         let route = match router_name {
             "UniV2_swapExactETHForTokens" | "UniV2_swapETHForExactTokens" |
             "UniV2_swapExactETHForTokens_FOT" => decode_v2_eth_in(data, value),
@@ -394,8 +516,55 @@ impl TxDecoder {
             path,
             first_hop_fee,
             hop_fees,
+            direct: None,
             pools_touched: vec![],
         })
+    }
+
+    /// multicall(deadlineOrHash?, bytes[] data): pull each element out of the
+    /// ABI-encoded array and decode it as a standalone call. `array_word` is
+    /// the word index of the bytes[] offset (0 for multicall(bytes[]), 1 for
+    /// the deadline/prevBlockHash variants). Returns the first element that
+    /// decodes as a swap.
+    fn decode_multicall(
+        &self,
+        to: Address,
+        value: U256,
+        data: &[u8],
+        array_word: usize,
+    ) -> Option<DecodedSwap> {
+        let off: usize = read_u256(data, array_word)?.try_into().ok()?;
+        if data.len() < off + 32 {
+            return None;
+        }
+        let len: usize = read_u256(&data[off..], 0)?.try_into().ok()?;
+        let base = off + 32;
+        for i in 0..len.min(8) {
+            let rel_off = base + i * 32;
+            if data.len() < rel_off + 32 {
+                break;
+            }
+            let rel: usize = U256::from_be_slice(&data[rel_off..rel_off + 32])
+                .try_into()
+                .ok()?;
+            let elem_off = base + rel;
+            if data.len() < elem_off + 32 {
+                continue;
+            }
+            let elem_len: usize = U256::from_be_slice(&data[elem_off..elem_off + 32])
+                .try_into()
+                .ok()?;
+            let start = elem_off + 32;
+            if data.len() < start + elem_len {
+                continue;
+            }
+            if let Some(swap) =
+                self.decode_inner(to, value, &data[start..start + elem_len], 1)
+            {
+                return Some(swap);
+            }
+        }
+        None
     }
 }
 
@@ -643,6 +812,101 @@ mod tests {
         let buf = pad_addr(addr);
         let result = read_addr(&buf, 0).unwrap();
         assert_eq!(result, addr);
+    }
+
+    #[test]
+    fn test_decode_v2_pool_swap() {
+        let decoder = TxDecoder::new();
+        let pool = address!("3333333333333333333333333333333333333333");
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x02, 0x2c, 0x0d, 0x9f]);           // swap(uint256,uint256,address,bytes)
+        data.extend_from_slice(&pad_u256(U256::ZERO));               // amount0Out = 0
+        data.extend_from_slice(&pad_u256(U256::from(777u64)));       // amount1Out
+        data.extend_from_slice(&pad_addr(Address::ZERO));            // to
+        data.extend_from_slice(&pad_u256(U256::from(128u64)));       // data offset
+        data.extend_from_slice(&pad_u256(U256::ZERO));               // data len
+
+        let decoded = decoder.decode(pool, U256::ZERO, &data).unwrap();
+        assert_eq!(decoded.router, "V2Pool_swap");
+        match decoded.direct {
+            Some(DirectSwap::V2 { pool: p, amount0_out, amount1_out }) => {
+                assert_eq!(p, pool);
+                assert_eq!(amount0_out, U256::ZERO);
+                assert_eq!(amount1_out, U256::from(777u64));
+            }
+            _ => panic!("expected direct V2 swap"),
+        }
+    }
+
+    #[test]
+    fn test_decode_v3_pool_swap_exact_in() {
+        let decoder = TxDecoder::new();
+        let pool = address!("4444444444444444444444444444444444444444");
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x12, 0x8a, 0xcb, 0x08]);           // swap(address,bool,int256,uint160,bytes)
+        data.extend_from_slice(&pad_addr(Address::ZERO));            // recipient
+        data.extend_from_slice(&pad_u256(U256::from(1u64)));         // zeroForOne
+        data.extend_from_slice(&pad_u256(U256::from(4242u64)));      // amountSpecified > 0
+        data.extend_from_slice(&pad_u256(U256::from(1u64)));         // sqrtPriceLimitX96
+        data.extend_from_slice(&pad_u256(U256::from(160u64)));       // data offset
+        data.extend_from_slice(&pad_u256(U256::ZERO));               // data len
+
+        let decoded = decoder.decode(pool, U256::ZERO, &data).unwrap();
+        assert_eq!(decoded.amount_in, Some(U256::from(4242u64)));
+        match decoded.direct {
+            Some(DirectSwap::V3 { pool: p, zero_for_one, amount_in }) => {
+                assert_eq!(p, pool);
+                assert!(zero_for_one);
+                assert_eq!(amount_in, U256::from(4242u64));
+            }
+            _ => panic!("expected direct V3 swap"),
+        }
+
+        // Negative amountSpecified (exact-out) must not decode.
+        let mut neg = Vec::new();
+        neg.extend_from_slice(&[0x12, 0x8a, 0xcb, 0x08]);
+        neg.extend_from_slice(&pad_addr(Address::ZERO));
+        neg.extend_from_slice(&pad_u256(U256::from(1u64)));
+        neg.extend_from_slice(&pad_u256(U256::MAX));                 // -1 as int256
+        neg.extend_from_slice(&pad_u256(U256::from(1u64)));
+        neg.extend_from_slice(&pad_u256(U256::from(160u64)));
+        neg.extend_from_slice(&pad_u256(U256::ZERO));
+        assert!(decoder.decode(pool, U256::ZERO, &neg).is_none());
+    }
+
+    #[test]
+    fn test_decode_multicall_unwraps_inner_swap() {
+        let decoder = TxDecoder::new();
+        let t_in = address!("1111111111111111111111111111111111111111");
+        let t_out = address!("2222222222222222222222222222222222222222");
+        let amount_in = U256::from(1234u64);
+
+        // Inner call: swapExactTokensForTokens(amountIn, minOut, path, to, deadline)
+        let mut inner = Vec::new();
+        inner.extend_from_slice(&[0x38, 0xed, 0x17, 0x39]);
+        inner.extend_from_slice(&pad_u256(amount_in));               // amountIn
+        inner.extend_from_slice(&pad_u256(U256::from(1u64)));        // amountOutMin
+        inner.extend_from_slice(&pad_u256(U256::from(160u64)));      // path offset
+        inner.extend_from_slice(&pad_addr(Address::ZERO));           // to
+        inner.extend_from_slice(&pad_u256(U256::from(1_800_000_000u64))); // deadline
+        inner.extend_from_slice(&pad_u256(U256::from(2u64)));        // path len
+        inner.extend_from_slice(&pad_addr(t_in));
+        inner.extend_from_slice(&pad_addr(t_out));
+
+        // multicall(bytes[] data)
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0xac, 0x96, 0x50, 0xd8]);
+        data.extend_from_slice(&pad_u256(U256::from(32u64)));        // array offset
+        data.extend_from_slice(&pad_u256(U256::from(1u64)));         // array len
+        data.extend_from_slice(&pad_u256(U256::from(32u64)));        // elem offset (rel to array head)
+        data.extend_from_slice(&pad_u256(U256::from(inner.len() as u64))); // elem len
+        data.extend_from_slice(&inner);
+        // pad elem to 32-byte boundary not needed for decode
+
+        let decoded = decoder.decode(Address::ZERO, U256::ZERO, &data).unwrap();
+        assert_eq!(decoded.router, "UniV2_swapExactTokensForTokens");
+        assert_eq!(decoded.path, vec![t_in, t_out]);
+        assert_eq!(decoded.amount_in, Some(amount_in));
     }
 
     #[test]

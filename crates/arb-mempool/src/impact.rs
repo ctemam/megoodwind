@@ -5,7 +5,7 @@ use alloy_primitives::{Address, U256};
 use arb_core::types::*;
 use arb_state::PoolStore;
 
-use crate::decoder::DecodedSwap;
+use crate::decoder::{DecodedSwap, DirectSwap};
 
 /// Project one swap hop's impact on a pool, returning the post-swap state and
 /// an estimate of the amount the hop outputs (the input to the victim's next
@@ -147,6 +147,10 @@ pub fn project_pending_path(
     usd_prices: &HashMap<Address, f64>,
     decimals: &HashMap<Address, u32>,
 ) -> Option<(PoolStore, Vec<Address>, Option<f64>)> {
+    if let Some(direct) = &decoded.direct {
+        return project_direct(store, direct, usd_prices, decimals);
+    }
+
     let projected = PoolStore::new();
     for (addr, st) in store.get_all() {
         projected.update(addr, st);
@@ -232,4 +236,72 @@ pub fn project_pending_path(
     } else {
         Some((projected, hit_pools, victim_usd))
     }
+}
+
+/// Project a swap() call made directly on a pool contract. The callee is the
+/// pool itself, so there is no pair/fee ambiguity — if `to` is a tracked pool
+/// the projection is exact (V2 input recovered via `get_amount_in`; V3 input
+/// carried in calldata).
+fn project_direct(
+    store: &PoolStore,
+    direct: &DirectSwap,
+    usd_prices: &HashMap<Address, f64>,
+    decimals: &HashMap<Address, u32>,
+) -> Option<(PoolStore, Vec<Address>, Option<f64>)> {
+    let (pool, token_in, amount_in) = match direct {
+        DirectSwap::V2 {
+            pool,
+            amount0_out,
+            amount1_out,
+        } => {
+            // The nonzero output side picks the direction; the input is what
+            // the reserves demand for that exact output.
+            match store.get(pool)? {
+                PoolState::V2(s) => {
+                    let (token_in, reserve_in, reserve_out, out) = if amount0_out.is_zero() {
+                        (s.token0, s.reserve0, s.reserve1, *amount1_out)
+                    } else {
+                        (s.token1, s.reserve1, s.reserve0, *amount0_out)
+                    };
+                    let amount_in =
+                        arb_core::v2::get_amount_in(out, reserve_in, reserve_out, s.fee_bps).ok()?;
+                    (*pool, token_in, amount_in)
+                }
+                PoolState::AeroV2(s) if !s.stable => {
+                    let (token_in, reserve_in, reserve_out, out) = if amount0_out.is_zero() {
+                        (s.token0, s.reserve0, s.reserve1, *amount1_out)
+                    } else {
+                        (s.token1, s.reserve1, s.reserve0, *amount0_out)
+                    };
+                    let amount_in =
+                        arb_core::v2::get_amount_in(out, reserve_in, reserve_out, s.fee_bps).ok()?;
+                    (*pool, token_in, amount_in)
+                }
+                _ => return None,
+            }
+        }
+        DirectSwap::V3 {
+            pool,
+            zero_for_one,
+            amount_in,
+        } => match store.get(pool)? {
+            PoolState::V3(s) => (
+                *pool,
+                if *zero_for_one { s.token0 } else { s.token1 },
+                *amount_in,
+            ),
+            _ => return None,
+        },
+    };
+
+    let projected = PoolStore::new();
+    for (addr, st) in store.get_all() {
+        projected.update(addr, st);
+    }
+
+    let (new_state, _) = project_and_quote(pool, token_in, amount_in, &projected)?;
+    projected.update(pool, new_state);
+
+    let victim_usd = usd_value(amount_in, token_in, usd_prices, decimals);
+    Some((projected, vec![pool], victim_usd))
 }

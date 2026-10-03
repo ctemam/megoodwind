@@ -349,20 +349,28 @@ async fn main() -> Result<()> {
                 let _ = refresher.refresh(&store).await;
                 last_refresh = std::time::Instant::now();
             }
-            let Some(amount_in) = pending.decoded.amount_in else {
-                if dumped < 3 {
-                    dumped += 1;
-                    let hex: String = pending.raw_input.iter().map(|b| format!("{b:02x}")).collect();
-                    println!("PROFILER   DUMP {} to={} len={} calldata={}",
-                        pending.decoded.router, pending.to, pending.raw_input.len(), hex);
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                // Direct pool calls carry no input amount in calldata —
+                // it's recovered from reserves inside projection.
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => {
+                    if dumped < 3 {
+                        dumped += 1;
+                        let hex: String = pending.raw_input.iter().map(|b| format!("{b:02x}")).collect();
+                        println!("PROFILER   DUMP {} to={} len={} calldata={}",
+                            pending.decoded.router, pending.to, pending.raw_input.len(), hex);
+                    }
+                    continue;
                 }
-                continue;
             };
             n_amt += 1;
             router_stats.get_mut(pending.decoded.router).map(|s| s.1 += 1);
             // Project every hop of the pending path onto tracked pools;
             // a pair match on ANY hop (not just the first) now counts.
-            let hit_any_pair = pending.decoded.path.windows(2).any(|w| {
+            // Direct calls name the pool itself — always a "pair match" in
+            // spirit; the projection drops untracked pools itself.
+            let hit_any_pair = pending.decoded.direct.is_some() || pending.decoded.path.windows(2).any(|w| {
                 let (a, b) = (w[0], w[1]);
                 pair_to_pools.contains_key(&if a < b { (a, b) } else { (b, a) })
             }) || (pending.decoded.token_in.is_some()

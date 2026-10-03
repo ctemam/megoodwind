@@ -1430,7 +1430,13 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
         // Process pending mempool swaps for backrun opportunities
         while let Ok(pending) = mempool_rx.try_recv() {
-            let Some(amount_in) = pending.decoded.amount_in else { continue };
+            // Direct pool calls carry no input amount in calldata (it's
+            // recovered inside projection); router decodes need one.
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => continue,
+            };
 
             // Project every hop of the pending swap's path onto the tracked
             // pools it touches: the resting state has no spread — the pending
