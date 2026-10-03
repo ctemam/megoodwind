@@ -135,6 +135,44 @@ sol! {
         function token0() external view returns (address);
         function token1() external view returns (address);
     }
+
+    #[sol(rpc)]
+    interface ISlipstreamPool {
+        // Aerodrome Slipstream slot0 drops Uniswap's feeProtocol field —
+        // 6-word return vs V3's 7. Same selector, different ABI.
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked);
+    }
+
+    #[sol(rpc)]
+    interface IAlgebraPool {
+        // Algebra v1.9 globalState() — replaces slot0; the dynamic fee is a
+        // single uint16 (hundredths of a bip, same units as V3 fee).
+        // Thena Fusion pools on BSC return this 7-word shape.
+        function globalState() external view returns (uint160 price, int24 tick, uint16 fee, uint16 timepointIndex, uint8 communityFeeToken0, uint8 communityFeeToken1, bool unlocked);
+        function liquidity() external view returns (uint128);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IAlgebraIntegralPool {
+        // Algebra Integral variant — same selector, 8-word return with the
+        // dynamic fee split per direction (feeZto/feeOtz).
+        function globalState() external view returns (uint160 price, int24 tick, uint16 feeZto, uint16 feeOtz, uint16 timepointIndex, uint8 communityFeeToken0, uint8 communityFeeToken1, bool unlocked);
+    }
+
+    #[sol(rpc)]
+    interface IAeroV2Pool {
+        function getReserves() external view returns (uint256 reserve0, uint256 reserve1, uint256 blockTimestampLast);
+        function stable() external view returns (bool);
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IERC20 {
+        function decimals() external view returns (uint8);
+    }
 }
 
 /// Canonical Multicall3 — deployed at the same address on BSC and Base.
@@ -230,7 +268,7 @@ impl MethodCircuitBreaker {
         let n = m.entry(label).or_insert(0);
         *n = n.saturating_add(1);
         if *n == Self::DEAD_AFTER {
-            warn!(method = label, "StateReader method dead on this deployment — skipping call (Multicall3 covers V2/V3)");
+            warn!(method = label, "StateReader method dead on this deployment — skipping call (Multicall3 fallback covers V2/V3/Algebra/AeroV2)");
         }
     }
 
@@ -370,6 +408,30 @@ impl StateRefresher {
             .and_then(|pc| pc.token0.zip(pc.token1))
     }
 
+    fn pool_protocol(&self, pool: &Address) -> Option<Protocol> {
+        self.pool_configs
+            .iter()
+            .find(|pc| pc.address == *pool)
+            .map(|pc| pc.protocol)
+    }
+
+    /// Decode a slot0() return for a V3-class pool. Aerodrome Slipstream
+    /// omits Uniswap's feeProtocol field — 6-word return vs V3's 7 — so the
+    /// V3 decode always fails on Slipstream pools even though the call and
+    /// the price/tick layout are identical.
+    fn decode_v3_slot0(&self, pool: &Address, data: &[u8]) -> Option<(U256, i32)> {
+        use alloy_sol_types::SolCall;
+        if matches!(self.pool_protocol(pool), Some(Protocol::AerodromeSlipstream)) {
+            ISlipstreamPool::slot0Call::abi_decode_returns(data)
+                .ok()
+                .map(|r| (U256::from(r.sqrtPriceX96), r.tick.as_i32()))
+        } else {
+            IV3Pool::slot0Call::abi_decode_returns(data)
+                .ok()
+                .map(|r| (U256::from(r.sqrtPriceX96), r.tick.as_i32()))
+        }
+    }
+
     /// Multicall3 read for V2 pools: reserves + token addresses in ONE
     /// aggregate3 (single network round-trip), allowFailure per call so a
     /// dead pool can't sink the batch — unlike the all-or-nothing
@@ -496,21 +558,13 @@ impl StateRefresher {
                     else {
                         continue;
                     };
-                    let (Ok(slot0), Ok(liq)) = (
-                        IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]),
+                    let (Some((sqrt_p, tick)), Ok(liq)) = (
+                        self.decode_v3_slot0(&p, &s.returnData[..]),
                         IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]),
                     ) else {
                         continue;
                     };
-                    out.push((
-                        p,
-                        U256::from(slot0.sqrtPriceX96),
-                        slot0.tick.as_i32(),
-                        liq,
-                        fee,
-                        t0,
-                        t1,
-                    ));
+                    out.push((p, sqrt_p, tick, liq, fee, t0, t1));
                 }
             }
         }
@@ -545,21 +599,241 @@ impl StateRefresher {
             if !(s.success && l.success && f.success && t0.success && t1.success) {
                 return None;
             }
-            let slot0 = IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]).ok()?;
+            let (sqrt_p, tick) = self.decode_v3_slot0(&p, &s.returnData[..])?;
             let liq = IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
             let fee = IV3Pool::feeCall::abi_decode_returns(&f.returnData[..]).ok()?;
             let token0 = IV3Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
             let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
             Some((
                 p,
-                U256::from(slot0.sqrtPriceX96),
-                slot0.tick.as_i32(),
+                sqrt_p,
+                tick,
                 liq,
                 fee.to::<u32>(),
                 token0,
                 token1,
             ))
         }));
+        out
+    }
+
+    /// Decode a globalState() return — two Algebra generations share the
+    /// selector: v1.9 returns 7 words with a single `fee`, Integral returns
+    /// 8 words with per-direction feeZto/feeOtz. Try v1.9 first.
+    /// Returns (sqrtPriceX96, tick, feeZto, feeOtz) in V3State field units.
+    fn decode_algebra_global_state(data: &[u8]) -> Option<(U256, i32, u32, u32)> {
+        use alloy_sol_types::SolCall;
+        if let Ok(gs) = IAlgebraPool::globalStateCall::abi_decode_returns(data) {
+            let fee = gs.fee as u32;
+            return Some((U256::from(gs.price), gs.tick.as_i32(), fee, fee));
+        }
+        IAlgebraIntegralPool::globalStateCall::abi_decode_returns(data)
+            .ok()
+            .map(|gs| (U256::from(gs.price), gs.tick.as_i32(), gs.feeZto as u32, gs.feeOtz as u32))
+    }
+
+    /// Multicall3 read for Algebra pools: globalState + liquidity in ONE
+    /// aggregate3. Algebra replaces slot0() with globalState().
+    async fn multicall_algebra(
+        &self,
+        pools: &[Address],
+    ) -> Vec<(Address, U256, i32, u128, u32, u32, Address, Address)> {
+        use alloy_sol_types::SolCall;
+        let mut out = Vec::with_capacity(pools.len());
+
+        let (slim, full): (Vec<Address>, Vec<Address>) =
+            pools.iter().copied().partition(|p| self.pool_tokens(p).is_some());
+
+        if !slim.is_empty() {
+            let calls: Vec<IMulticall3::Call3> = slim
+                .iter()
+                .flat_map(|&p| {
+                    [
+                        IAlgebraPool::globalStateCall::new(()).abi_encode().into(),
+                        IAlgebraPool::liquidityCall::new(()).abi_encode().into(),
+                    ]
+                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                })
+                .collect();
+            let results = self.multicall_aggregate3(calls).await;
+            if results.len() == slim.len() * 2 {
+                for (i, &p) in slim.iter().enumerate() {
+                    let s = &results[i * 2];
+                    let l = &results[i * 2 + 1];
+                    if !(s.success && l.success) {
+                        continue;
+                    }
+                    let Some((t0, t1)) = self.pool_tokens(&p) else { continue };
+                    let (Some((sqrt_p, tick, fee_zto, fee_otz)), Ok(liq)) = (
+                        Self::decode_algebra_global_state(&s.returnData[..]),
+                        IAlgebraPool::liquidityCall::abi_decode_returns(&l.returnData[..]),
+                    ) else {
+                        continue;
+                    };
+                    out.push((p, sqrt_p, tick, liq, fee_zto, fee_otz, t0, t1));
+                }
+            }
+        }
+
+        if full.is_empty() {
+            return out;
+        }
+        let calls: Vec<IMulticall3::Call3> = full
+            .iter()
+            .flat_map(|&p| {
+                [
+                    IAlgebraPool::globalStateCall::new(()).abi_encode().into(),
+                    IAlgebraPool::liquidityCall::new(()).abi_encode().into(),
+                    IAlgebraPool::token0Call::new(()).abi_encode().into(),
+                    IAlgebraPool::token1Call::new(()).abi_encode().into(),
+                ]
+                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+            })
+            .collect();
+        let results = self.multicall_aggregate3(calls).await;
+        if results.len() != full.len() * 4 {
+            return out;
+        }
+        out.extend(full.iter().enumerate().filter_map(|(i, &p)| {
+            let base = i * 4;
+            let s = &results[base];
+            let l = &results[base + 1];
+            let t0 = &results[base + 2];
+            let t1 = &results[base + 3];
+            if !(s.success && l.success && t0.success && t1.success) {
+                return None;
+            }
+            let (sqrt_p, tick, fee_zto, fee_otz) =
+                Self::decode_algebra_global_state(&s.returnData[..])?;
+            let liq = IAlgebraPool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
+            let token0 = IAlgebraPool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
+            let token1 = IAlgebraPool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+            Some((
+                p,
+                sqrt_p,
+                tick,
+                liq,
+                fee_zto,
+                fee_otz,
+                token0,
+                token1,
+            ))
+        }));
+        out
+    }
+
+    /// Multicall3 read for Aerodrome V2 pools: getReserves + stable, plus
+    /// ERC20 decimals() on the pair tokens. The pool doesn't expose the
+    /// decimals0/1 scale factors the bespoke reader computes — the stable
+    /// invariant needs 10^decimals scaling, read from the tokens directly.
+    /// Tokens are resolved from config first and shared across pools, so
+    /// the decimals calls are deduped (AERO/WETH/USDC appear everywhere).
+    async fn multicall_aero(
+        &self,
+        pools: &[Address],
+    ) -> Vec<(Address, U256, U256, Address, Address, bool, U256, U256)> {
+        use alloy_sol_types::SolCall;
+        use std::collections::{HashMap, HashSet};
+        let mut out = Vec::with_capacity(pools.len());
+
+        let mut pool_tokens: Vec<(Address, Address, Address)> = Vec::with_capacity(pools.len());
+        let mut need_tokens: Vec<Address> = Vec::new();
+        for &p in pools {
+            match self.pool_tokens(&p) {
+                Some((t0, t1)) => pool_tokens.push((p, t0, t1)),
+                None => need_tokens.push(p),
+            }
+        }
+        if !need_tokens.is_empty() {
+            let calls: Vec<IMulticall3::Call3> = need_tokens
+                .iter()
+                .flat_map(|&p| {
+                    [
+                        IAeroV2Pool::token0Call::new(()).abi_encode().into(),
+                        IAeroV2Pool::token1Call::new(()).abi_encode().into(),
+                    ]
+                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                })
+                .collect();
+            let results = self.multicall_aggregate3(calls).await;
+            if results.len() == need_tokens.len() * 2 {
+                for (i, &p) in need_tokens.iter().enumerate() {
+                    let t0 = &results[i * 2];
+                    let t1 = &results[i * 2 + 1];
+                    if !(t0.success && t1.success) {
+                        continue;
+                    }
+                    let (Ok(t0), Ok(t1)) = (
+                        IAeroV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]),
+                        IAeroV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]),
+                    ) else {
+                        continue;
+                    };
+                    pool_tokens.push((p, t0, t1));
+                }
+            }
+        }
+
+        let mut unique_tokens: Vec<Address> = Vec::new();
+        let mut seen: HashSet<Address> = HashSet::new();
+        for (_, t0, t1) in &pool_tokens {
+            for t in [*t0, *t1] {
+                if seen.insert(t) {
+                    unique_tokens.push(t);
+                }
+            }
+        }
+
+        let calls: Vec<IMulticall3::Call3> = pool_tokens
+            .iter()
+            .flat_map(|(p, _, _)| {
+                [
+                    IAeroV2Pool::getReservesCall::new(()).abi_encode().into(),
+                    IAeroV2Pool::stableCall::new(()).abi_encode().into(),
+                ]
+                .map(|call_data| IMulticall3::Call3 { target: *p, allowFailure: true, callData: call_data })
+            })
+            .chain(unique_tokens.iter().map(|&t| IMulticall3::Call3 {
+                target: t,
+                allowFailure: true,
+                callData: IERC20::decimalsCall::new(()).abi_encode().into(),
+            }))
+            .collect();
+        let results = self.multicall_aggregate3(calls).await;
+        if results.len() != pool_tokens.len() * 2 + unique_tokens.len() {
+            return out;
+        }
+
+        let mut scale: HashMap<Address, U256> = HashMap::with_capacity(unique_tokens.len());
+        for (i, &t) in unique_tokens.iter().enumerate() {
+            let res = &results[pool_tokens.len() * 2 + i];
+            if !res.success {
+                continue;
+            }
+            if let Ok(dec) = IERC20::decimalsCall::abi_decode_returns(&res.returnData[..]) {
+                scale.insert(t, U256::from(10u64).pow(U256::from(dec)));
+            }
+        }
+
+        for (i, &(p, t0, t1)) in pool_tokens.iter().enumerate() {
+            let res = &results[i * 2];
+            let st = &results[i * 2 + 1];
+            if !(res.success && st.success) {
+                continue;
+            }
+            // A pool whose token decimals didn't resolve can't scale the
+            // stable invariant — drop it rather than quote on bad math.
+            let (Some(&d0), Some(&d1)) = (scale.get(&t0), scale.get(&t1)) else {
+                continue;
+            };
+            let (Ok(reserves), Ok(stable)) = (
+                IAeroV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]),
+                IAeroV2Pool::stableCall::abi_decode_returns(&st.returnData[..]),
+            ) else {
+                continue;
+            };
+            out.push((p, reserves.reserve0, reserves.reserve1, t0, t1, stable, d0, d1));
+        }
         out
     }
 
@@ -669,10 +943,11 @@ impl StateRefresher {
         let wombat_t1s: Vec<Address> = wombat_data.iter().map(|d| d.2).collect();
 
         // When no bespoke state_reader is configured (zero address), skip the
-        // reader path entirely — Multicall3 covers V2/V3 reads deployless.
+        // reader path entirely — Multicall3 covers V2/V3/Algebra/AeroV2 reads
+        // deployless.
         let reader_live = !self.state_reader_addr.is_zero();
         if !reader_live {
-            debug!("state_reader unset — Multicall3 fallback mode (V2/V3 reads only)");
+            debug!("state_reader unset — Multicall3 fallback mode (V2/V3/Algebra/AeroV2 reads)");
         }
 
         // Methods proven dead on the deployed reader (contract-side failure on
@@ -690,7 +965,7 @@ impl StateRefresher {
 
         let (v2_results, v3_results, algebra_results, aero_results,
              pcs_results, dodo_results, wombat_results,
-             v2_mc, v3_mc, block) = tokio::join!(
+             v2_mc, v3_mc, algebra_mc, aero_mc, block) = tokio::join!(
             async {
                 if v2_dead { Vec::new() } else { chunk_loop!("V2", v2_chunks, readV2) }
             },
@@ -776,6 +1051,28 @@ impl StateRefresher {
                 let mut out = Vec::new();
                 for chunk in v3_addrs.chunks(Self::CHUNK_SIZE) {
                     out.extend(self.multicall_v3(chunk).await);
+                }
+                out
+            },
+            async {
+                // Same deployless read for Algebra (globalState) when the
+                // reader method is dead or unset.
+                if !algebra_dead {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                for chunk in algebra_addrs.chunks(Self::CHUNK_SIZE) {
+                    out.extend(self.multicall_algebra(chunk).await);
+                }
+                out
+            },
+            async {
+                if !aero_dead {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                for chunk in aero_addrs.chunks(Self::CHUNK_SIZE) {
+                    out.extend(self.multicall_aero(chunk).await);
                 }
                 out
             },
@@ -968,6 +1265,42 @@ impl StateRefresher {
             );
             updated += 1;
         }
+        for (pool, sqrt_p, tick, liq, fee_zto, fee_otz, t0, t1) in &algebra_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *fee_zto,
+                    fee_otz: Some(*fee_otz),
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, r0, r1, t0, t1, stable, dec0, dec1) in &aero_mc {
+            store.update(
+                *pool,
+                PoolState::AeroV2(AeroV2PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    reserve0: *r0,
+                    reserve1: *r1,
+                    stable: *stable,
+                    fee_bps: self.fee_for_pool(pool),
+                    decimals0: *dec0,
+                    decimals1: *dec1,
+                }),
+            );
+            updated += 1;
+        }
 
         // Multicall3 salvage: pools the reader missed (partial chunk failures).
         // Sequential — runs only when a live reader left gaps, which is rare.
@@ -1033,6 +1366,82 @@ impl StateRefresher {
                 }
                 if salvaged > 0 {
                     debug!(salvaged, missing = missing_v3.len(), "Multicall3 V3 salvage");
+                }
+            }
+
+            let mut seen_algebra: HashSet<Address> =
+                algebra_results.iter().map(|s| s.pool).collect();
+            seen_algebra.extend(algebra_mc.iter().map(|t| t.0));
+            let missing_algebra: Vec<Address> = algebra_addrs
+                .iter()
+                .copied()
+                .filter(|a| !seen_algebra.contains(a))
+                .collect();
+            if !missing_algebra.is_empty() {
+                let mut salvaged = 0usize;
+                for chunk in missing_algebra.chunks(Self::CHUNK_SIZE) {
+                    for (pool, sqrt_p, tick, liq, fee_zto, fee_otz, t0, t1) in
+                        self.multicall_algebra(chunk).await
+                    {
+                        if sqrt_p.is_zero() {
+                            continue;
+                        }
+                        store.update(
+                            pool,
+                            PoolState::V3(V3PoolState {
+                                address: pool,
+                                token0: t0,
+                                token1: t1,
+                                sqrt_price_x96: sqrt_p,
+                                tick,
+                                liquidity: liq,
+                                fee: fee_zto,
+                                fee_otz: Some(fee_otz),
+                            }),
+                        );
+                        updated += 1;
+                        salvaged += 1;
+                    }
+                }
+                if salvaged > 0 {
+                    debug!(salvaged, missing = missing_algebra.len(), "Multicall3 Algebra salvage");
+                }
+            }
+
+            let mut seen_aero: HashSet<Address> =
+                aero_results.iter().map(|s| s.pool).collect();
+            seen_aero.extend(aero_mc.iter().map(|t| t.0));
+            let missing_aero: Vec<Address> = aero_addrs
+                .iter()
+                .copied()
+                .filter(|a| !seen_aero.contains(a))
+                .collect();
+            if !missing_aero.is_empty() {
+                let mut salvaged = 0usize;
+                for chunk in missing_aero.chunks(Self::CHUNK_SIZE) {
+                    for (pool, r0, r1, t0, t1, stable, dec0, dec1) in
+                        self.multicall_aero(chunk).await
+                    {
+                        store.update(
+                            pool,
+                            PoolState::AeroV2(AeroV2PoolState {
+                                address: pool,
+                                token0: t0,
+                                token1: t1,
+                                reserve0: r0,
+                                reserve1: r1,
+                                stable,
+                                fee_bps: self.fee_for_pool(&pool),
+                                decimals0: dec0,
+                                decimals1: dec1,
+                            }),
+                        );
+                        updated += 1;
+                        salvaged += 1;
+                    }
+                }
+                if salvaged > 0 {
+                    debug!(salvaged, missing = missing_aero.len(), "Multicall3 AeroV2 salvage");
                 }
             }
         }

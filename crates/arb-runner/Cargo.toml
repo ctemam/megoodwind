@@ -19,6 +19,10 @@ path = "src/bin/verify4337.rs"
 name = "latency_profile"
 path = "src/bin/latency_profile.rs"
 
+[[bin]]
+name = "profit_profile"
+path = "src/bin/profit_profile.rs"
+
 [dependencies]
 arb-core = { workspace = true }
 arb-state = { workspace = true }
