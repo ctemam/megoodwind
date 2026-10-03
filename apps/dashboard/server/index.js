@@ -1517,8 +1517,9 @@ app.get('/api/wallet-intelligence', async (req, res) => {
     const scanned = readJsonl(path.join(dir, '_scanned.jsonl'))
     const strategies = readJsonl(path.join(dir, '_strategies.jsonl'))
     const discovered = readJsonl(path.join(dir, '_discovered.jsonl'))
-    let cursor = null
+    let cursor = null, verify = null
     try { cursor = JSON.parse(fs.readFileSync(path.join(dir, '_cursor.json'), 'utf8')) } catch {}
+    try { verify = JSON.parse(fs.readFileSync(path.join(dir, '_verify.json'), 'utf8')) } catch {}
     const stratByWallet = {}
     for (const s of strategies) stratByWallet[`${s.wallet}/${s.class}`] = s
     const discSet = new Set(discovered.map(d => d.wallet))
@@ -1601,6 +1602,7 @@ app.get('/api/wallet-intelligence', async (req, res) => {
     out.chains[c] = {
       online: counters != null, cursor_block: cursor?.last_scanned_block ?? null,
       scanned_wallets: scanned.length, strategies: strategies.length,
+      verify,
       rows, obs_tails: obsTails, counters,
     }
   }

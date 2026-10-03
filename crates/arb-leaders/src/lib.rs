@@ -781,13 +781,20 @@ impl StrategyRegistry {
         }
     }
 
-    /// Simulation verification result (auto mode): a verified strategy in
-    /// shadow state is auto-approved to bounded_live under `cap_usd` — the
-    /// ONLY path to execution. Manual ops approval requires the same
-    /// sim_verified precondition, so discovery alone can never execute.
+    /// Simulation verification result (auto mode): a strategy whose route
+    /// pools reproduce positive profit through our own simulator is
+    /// auto-approved to bounded_live under `cap_usd` — the ONLY path to
+    /// execution. Applies from shadow OR replay: sim verification subsumes
+    /// the coverage gate (route_pools can contain non-pool intermediaries
+    /// that suppress coverage without blocking execution). Manual ops
+    /// approval requires the same sim_verified precondition, so discovery
+    /// alone can never execute.
     pub fn mark_verified(&mut self, strategy_id: &str, profit_usd: f64, cap_usd: f64) -> bool {
         match self.records.get_mut(strategy_id) {
-            Some(r) if r.state == StrategyState::Shadow && profit_usd > 0.0 => {
+            Some(r)
+                if matches!(r.state, StrategyState::Shadow | StrategyState::Replay)
+                    && profit_usd > 0.0 =>
+            {
                 r.sim_verified = true;
                 r.verified_profit_usd = profit_usd;
                 r.max_notional_usd = cap_usd;

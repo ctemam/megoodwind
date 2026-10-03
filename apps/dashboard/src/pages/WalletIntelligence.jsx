@@ -91,6 +91,11 @@ export default function WalletIntelligence() {
         <div className="card"><div className="k">Sim-verified</div>
           <div className="v pos">{cd?.rows?.filter(r => r.sim_verified).length ?? D}</div>
           <div className="s">shadow sim reproduced profit</div></div>
+        <div className="card"><div className="k">Sim funnel — last run</div>
+          <div className="v">{cd?.verify ? `${cd.verify.verified}/${cd.verify.evaluated}` : D}</div>
+          <div className="s">{cd?.verify
+            ? `verified @blk ${blk(cd.verify.block)} · cap $${cd.verify.cap_usd}`
+            : 'no sim run recorded'}</div></div>
         <div className="card"><div className="k">Bounded live</div>
           <div className="v">{states.bounded_live ?? 0}</div>
           <div className="s">cap-gated strategies only</div></div>

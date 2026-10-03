@@ -352,8 +352,15 @@ async fn main() -> Result<()> {
         {
             const VERIFY_CAP_USD: f64 = 25.0;
             let mut strat = arb_leaders::StrategyRegistry::load(&cfg.chain.name, 20_000);
-            let hi = store.last_block();
+            let mut hi = store.last_block();
+            if hi == 0 {
+                if let Ok(b) = endpoint.block_number().await {
+                    store.set_block(b);
+                    hi = b;
+                }
+            }
             let mut n_ver = 0u32;
+            let mut verified_out: Vec<(String, f64)> = Vec::new();
             let ids: Vec<(String, Vec<String>)> = strat
                 .records
                 .values()
@@ -402,11 +409,30 @@ async fn main() -> Result<()> {
                         println!("VERIFY {id} profit_usd={best_usd:.1} cap_usd={VERIFY_CAP_USD} -> bounded_live");
                         n_ver += 1;
                     }
+                    verified_out.push((id.clone(), best_usd));
                 }
             }
             if n_ver > 0 || !ids.is_empty() {
                 let _ = strat.expire_stale(hi);
                 let _ = strat.save();
+            }
+            // Persist the sim funnel for the dashboard — honest record of the
+            // discovery->execution gate: how many strategies our own simulator
+            // evaluated this run and how many reproduced positive profit.
+            let unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let report = serde_json::json!({
+                "evaluated": ids.len(), "verified": n_ver, "block": hi,
+                "cap_usd": VERIFY_CAP_USD, "unix_ms": unix_ms,
+                "results": verified_out.iter()
+                    .map(|(id, p)| serde_json::json!({"strategy_id": id, "profit_usd": p}))
+                    .collect::<Vec<_>>(),
+            });
+            let dir = format!("data/leaders/{}", cfg.chain.name);
+            let _ = std::fs::create_dir_all(&dir);
+            if let Err(e) = std::fs::write(
+                format!("{dir}/_verify.json"), serde_json::to_string(&report).unwrap()) {
+                eprintln!("VERIFY report write failed: {e}");
             }
             println!("STRATEGY_VERIFY evaluated={} verified={n_ver} block={hi}", ids.len());
         }
