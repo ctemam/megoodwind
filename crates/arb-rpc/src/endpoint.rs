@@ -39,9 +39,80 @@ const RETRY_COMPUTE_UNITS_PER_SEC: u64 = 50;
 /// excess requests queue briefly rather than erroring.
 const RATE_LIMIT_REQS_PER_5S: u64 = 5;
 
+lazy_static::lazy_static! {
+    /// Physical HTTP attempts per endpoint — counts each retry round-trip,
+    /// not just the logical call (layers are stacked with this innermost).
+    static ref RPC_HTTP_ATTEMPTS: prometheus::CounterVec = prometheus::register_counter_vec!(
+        "arb_rpc_http_attempts_total",
+        "Physical HTTP RPC attempts per endpoint (each retry counts)",
+        &["endpoint", "outcome"]
+    ).unwrap();
+}
+
+/// Tower layer that counts every physical request round-trip per endpoint.
+#[derive(Debug, Clone)]
+struct MetricsLayer {
+    endpoint: String,
+}
+
+impl<S> tower::Layer<S> for MetricsLayer {
+    type Service = MetricsService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        MetricsService { inner, endpoint: self.endpoint.clone() }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MetricsService<S> {
+    inner: S,
+    endpoint: String,
+}
+
+impl<S> tower::Service<alloy::rpc::json_rpc::RequestPacket> for MetricsService<S>
+where
+    S: tower::Service<
+            alloy::rpc::json_rpc::RequestPacket,
+            Response = alloy::rpc::json_rpc::ResponsePacket,
+            Error = alloy::transports::TransportError,
+            Future = alloy::transports::TransportFut<'static>,
+        > + Send,
+{
+    type Response = alloy::rpc::json_rpc::ResponsePacket;
+    type Error = alloy::transports::TransportError;
+    type Future = alloy::transports::TransportFut<'static>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: alloy::rpc::json_rpc::RequestPacket) -> Self::Future {
+        let fut = self.inner.call(req);
+        let endpoint = self.endpoint.clone();
+        Box::pin(async move {
+            let result = fut.await;
+            RPC_HTTP_ATTEMPTS
+                .with_label_values(&[
+                    &endpoint,
+                    if result.is_ok() { "ok" } else { "err" },
+                ])
+                .inc();
+            result
+        })
+    }
+}
+
 /// HTTP provider with the standard retry/backoff transport layer applied.
+/// Stack order (outermost→innermost): retry → throttle → metrics → HTTP,
+/// so every physical attempt is throttled and counted.
 fn retry_http_provider(url: url::Url) -> HttpProvider {
     let client = alloy::rpc::client::ClientBuilder::default()
+        .layer(MetricsLayer {
+            endpoint: url.to_string(),
+        })
         .layer(alloy::transports::layers::ThrottleLayer::new(
             RATE_LIMIT_REQS_PER_5S as u32 / 5,
         ))

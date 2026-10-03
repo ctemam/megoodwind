@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-alloy = { workspace = true, features = ["transport-throttle"] }
+alloy = { workspace = true, features = ["transport-throttle", "json-rpc"] }
 alloy-primitives = { workspace = true }
 alloy-sol-types = { workspace = true }
 alloy-provider = { workspace = true }
@@ -17,6 +17,9 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 url = { workspace = true }
+tower = "0.5"
+prometheus = { workspace = true }
+lazy_static = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
