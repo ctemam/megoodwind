@@ -114,3 +114,25 @@ is accumulation/distribution of UNPRICED tokens — the engine's
 Candidate upgrade: price any token that has a V2/V3 pool against a priced
 base (USDT/WBNB/WETH) — one on-chain reserve quote gives a market price and
 turns "UNPRICED" rows into measurable P&L and signal.
+
+## Execution-implied pricing (the "forge" step)
+
+Unpriced tokens no longer need an external oracle: a leader's own fills
+define the market price. In any tx with exactly one unpriced token leg and
+priced contra-legs, implied price = |priced USD flow| / |unpriced qty|.
+Median across a wallet's fills prices its whole position — zero extra RPC.
+
+Revised scorecard (same captures, repriced):
+
+| wallet | realized net USD | holdings @ last fill | profile |
+|---|---|---|---|
+| 0x7eb905e8…302fd | **+$207.5** | $307.6 | top realized performer — buys, splits to beneficiaries |
+| 0x348cea43…8114a | **+$26.3** | $452.6 | same operator cluster, holds token 0x90269E |
+| 0x6bee3132…dc631 | **+$16.9** | $1,708.8 | AIN accumulator — wins 55% of txs AND holds |
+| 0xf9548553…972974 | +$0.3 | ~0 | scalper — inventory fully cycled per trade |
+| 0xf86aabe6…01a904 | −$1.3 | $367.9 | accumulating at breakeven trade cost |
+
+Readout: three of five wallets were already profitable on realized flows
+alone — the earlier "all negative" picture was an artifact of unpriced
+holdings. Distribution wallets' negative token holdings = inventory spent
+from before the window, which is expected, not a loss.

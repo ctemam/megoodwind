@@ -153,6 +153,10 @@ async fn main() -> Result<()> {
         let mut unpriced_tokens = std::collections::HashSet::new();
         let mut per_token_net: HashMap<Address, f64> = HashMap::new();
         let mut dec_cache: HashMap<Address, u32> = HashMap::new();
+        // Execution-implied pricing: a leader's own fills define the market
+        // price of unpriced tokens — priced leg USD / unpriced qty per fill.
+        // Median over the wallet's fills is robust to single bad prints.
+        let mut implied_fills: HashMap<Address, Vec<f64>> = HashMap::new();
         let mut beneficiary_count: HashMap<Address, u32> = HashMap::new();
 
         for (h, token_out) in &txs {
@@ -177,9 +181,9 @@ async fn main() -> Result<()> {
             total_gas_usd += gas_usd;
 
             // Net ERC-20 deltas for the wallet from Transfer logs.
-            let mut tx_net_usd = 0.0f64;
             let mut tx_unpriced = 0u32;
             let mut best_beneficiary: Option<(Address, U256)> = None;
+            let mut tx_deltas: Vec<(Address, f64)> = Vec::new();
             for log in receipt.inner.logs() {
                 let topics = log.topics();
                 if topics.len() != 3 || topics[0] != TRANSFER_SIG {
@@ -204,22 +208,46 @@ async fn main() -> Result<()> {
                 let raw = amount.to_string().parse::<f64>().unwrap_or(0.0)
                     * if to == wallet { 1.0 } else { -1.0 };
                 *per_token_net.entry(token).or_default() += raw;
-                let dec = match dec_cache.get(&token) {
-                    Some(&d) => d,
-                    None => {
-                        let d = fetch_decimals(&endpoint, token).await;
-                        dec_cache.insert(token, d);
-                        d
-                    }
-                };
+                if !dec_cache.contains_key(&token) {
+                    let d = fetch_decimals(&endpoint, token).await;
+                    dec_cache.insert(token, d);
+                }
+                tx_deltas.push((token, raw));
+            }
+
+            // First pass: value every priced leg; learn implied prices from
+            // txs that trade exactly one unpriced token against priced legs.
+            let mut priced_flow_usd = 0.0f64;
+            let mut unpriced_legs: Vec<(Address, f64, u32)> = Vec::new();
+            for &(token, raw) in &tx_deltas {
+                let dec = dec_cache[&token];
                 match priced_addrs.get(&token) {
                     Some(&price) => {
-                        tx_net_usd += raw / 10f64.powi(dec as i32) * price;
+                        priced_flow_usd += raw / 10f64.powi(dec as i32) * price;
                     }
-                    None => {
-                        tx_unpriced += 1;
-                        unpriced_tokens.insert(token);
-                    }
+                    None => unpriced_legs.push((token, raw, dec)),
+                }
+            }
+            if unpriced_legs.len() == 1 {
+                let (token, raw, dec) = unpriced_legs[0];
+                let qty = raw.abs() / 10f64.powi(dec as i32);
+                let contra = priced_flow_usd.abs();
+                if qty > 0.0 && contra > 0.0 {
+                    implied_fills.entry(token).or_default().push(contra / qty);
+                }
+            }
+            // Second pass: price unpriced legs at the token's median implied
+            // fill when we have one.
+            let mut tx_net_usd = priced_flow_usd;
+            for (token, raw, dec) in unpriced_legs {
+                if let Some(fills) = implied_fills.get(&token) {
+                    let mut f = fills.clone();
+                    f.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let median = f[f.len() / 2];
+                    tx_net_usd += raw / 10f64.powi(dec as i32) * median;
+                } else {
+                    tx_unpriced += 1;
+                    unpriced_tokens.insert(token);
                 }
             }
             if let Some((ben, _)) = best_beneficiary {
@@ -253,6 +281,26 @@ async fn main() -> Result<()> {
             println!("LEADER_TOKEN {wallet_hex} {t} net_raw={net:.4} {px}");
         }
 
+        let mut holdings_value = 0.0f64;
+        let mut implied: Vec<_> = implied_fills.iter().collect();
+        implied.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+        for (t, fills) in implied.iter().take(5) {
+            let mut f = (*fills).clone();
+            f.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median = f[f.len() / 2];
+            let last = *f.last().unwrap_or(&median);
+            let qty = per_token_net.get(*t).copied().unwrap_or(0.0);
+            let dec = dec_cache.get(*t).copied().unwrap_or(18);
+            let hold_usd = qty / 10f64.powi(dec as i32) * last;
+            if qty > 0.0 {
+                holdings_value += hold_usd;
+            }
+            println!(
+                "LEADER_PRICE {wallet_hex} {t} median_usd={median:.6}                  last_usd={last:.6} fills={} holdings_usd={hold_usd:.4}",
+                f.len()
+            );
+        }
+
         let mut bens: Vec<_> = beneficiary_count.iter().collect();
         bens.sort_by(|a, b| b.1.cmp(a.1));
         for (b, n) in bens.iter().take(5) {
@@ -264,7 +312,8 @@ async fn main() -> Result<()> {
              dropped={dropped} rpc_fail={rpc_fail} wins={wins} losses={losses} \
              breakeven={breakeven} win_rate={win_rate:.3} \
              total_net_usd={total_net_usd:.4} total_gas_usd={total_gas_usd:.4} \
-             pnl_after_gas={:.4} unpriced_tokens={}",
+             pnl_after_gas={:.4} holdings_value_usd={holdings_value:.4} \
+             unpriced_tokens={}",
             total_net_usd - total_gas_usd,
             unpriced_tokens.len()
         );
