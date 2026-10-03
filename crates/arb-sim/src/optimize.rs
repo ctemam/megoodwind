@@ -119,6 +119,18 @@ pub fn find_optimal_amount(
     let mut lo = min_amount;
     let mut hi = max_amount;
 
+    // Track the best actually-observed point: thin edges are profitable only
+    // over a narrow amount range, and a converged (lo+hi)/2 landing in a dead
+    // region must not discard profit seen at earlier probes.
+    let mut best: Option<(U256, U256)> = None;
+    let mut record = |amount: U256, profit: U256, best: &mut Option<(U256, U256)>| {
+        if !profit.is_zero() && best.map_or(true, |(_, p)| profit > p) {
+            *best = Some((amount, profit));
+        }
+    };
+    record(min_amount, simulate_profit(path, min_amount, store), &mut best);
+    record(max_amount, simulate_profit(path, max_amount, store), &mut best);
+
     for _ in 0..iterations {
         if hi - lo <= U256::from(2u32) {
             break;
@@ -130,6 +142,8 @@ pub fn find_optimal_amount(
 
         let p1 = simulate_profit(path, m1, store);
         let p2 = simulate_profit(path, m2, store);
+        record(m1, p1, &mut best);
+        record(m2, p2, &mut best);
 
         if p1 < p2 {
             lo = m1;
@@ -139,11 +153,9 @@ pub fn find_optimal_amount(
     }
 
     let optimal = (lo + hi) / U256::from(2u32);
-    let profit = simulate_profit(path, optimal, store);
+    record(optimal, simulate_profit(path, optimal, store), &mut best);
 
-    if profit.is_zero() {
-        return None;
-    }
+    let (optimal, profit) = best?;
 
     trace!(
         path_id = path.id,
@@ -170,5 +182,57 @@ mod tests {
         };
         let profit = simulate_profit(&path, U256::from(1000u32), &store);
         assert_eq!(profit, U256::ZERO);
+    }
+
+    /// Two V2 pools with inverted prices: profit exists on the A→B→A loop.
+    /// The optimizer must return the best point it actually observed — a
+    /// converged midpoint landing in a dead region must not return None.
+    #[test]
+    fn test_optimizer_keeps_best_observed_probe() {
+        use alloy_primitives::address;
+        use arb_core::types::V2PoolState;
+        use arb_paths::HopTemplate;
+
+        let token_a = address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let token_b = address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        let pool1 = address!("1111111111111111111111111111111111111111");
+        let pool2 = address!("2222222222222222222222222222222222222222");
+
+        let store = PoolStore::new();
+        // B is cheap on pool1 (1M A : 1.05M B), expensive on pool2 (0.95M B : 1M A).
+        store.update(pool1, PoolState::V2(V2PoolState {
+            address: pool1, token0: token_a, token1: token_b,
+            reserve0: U256::from(1_000_000u64) * U256::from(10u64).pow(U256::from(18u32)),
+            reserve1: U256::from(1_050_000u64) * U256::from(10u64).pow(U256::from(18u32)),
+            fee_bps: 30,
+        }));
+        store.update(pool2, PoolState::V2(V2PoolState {
+            address: pool2, token0: token_b, token1: token_a,
+            reserve0: U256::from(950_000u64) * U256::from(10u64).pow(U256::from(18u32)),
+            reserve1: U256::from(1_000_000u64) * U256::from(10u64).pow(U256::from(18u32)),
+            fee_bps: 30,
+        }));
+
+        let path = PathTemplate {
+            id: 0,
+            flash_token: token_a,
+            flash_amount: U256::from(1000u32),
+            hops: vec![
+                HopTemplate { protocol: Protocol::UniswapV2, pool: pool1, token_in: token_a, token_out: token_b },
+                HopTemplate { protocol: Protocol::UniswapV2, pool: pool2, token_in: token_b, token_out: token_a },
+            ],
+        };
+
+        let one = U256::from(10u64).pow(U256::from(18u32));
+        let min = one;
+        let max = U256::from(50_000u64) * one;
+
+        let (amount, profit) = find_optimal_amount(&path, &store, min, max, 30)
+            .expect("optimizer must return the best observed probe, not None");
+        assert!(profit > U256::ZERO);
+        // Best-of-probes: result is at least as good as the smallest probe.
+        assert!(profit >= simulate_profit(&path, min, &store));
+        // Result amount stays inside the requested bounds.
+        assert!(amount >= min && amount <= max);
     }
 }

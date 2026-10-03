@@ -801,8 +801,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         (opt_amount, opt_profit)
                     } else if candidate.gross_profit > U256::ZERO {
                         // Optimization found nothing, but cheap-pass DID find profit at default amount
+                        metrics::GATE_REJECTS.with_label_values(&["optimizer_none"]).inc();
                         (candidate.flash_amount, candidate.gross_profit)
                     } else {
+                        metrics::GATE_REJECTS.with_label_values(&["no_profit_default"]).inc();
                         continue;
                     };
 
@@ -818,6 +820,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 };
 
                 let decision = profit_gate.should_submit(&opt_result, path);
+                metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
+                if let Some(reason) = decision.reject_reason {
+                    metrics::GATE_REJECTS.with_label_values(&[reason]).inc();
+                }
                 if decision.accept {
                     metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);

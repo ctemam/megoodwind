@@ -101,9 +101,9 @@ strict_4337          = true   # spec: route ALL execution through the UserOp ass
 [token_usd_prices]
 USDT = 1.0
 USDC = 1.0
-WBNB = 600.0
-ETH = 2500.0
-BTCB = 95000.0
+WBNB = 769.0
+ETH = 2680.0
+BTCB = 84642.0
 BUSD = 1.0
 
 [tokens]
@@ -115,6 +115,7 @@ BTCB = "0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c"
 BUSD = "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56"
 
 # === V2 Pools (PancakeSwap V2 + BiSwap) ===
+CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
 
 [[pools]]
 name = "PCS_USDT_WBNB"
@@ -315,3 +316,75 @@ expansion_throttle_pct = 70
 expansion_freeze_pct = 85
 token_batch_min = 25
 token_batch_max = 50
+
+[[pools]]
+name = "V3_USDT_CAKE"
+address = "0xE04D921D6AB7C3eF2Eee14dd7a95Be5706A1EA93"
+protocol = "v3"
+token0 = "USDT"
+token1 = "CAKE"
+fee_bps = 1
+
+[[pools]]
+name = "V3_USDT_CAKE"
+address = "0x8ec186cD1Ad51c380Bd23fDe29f852226647616c"
+protocol = "v3"
+token0 = "USDT"
+token1 = "CAKE"
+fee_bps = 5
+
+[[pools]]
+name = "V3_USDT_CAKE"
+address = "0x7f51c8AaA6B0599aBd16674e2b17FEc7a9f674A1"
+protocol = "v3"
+token0 = "USDT"
+token1 = "CAKE"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_WBNB"
+address = "0x133B3D95bAD5405d14d53473671200e9342896BF"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_WBNB_CAKE"
+address = "0xAfB2Da14056725E3BA3a30dD846B6BBbd7886c56"
+protocol = "v3"
+token0 = "WBNB"
+token1 = "CAKE"
+fee_bps = 5
+
+[[pools]]
+name = "V3_USDC_CAKE"
+address = "0xBa3363669fb975b6C4F7014910ACAcf9Ee77c9D4"
+protocol = "v3"
+token0 = "USDC"
+token1 = "CAKE"
+fee_bps = 5
+
+[[pools]]
+name = "V2_USDT_CAKE"
+address = "0xA39Af17CE4a8eb807E076805Da1e2B8EA7D0755b"
+protocol = "v2"
+token0 = "USDT"
+token1 = "CAKE"
+fee_bps = 25
+
+[[pools]]
+name = "V2_WBNB_CAKE"
+address = "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0"
+protocol = "v2"
+token0 = "WBNB"
+token1 = "CAKE"
+fee_bps = 25
+
+[[pools]]
+name = "V2_USDC_CAKE"
+address = "0x177d955dCA80443A09E7a7F5946cA16b8E0dcA1C"
+protocol = "v2"
+token0 = "USDC"
+token1 = "CAKE"
+fee_bps = 25

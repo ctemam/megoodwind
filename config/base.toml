@@ -78,13 +78,13 @@ sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
 strict_4337          = true   # spec: route ALL execution through the UserOp assembler
 
 [token_usd_prices]
-WETH = 2500.0
+WETH = 2680.0
 USDC = 1.0
 USDbC = 1.0
 DAI = 1.0
-cbETH = 2700.0
+cbETH = 2680.0
 AERO = 1.20
-cbBTC = 95000.0
+cbBTC = 84642.0
 
 [tokens]
 WETH  = "0x4200000000000000000000000000000000000006"

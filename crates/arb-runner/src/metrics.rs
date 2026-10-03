@@ -97,6 +97,18 @@ lazy_static::lazy_static! {
         "Builder simulation rejections (pre-revert signal)"
     ).unwrap();
 
+    pub static ref GATE_REJECTS: CounterVec = register_counter_vec!(
+        "arb_gate_rejects_total",
+        "Profit-gate rejections by reason (below_min_bps|below_safety_margin|below_min_usd|optimizer_none|no_profit_default)",
+        &["reason"]
+    ).unwrap();
+
+    pub static ref GATE_EFFECTIVE_USD: Histogram = register_histogram!(
+        "arb_gate_effective_usd",
+        "Effective USD of gate-evaluated candidates (accepted + rejected)",
+        vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 50.0]
+    ).unwrap();
+
     pub static ref SPONSORSHIP_REJECTS: CounterVec = register_counter_vec!(
         "arb_sponsorship_rejects_total",
         "Sponsored UserOperation rejections by reason (gasless mode)",
