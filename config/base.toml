@@ -55,7 +55,7 @@ min = 1000000000000000
 max = 5000000000000000000
 
 [gate]
-min_profit_usd = 0.30
+min_profit_usd = 0.05
 safety_margin_bps = 0
 stable_pool_extra_margin_bps = 0
 

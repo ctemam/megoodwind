@@ -51,7 +51,7 @@ private_key_env = "PRIVATE_KEY"
 
 [scanner]
 flash_tokens = ["USDT", "USDC", "WBNB", "FDUSD"]
-min_profit_bps = 3
+min_profit_bps = 1
 min_initial_bps = 2
 optimization_iterations = 30
 dry_run = true   # allbrightA default: no live submission without Commander approval
@@ -75,7 +75,7 @@ min = 1000000000000000
 max = 5000000000000000000
 
 [gate]
-min_profit_usd = 0.30
+min_profit_usd = 0.05
 safety_margin_bps = 10
 stable_pool_extra_margin_bps = 5
 
