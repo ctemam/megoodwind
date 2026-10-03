@@ -1347,3 +1347,6 @@ fee_bps = 25
 # "candidate" — recorded only, never acted on.
 # [leaders]
 # discover = true
+
+[leaders]
+discover = true

@@ -310,6 +310,24 @@ async fn main() -> Result<()> {
             }
         }
 
+        // Leader wallet intelligence — same observer as the runner loop:
+        // scores every sender, auto-promotes candidates, persists JSONL.
+        let leader_observer = {
+            let enabled = !cfg.leaders.wallets.is_empty() || cfg.leaders.discover;
+            enabled.then(|| {
+                arb_leaders::LeaderObserver::new(
+                    arb_leaders::LeaderRegistry::new(&cfg.leaders),
+                    std::path::PathBuf::from("data/leaders"),
+                    cfg.chain.name.clone(),
+                    &cfg.leaders,
+                )
+            })
+        };
+        if let Some(o) = &leader_observer {
+            println!("PROFILER leaders enabled=1 wallets={} discover={}",
+                o.wallet_count(), cfg.leaders.discover);
+        }
+
         // Fresh state so projections sit on current reserves.
         let _ = refresher.refresh(&store).await?;
         pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
@@ -344,6 +362,9 @@ async fn main() -> Result<()> {
                 Err(_) => continue,
             };
             n_rx += 1;
+            if let Some(o) = &leader_observer {
+                o.observe(&pending);
+            }
             router_stats.entry(pending.decoded.router).or_insert((0, 0)).0 += 1;
             if last_refresh.elapsed() > std::time::Duration::from_secs(20) {
                 let _ = refresher.refresh(&store).await;
@@ -422,12 +443,14 @@ async fn main() -> Result<()> {
                 };
                 let dec = real_gate.should_submit(&sim, path);
                 // Cap: a backrun can't extract more than the victim's input.
+                // Capped candidates are phantom projections — excluded from
+                // gate_pass AND the best/top display, same as the runner.
                 let capped = victim_usd.map_or(false, |v| dec.effective_profit_usd > v);
                 if dec.accept && !capped {
                     n_gate += 1;
-                }
-                if best_for_swap.map_or(true, |(p, _, _)| prof > p) {
-                    best_for_swap = Some((prof, bps, path.flash_token));
+                    if best_for_swap.map_or(true, |(p, _, _)| prof > p) {
+                        best_for_swap = Some((prof, bps, path.flash_token));
+                    }
                 }
             }
             if let Some((prof, bps, ft)) = best_for_swap {
@@ -450,6 +473,19 @@ async fn main() -> Result<()> {
         rs.sort_by(|a, b| b.1.0.cmp(&a.1.0));
         for (router, (dec, amt)) in rs {
             println!("PROFILER   ROUTER {router} decoded={dec} with_amount={amt}");
+        }
+        if let Some(o) = &leader_observer {
+            println!(
+                "PROFILER leaders wallets={} discovered={} scored_senders={}",
+                o.wallet_count(),
+                o.discovered_wallets(),
+                o.scored_senders()
+            );
+            for (addr, score, obs, class) in o.top_senders(10) {
+                println!(
+                    "PROFILER   LEADER score={score:.1} obs={obs} class={class} {addr:#x}"
+                );
+            }
         }
         return Ok(());
     }

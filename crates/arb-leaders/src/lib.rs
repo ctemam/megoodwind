@@ -293,6 +293,24 @@ impl LeaderObserver {
         self.registry.len()
     }
 
+    /// Wallets promoted by real-time discovery (excludes manual entries).
+    pub fn discovered_wallets(&self) -> usize {
+        self.registry.discovered_count()
+    }
+
+    /// Senders in the discovery scorer's stats map (0 when discovery off).
+    pub fn scored_senders(&self) -> usize {
+        self.discoverer.as_ref().map(|d| d.tracked_senders()).unwrap_or(0)
+    }
+
+    /// Top-scored senders from the discovery scorer (empty when off).
+    pub fn top_senders(&self, n: usize) -> Vec<(Address, f64, u32, &'static str)> {
+        self.discoverer
+            .as_ref()
+            .map(|d| d.top_senders(n))
+            .unwrap_or_default()
+    }
+
     /// Hot-path call on every decoded pending swap. Feeds the discovery
     /// scorer first (when enabled), then O(1) registry lookup — returns
     /// immediately when `from` is not a registered leader.
@@ -404,6 +422,8 @@ fn class_weight(class: &str) -> f64 {
 pub struct LeaderDiscoverer {
     registry: std::sync::Arc<LeaderRegistry>,
     stats: Mutex<HashMap<Address, SenderStats>>,
+    /// (sender, callee) → (hit count, last seen) — repeat-callee signal.
+    callee_hits: Mutex<HashMap<(Address, Address), (u32, std::time::Instant)>>,
     dir: PathBuf,
     chain: String,
     min_score: f64,
@@ -436,6 +456,7 @@ impl LeaderDiscoverer {
         Self {
             registry,
             stats: Mutex::new(HashMap::new()),
+            callee_hits: Mutex::new(HashMap::new()),
             dir,
             chain,
             min_score,
@@ -451,8 +472,22 @@ impl LeaderDiscoverer {
             return; // already a leader — no re-scoring needed
         }
         let class = classify(pending, !pending.decoded.pools_touched.is_empty());
-        let w = class_weight(class);
+        let mut w = class_weight(class);
         let now = std::time::Instant::now();
+        // Real arb bots usually send to their OWN contract — the pending tx
+        // decodes as opaque. The tell is repetition: a wallet hammering the
+        // same callee contract is running an automated strategy. 2nd+ hit
+        // on the same (sender, callee) pair inside the decay window scores.
+        if w == 0.0 {
+            let mut callees = self.callee_hits.lock().unwrap();
+            let count = callees.entry((from, pending.to)).or_insert((0u32, now));
+            // expire stale callee entries cheaply
+            count.1 = now;
+            count.0 += 1;
+            if count.0 >= 2 {
+                w = 4.0; // repeat_opaque — comparable to tracked_pool_trade
+            }
+        }
 
         let promote = {
             let mut map = self.stats.lock().unwrap();
@@ -524,6 +559,22 @@ impl LeaderDiscoverer {
             reason: "bot-signal score crossed threshold in live pending stream".to_string(),
         };
         let _ = self.persist_event(&ev);
+    }
+
+    fn tracked_senders(&self) -> usize {
+        self.stats.lock().unwrap().len()
+    }
+
+    /// Top-scored senders right now — the simulation's candidate ranking.
+    pub fn top_senders(&self, n: usize) -> Vec<(Address, f64, u32, &'static str)> {
+        let map = self.stats.lock().unwrap();
+        let mut v: Vec<_> = map
+            .iter()
+            .map(|(a, s)| (*a, s.score, s.observations, s.dominant_class))
+            .collect();
+        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        v.truncate(n);
+        v
     }
 
     /// Lowest-current-score discovered wallet — eviction candidate.
