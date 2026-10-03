@@ -91,3 +91,26 @@ aggregates. Rows: `LEADER_PROFILE`, `LEADER_TX`, `LEADER_TOKEN`,
 - Profile: disciplined accumulator/DCA bot — same-size clips, ~13 tx/min,
   15% revert rate (fires aggressively, tolerates failed attempts)
 - Not an arb pattern — value is in direction/accumulation, not per-tx arb
+
+## Leaderboard — first live collection (15 min BSC window, 1,850 senders scored)
+
+5 wallets promoted; all replayed on-chain (limit 60 each):
+
+| wallet | mined | rev | drop | priced net USD | gas | verdict |
+|---|---|---|---|---|---|---|
+| 0xf9548553…972974 | 28/30 | 0 | 2 | **+$8.57 USDT** | $0.14 | **only positive wallet** — sells token 0xb994882a for USDT, 50% win rate; sell-side/market-making pattern |
+| 0x6bee3132…dc631 | 48/60 | 10 | 2 | −$1,618 USDT (cost basis) | $0.24 | AIN accumulator — +$700 unrealized vs buy avg (measured earlier) |
+| 0xf86aabe6…01a904 | 7/9 | 2 | 0 | −$368 USDT | $0.09 | accumulator of token 0x3f160760 |
+| 0x7eb905e8…302fd | 13/15 | 1 | 1 | −$107 USDT | $0.30 | buys + distributes to 0xa0a6661a / 0xd9c500df |
+| 0x348cea43…8114a | 7/7 | 0 | 0 | −$363 USDT | $0.65 | buys + distributes — same beneficiary pair |
+
+**Coordination signal:** beneficiaries `0xa0a6661a…` and `0xd9c500df…` appear
+as token-out recipients across two DIFFERENT sender wallets — shared
+payout/distribution infrastructure (same operator or shared contract).
+
+**Forge-the-missing-elements readout:** the dominant leader pattern on BSC
+is accumulation/distribution of UNPRICED tokens — the engine's
+`[token_usd_prices]` table is blind to exactly the flows leaders care about.
+Candidate upgrade: price any token that has a V2/V3 pool against a priced
+base (USDT/WBNB/WETH) — one on-chain reserve quote gives a market price and
+turns "UNPRICED" rows into measurable P&L and signal.
