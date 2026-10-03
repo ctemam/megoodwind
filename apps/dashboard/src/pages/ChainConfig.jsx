@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useApp, fmt } from '../state.jsx'
 import Collap from '../Collap.jsx'
+import { useSort } from '../Sortable.jsx'
 
 const CHAIN_ORDER = ['bsc', 'base']
 const STATUS_COLOR = { healthy: 'var(--acc)', degraded: 'var(--warn)', slow: 'var(--warn)', noisy: '#ff7a45', down: 'var(--neg)' }
@@ -42,6 +43,23 @@ export default function ChainConfig() {
     setBusy(true)
     try { await post(path, body) } finally { setBusy(false); reload() }
   }
+
+  // Sortable tables (shared useSort: click a header to sort, click again to flip).
+  const [capRows, thCap] = useSort(
+    Object.entries(capacity?.chains || {}).map(([c, m]) => ({ chain: c, ...m })),
+    ['score', -1])
+  const [epRows, thEp] = useSort(health?.endpoints || [], ['ms', 1])
+  const [tokRows, thTok] = useSort(
+    cfg ? Object.entries(cfg.tokens).map(([s, a]) => ({
+      s, a, flash: cfg.flash_tokens.includes(s) ? 1 : 0,
+      price: cfg.prices[s] ?? null,
+    })) : [], ['s', 1])
+  const [poolRows, thPool] = useSort(
+    (cfg?.pools || []).map(p => ({ ...p, pair: `${p.token0}/${p.token1}` })),
+    ['name', 1])
+  const [recChains, thRC] = useSort(recs?.chains || [], ['score', -1])
+  const [recToks, thRT] = useSort((recs?.tokens?.[chain] || []).slice(0, 10), ['score', -1])
+  const [recDexes, thRD] = useSort(recs?.dexes?.[chain] || [], ['score', -1])
 
   const cap = health?.capacity
 
@@ -102,9 +120,9 @@ export default function ChainConfig() {
           </div>
           {capacity.chains && (
             <table style={{ marginTop: 10 }}>
-              <thead><tr><th>Chain</th><th>Scan util</th><th>Avg scan / budget</th><th>Pools</th><th>Tokens</th><th>Hits/M evals (1h)</th><th>Gross (1h)</th><th>Score</th></tr></thead>
+              <thead><tr>{thCap('chain', 'Chain')}{thCap('utilization', 'Scan util')}{thCap('avg_scan_ms', 'Avg scan / budget')}{thCap('pools', 'Pools')}{thCap('tokens', 'Tokens')}{thCap('hits_per_m', 'Hits/M evals (1h)')}{thCap('gross_profit_usd', 'Gross (1h)')}{thCap('score', 'Score')}</tr></thead>
               <tbody>
-                {Object.entries(capacity.chains).map(([c, m]) => (
+                {capRows.map(({ chain: c, ...m }) => (
                   <tr key={c}>
                     <td>{c.toUpperCase()}</td>
                     <td style={{ color: m.utilization > 0.5 ? 'var(--warn)' : 'var(--acc)' }}>{(m.utilization * 100).toFixed(1)}%</td>
@@ -145,9 +163,9 @@ export default function ChainConfig() {
         {health?.endpoints && (
           <Collap bare open={false} title={`Endpoint probes (${health.endpoints.length})`}>
             <table>
-              <thead><tr><th>Endpoint</th><th>chainId</th><th>Block</th><th>RTT</th><th>Status</th></tr></thead>
+              <thead><tr>{thEp('url', 'Endpoint')}{thEp('chain_id', 'chainId')}{thEp('block', 'Block')}{thEp('ms', 'RTT')}{thEp('status', 'Status')}</tr></thead>
               <tbody>
-                {[...health.endpoints].sort((a, b) => (a.ms ?? 9e9) - (b.ms ?? 9e9)).map(e => (
+                {epRows.map(e => (
                   <tr key={e.url}>
                     <td className="mono" style={{ fontSize: 11 }}>{e.url}</td>
                     <td>{e.chain_id ?? '—'}</td>
@@ -206,9 +224,9 @@ export default function ChainConfig() {
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <Collap style={{ marginTop: 0 }} open={false} title={`Tokens (${cfg ? Object.keys(cfg.tokens).length : 0})`}>
           <table>
-            <thead><tr><th>Symbol</th><th>Address</th><th>Flash</th><th>USD price</th></tr></thead>
+            <thead><tr>{thTok('s', 'Symbol')}{thTok('a', 'Address')}{thTok('flash', 'Flash')}{thTok('price', 'USD price')}</tr></thead>
             <tbody>
-              {cfg && Object.entries(cfg.tokens).map(([s, a]) => (
+              {tokRows.map(({ s, a }) => (
                 <tr key={s}>
                   <td><b>{s}</b></td>
                   <td className="mono" style={{ fontSize: 11 }}>{a.slice(0, 10)}…{a.slice(-4)}</td>
@@ -226,9 +244,9 @@ export default function ChainConfig() {
             ))}
           </div>
           <table>
-            <thead><tr><th>Pool</th><th>Protocol</th><th>Pair</th><th>Fee</th></tr></thead>
+            <thead><tr>{thPool('name', 'Pool')}{thPool('protocol', 'Protocol')}{thPool('pair', 'Pair')}{thPool('fee_bps', 'Fee')}</tr></thead>
             <tbody>
-              {cfg?.pools.map(p => (
+              {poolRows.map(p => (
                 <tr key={p.address}>
                   <td className="mono" style={{ fontSize: 11 }} title={p.address}>{p.name || `${p.address?.slice(0, 8)}…`}</td>
                   <td>{p.protocol}</td>
@@ -248,8 +266,8 @@ export default function ChainConfig() {
             <span className="dim" style={{ fontSize: 11, fontWeight: 400 }}> — admission: {recs.admissible}</span></>}>
           <h4 style={{ margin: '10px 0 4px', color: 'var(--dim)' }}>Next chains (DefiLlama TVL × live RPC probe)</h4>
           <table>
-            <thead><tr><th>#</th><th>Chain</th><th>TVL</th><th>RPC health</th><th>Block int.</th><th>Latency</th><th>RPCs</th><th>Score</th><th>Action</th></tr></thead>
-            <tbody>{(recs.chains || []).map(r => (
+            <thead><tr>{thRC('rank', '#')}{thRC('name', 'Chain')}{thRC('tvl_usd', 'TVL')}{thRC('rpc_health', 'RPC health')}{thRC('block_interval_ms', 'Block int.')}{thRC('latency_ms', 'Latency')}{thRC('rpc_endpoints', 'RPCs')}{thRC('score', 'Score')}<th>Action</th></tr></thead>
+            <tbody>{recChains.map(r => (
               <tr key={r.id}>
                 <td>{r.rank}</td>
                 <td><b>{r.name}</b> <span className="dim" style={{ fontSize: 11 }}>#{r.chain_id} {r.native}</span></td>
@@ -268,8 +286,8 @@ export default function ChainConfig() {
 
           <h4 style={{ margin: '14px 0 4px', color: 'var(--dim)' }}>Next tokens — {chain.toUpperCase()} (canonical list × on-chain verify × GoPlus)</h4>
           <table>
-            <thead><tr><th>#</th><th>Token</th><th>On-chain</th><th>GoPlus</th><th>Priced</th><th>Score</th><th>Action</th></tr></thead>
-            <tbody>{(recs.tokens?.[chain] || []).slice(0, 10).map(r => (
+            <thead><tr>{thRT('rank', '#')}{thRT('symbol', 'Token')}{thRT('onchain_ok', 'On-chain')}{thRT('goplus_flags', 'GoPlus')}{thRT('priced', 'Priced')}{thRT('score', 'Score')}<th>Action</th></tr></thead>
+            <tbody>{recToks.map(r => (
               <tr key={r.id}>
                 <td>{r.rank}</td>
                 <td><b>{r.symbol}</b> <span className="mono dim" style={{ fontSize: 10 }}>{r.address.slice(0, 10)}…</span></td>
@@ -286,8 +304,8 @@ export default function ChainConfig() {
 
           <h4 style={{ margin: '14px 0 4px', color: 'var(--dim)' }}>Next DEXes — {chain.toUpperCase()} (DefiLlama chain TVL)</h4>
           <table>
-            <thead><tr><th>#</th><th>DEX</th><th>TVL on chain</th><th>Audits</th><th>Score</th><th>Action</th></tr></thead>
-            <tbody>{(recs.dexes?.[chain] || []).map(r => (
+            <thead><tr>{thRD('rank', '#')}{thRD('name', 'DEX')}{thRD('tvl_usd', 'TVL on chain')}{thRD('audits', 'Audits')}{thRD('score', 'Score')}{thRD('action', 'Action')}</tr></thead>
+            <tbody>{recDexes.map(r => (
               <tr key={r.id}>
                 <td>{r.rank}</td>
                 <td><b>{r.name}</b></td>

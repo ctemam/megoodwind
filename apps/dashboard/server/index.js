@@ -972,7 +972,7 @@ async function fleetBrief() {
           ? +(((m['arb_scan_latency_seconds_sum'] || 0) / m['arb_scan_latency_seconds_count']) * 1000).toFixed(1) : 0,
         evals: m.arb_paths_evaluated_total || 0, hits: m.arb_profitable_found_total || 0,
         gross: m.arb_gross_profit_usd_total || 0, net: m.arb_net_profit_usd_total || 0,
-        pools: m.arb_pools_total || 0 })
+        pools: m.arb_pool_count || 0 })
     }
     const snaps = histLog.filter(s => s.t >= Date.now() - 3600e3)
     if (snaps.length) {
