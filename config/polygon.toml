@@ -1,0 +1,572 @@
+[chain]
+chain_id = 137
+name = "Polygon"
+rpc_https = ""
+rpc_https_pool = [
+    "https://polygon-bor-rpc.publicnode.com",
+    "https://polygon.drpc.org",
+    "https://polygon-mainnet.public.blastapi.io",
+    "https://polygon.llamarpc.com",
+    "https://1rpc.io/matic",
+    "https://rpc.ankr.com/polygon",
+    "https://endpoints.omniatech.io/v1/matic/mainnet/public",
+    "https://polygon.rpc.subquery.network/public",
+    "https://polygon.meowrpc.com",
+    "https://polygon-rpc.com",
+]
+rpc_wss = ""
+rpc_wss_pool = [
+    "wss://polygon-bor-rpc.publicnode.com",
+    "wss://polygon.drpc.org",
+]
+trader_rpc = ""
+# No executor/reader deployed on Polygon — scan/measure mode.
+# dry_run MUST stay true until a contract is deployed.
+arb_contract = ""
+state_reader = "0x0000000000000000000000000000000000000000"
+block_time_ms = 2000
+scan_budget_ms = 600
+
+[wallet]
+private_key_env = "PRIVATE_KEY"
+
+[scanner]
+flash_tokens = ["USDC", "USDT", "WPOL", "WETH"]
+min_profit_bps = 1
+min_initial_bps = 2
+optimization_iterations = 30
+dry_run = true   # scan/measure only — no executor on this chain
+[scanner.flash_amounts]
+USDC = 5000000
+USDT = 5000000
+WPOL = 5000000000000000000
+WETH = 2000000000000000
+[scanner.flash_bounds.USDC]
+min = 1000000
+max = 50000000000
+[scanner.flash_bounds.USDT]
+min = 1000000
+max = 50000000000
+[scanner.flash_bounds.WPOL]
+min = 1000000000000000000
+max = 9000000000000000000
+[scanner.flash_bounds.WETH]
+min = 100000000000000
+max = 1000000000000000000
+
+[gate]
+min_profit_usd = 0.05
+safety_margin_bps = 10
+stable_pool_extra_margin_bps = 5
+
+[submission]
+# No builder/bundle venue exists on Polygon — backruns have no ordering
+# guarantee; only venue-less detection is measured here.
+direct_fallback = false
+pimlico_enabled = false
+strict_4337 = false
+
+[token_usd_prices]
+USDC = 1.0
+USDCe = 1.0
+USDT = 1.0
+DAI = 1.0
+WPOL = 0.42   # approximate snapshot — CMC drift alert watches deviation
+WETH = 2600.0
+
+[tokens]
+USDC  = "0x3c499c542cEF5E3811e1192ce70d8cc03d5c3359"
+USDCe = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+USDT  = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+WETH  = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
+WPOL  = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
+DAI   = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
+
+[scanner.paths]
+max_hops = 4
+max_paths_per_flash_token = 25000
+max_paths_through_token = 200
+
+[circuit_breaker]
+token_revert_threshold = 5
+token_suppression_blocks = 200
+
+[pricing]
+thin_pool_threshold_usd = 50000
+cmc_drift_alert_pct = 25.0
+refresh_blocks = 100
+
+# All [[pools]] addresses enumerated on-chain from QuickSwap/SushiSwap
+# getPair and Uniswap V3 getPool factories — token0/token1 verified live.
+[[pools]]
+name = "QS_WPOL_USDCe"
+address = "0x6e7a5fafcec6bb1e78bae2a1f0b612012bf14827"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 30
+
+[[pools]]
+name = "QS_WPOL_USDT"
+address = "0x604229c960e5cacf2aaeac8be68ac07ba9df81c3"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "QS_WPOL_WETH"
+address = "0xadbf1854e5883eb8aa7baf50705338739e558e5b"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "QS_WPOL_DAI"
+address = "0xeef611894ceae652979c9d0dae1deb597790c6ee"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "QS_WETH_USDCe"
+address = "0x853ee4b2a13f8a742d64c8f088be7ba2131f670d"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "QS_WETH_USDT"
+address = "0xf6422b997c7f54d1c6a6e103bcb1499eea0a7046"
+protocol = "v2"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "QS_USDCe_USDT"
+address = "0x2cf7252e74036d1da831d11089d326296e64a728"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "QS_USDCe_DAI"
+address = "0xf04adbf75cdfc5ed26eea4bbbb991db002036bdd"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "QS_USDCn_USDCe"
+address = "0x2fb3b855fb2e3f668de6fc82f026a7ab56f6b067"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "QS_USDCn_WETH"
+address = "0x7baf833f82bb1971f99a5a5d84bed1d5d0dedd70"
+protocol = "v2"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WPOL_USDCe"
+address = "0xcd353f79d9fade311fc3119b841e1f456b54e858"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WPOL_USDT"
+address = "0x55ff76bffc3cdd9d5fdbbc2ece4528ecce45047e"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WPOL_WETH"
+address = "0xc4e595acdd7d12fec385e5da5d43160e8a0bac0e"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WPOL_DAI"
+address = "0x8929d3fea77398f64448c85015633c2d6472fb29"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_USDCe"
+address = "0x34965ba0ac2451a34a0471f04cca3f990b8dea27"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_USDT"
+address = "0xc2755915a85c6f6c1c0f3a86ac8c058f11caa9c9"
+protocol = "v2"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDCe_USDT"
+address = "0x4b1f1e2435a9c96f7330faea190ef6a7c8d70001"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDCe_DAI"
+address = "0xcd578f016888b57f1b1e3f887f392f0159e26747"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDCn_WETH"
+address = "0x27e2929315ced73060bb7eccb1d160b30c1bc041"
+protocol = "v2"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WPOL_USDCe_100"
+address = "0x0a6c4588b7d8bd22cf120283b1fff953420c45f3"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WPOL_USDCe_500"
+address = "0xa374094527e1673a86de625aa59517c5de346d32"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WPOL_USDCe_3000"
+address = "0x88f3c15523544835ff6c738ddb30995339ad57d6"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WPOL_USDCe_10000"
+address = "0x67e708986a809acefde16f2417fa5701241e3935"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDCe"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WPOL_USDT_100"
+address = "0x3bfcb475e528f54246f1847ec0e7b53dd88bda4e"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WPOL_USDT_500"
+address = "0x9b08288c3be4f62bbf8d1c20ac9c5e6f9467d8b7"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WPOL_USDT_3000"
+address = "0x781067ef296e5c4a4203f81c593274824b7c185d"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WPOL_USDT_10000"
+address = "0x9a72fc3fb9e99087d2eae500355e7902c763f9b3"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WPOL_WETH_100"
+address = "0x33c4f0043e2e988b3c2e9c77e2c670efe709bfe3"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WPOL_WETH_500"
+address = "0x86f1d8390222a3691c28938ec7404a1661e618e0"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WPOL_WETH_3000"
+address = "0x167384319b41f7094e62f7506409eb38079abff8"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WPOL_WETH_10000"
+address = "0x9f2b55f290fb1dd0c80d685284dbef91ebeea480"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WPOL_DAI_100"
+address = "0x7a7374873de28b06386013da94cbd9b554f6ac6e"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WPOL_DAI_500"
+address = "0x0f663c16dd7c65cf87edb9229464ca77aeea536b"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WPOL_DAI_3000"
+address = "0xfe530931da161232ec76a7c3bea7d36cf3811a0d"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WPOL_DAI_10000"
+address = "0x58359563b3f4854428b1b98e91a42471e6d20b8e"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WETH_USDCe_100"
+address = "0x04537f43f6add7b1b60cab199c7a910024ee0594"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_USDCe_500"
+address = "0x45dda9cb7c25131df268515131f647d726f50608"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_USDCe_3000"
+address = "0x0e44ceb592acfc5d3f09d996302eb4c499ff8c10"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_USDCe_10000"
+address = "0xbd934a7778771a7e2d9bf80596002a214d8c9304"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WETH_USDT_100"
+address = "0x3840d6a1b96292c8e44991b5605e03245584585b"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_USDT_500"
+address = "0xbb98b3d2b18aef63a3178023a920971cf5f29be4"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_USDT_3000"
+address = "0x4ccd010148379ea531d6c587cfdd60180196f9b1"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_USDT_10000"
+address = "0xc21b964af2b0254580d44981d624335f2b7c6fb6"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDCe_USDT_100"
+address = "0xdac8a8e6dbf8c690ec6815e0ff03491b2770255d"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDCe_USDT_500"
+address = "0x3f5228d0e7d75467366be7de2c31d0d098ba2c23"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDCe_USDT_3000"
+address = "0x24555b1e26407b8b56621da41f175c5e2b80f1b8"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDCe_USDT_10000"
+address = "0x7109c674e52b14fcfb8a04ffe254f454f9c61c18"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDCe_DAI_100"
+address = "0x5645dcb64c059aa11212707fbf4e7f984440a8cf"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDCe_DAI_500"
+address = "0x5f69c2ec01c22843f8273838d570243fd1963014"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDCe_DAI_3000"
+address = "0x257d365f7870742c87bb3a8a53a609979908799a"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDCe_DAI_10000"
+address = "0xfd0693f146eae257586e0dc63205f090e31a3584"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDCn_USDCe_100"
+address = "0xd36ec33c8bed5a9f7b6630855f1533455b98a418"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDCn_USDCe_500"
+address = "0xd9abecb39a5885d1e531ed3599adfed620e2fc8a"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDCn_USDCe_3000"
+address = "0x36f1f5d1fafb4b34bc42a39f06e5685d59a86166"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDCn_USDCe_10000"
+address = "0x780af82446b5d494db41f7cb732d07fea8d431e6"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDCn_WETH_100"
+address = "0x80cdade01ff626b7cce4772e3c2d56db14f384fa"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDCn_WETH_500"
+address = "0xa4d8c89f0c20efbe54cba9e7e7a7e509056228d9"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDCn_WETH_3000"
+address = "0x19c5505638383337d2972ce68b493ad78e315147"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDCn_WETH_10000"
+address = "0x12bd7ae45acf2504bed144eabc6ff5bbebd91563"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 100
+

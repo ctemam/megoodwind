@@ -1332,3 +1332,11 @@ protocol = "v3"
 token0 = "CAKE"
 token1 = "FDUSD"
 fee_bps = 25
+
+# Leader Wallet Intelligence (Phase 0/1) — observation only.
+# Register wallets to record their pending swaps to data/leaders/BSC/*.jsonl.
+# Nothing is ever copied or submitted in this phase.
+# [leaders]
+# wallets = [
+#   { address = "0x...", label = "known arb bot", strategy_hypothesis = "atomic_dex_arb", risk_tier = "observe", max_copied_notional_usd = 0.0, enabled = true },
+# ]

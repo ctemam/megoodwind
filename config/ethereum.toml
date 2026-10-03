@@ -1,0 +1,436 @@
+[chain]
+chain_id = 1
+name = "Ethereum"
+rpc_https = ""
+rpc_https_pool = [
+    "https://ethereum-rpc.publicnode.com",
+    "https://eth.drpc.org",
+    "https://ethereum.publicnode.com",
+    "https://eth.llamarpc.com",
+    "https://1rpc.io/eth",
+    "https://rpc.ankr.com/eth",
+    "https://ethereum.blockpi.network/v1/rpc/public",
+    "https://eth.merkle.io",
+    "https://cloudflare-eth.com",
+    "https://rpc.mevblocker.io",
+    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
+]
+rpc_wss = ""
+rpc_wss_pool = [
+    "wss://ethereum-rpc.publicnode.com",
+    "wss://eth.drpc.org",
+]
+trader_rpc = ""
+# No executor/reader deployed on Ethereum — scan/measure mode.
+# dry_run MUST stay true until a contract is deployed.
+arb_contract = ""
+state_reader = "0x0000000000000000000000000000000000000000"
+block_time_ms = 12000
+scan_budget_ms = 2500
+
+[wallet]
+private_key_env = "PRIVATE_KEY"
+
+[scanner]
+flash_tokens = ["USDC", "USDT", "WETH", "DAI"]
+min_profit_bps = 1
+min_initial_bps = 2
+optimization_iterations = 30
+dry_run = true   # scan/measure only — no executor on this chain
+[scanner.flash_amounts]
+USDC = 10000000
+USDT = 10000000
+WETH = 4000000000000000
+DAI  = 5000000000000000000
+[scanner.flash_bounds.USDC]
+min = 1000000
+max = 100000000000
+[scanner.flash_bounds.USDT]
+min = 1000000
+max = 100000000000
+[scanner.flash_bounds.WETH]
+min = 100000000000000
+max = 1000000000000000000
+[scanner.flash_bounds.DAI]
+min = 1000000000000000000
+max = 9000000000000000000
+
+[gate]
+min_profit_usd = 0.05
+safety_margin_bps = 10
+stable_pool_extra_margin_bps = 5
+
+[submission]
+# Ethereum backruns need a bundle venue (Flashbots-style eth_sendBundle) —
+# not yet implemented; this chain measures detection only.
+direct_fallback = false
+pimlico_enabled = false
+strict_4337 = false
+
+[token_usd_prices]
+USDC = 1.0
+USDT = 1.0
+DAI  = 1.0
+WETH = 2600.0   # approximate snapshot — CMC drift alert watches deviation
+WBTC = 62000.0
+
+[tokens]
+WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+USDT = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+DAI  = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+WBTC = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
+
+[scanner.paths]
+max_hops = 4
+max_paths_per_flash_token = 25000
+max_paths_through_token = 200
+
+[circuit_breaker]
+token_revert_threshold = 5
+token_suppression_blocks = 200
+
+[pricing]
+thin_pool_threshold_usd = 50000
+cmc_drift_alert_pct = 25.0
+refresh_blocks = 100
+
+# All [[pools]] addresses enumerated on-chain from Uniswap V2 getPair,
+# SushiSwap getPair and Uniswap V3 getPool factories — token0/token1
+# verified live against each pool contract.
+[[pools]]
+name = "UNI2_WETH_USDT"
+address = "0x0d4a11d5eeaac28ec3f61d100daf4d40471f1852"
+protocol = "v2"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_WETH_USDC"
+address = "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc"
+protocol = "v2"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_WETH_DAI"
+address = "0xa478c2975ab1ea89e8196811f51a7b7ade33eb11"
+protocol = "v2"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_WETH_WBTC"
+address = "0xbb2b8038a1640196fbe3e38816f3e67cba72d940"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_USDC_USDT"
+address = "0x3041cbd36888becc7bbcbc0045e3b1f144466f5f"
+protocol = "v2"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_USDC_DAI"
+address = "0xae461ca67b15dc8dc81ce7615e0320da1a9ab8d5"
+protocol = "v2"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "UNI2_USDT_WBTC"
+address = "0x0de0fa91b6dbab8c8503aaa2d1dfa91a192cb149"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_USDT"
+address = "0x06da0fd433c1a5d7a4faa01111c044910a184553"
+protocol = "v2"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_USDC"
+address = "0x397ff1542f962076d0bfe58ea045ffa2d347aca0"
+protocol = "v2"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_DAI"
+address = "0xc3d03e4f041fd4cd388c549ee2a29a9e5075882f"
+protocol = "v2"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_WETH_WBTC"
+address = "0xceff51756c56ceffca006cd410b03ffc46dd3a58"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDC_USDT"
+address = "0xd86a120a06255df8d4e2248ab04d4267e23adfaa"
+protocol = "v2"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDC_DAI"
+address = "0xaaf5110db6e744ff70fb339de037b990a20bdace"
+protocol = "v2"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "SUSHI_USDT_WBTC"
+address = "0x784178d58b641a4febf8d477a6abd28504273132"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_USDT_100"
+address = "0xc7bbec68d12a0d1830360f8ec58fa599ba1b0e9b"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_USDT_500"
+address = "0x11b815efb8f581194ae79006d24e0d814b7697f6"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_USDT_3000"
+address = "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_USDT_10000"
+address = "0xc5af84701f98fa483ece78af83f11b6c38aca71d"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WETH_USDC_100"
+address = "0xe0554a476a092703abdb3ef35c80e0d76d32939f"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_USDC_500"
+address = "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_USDC_3000"
+address = "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_USDC_10000"
+address = "0x7bea39867e4169dbe237d55c8242a8f2fcdcc387"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WETH_DAI_100"
+address = "0xd8dec118e1215f02e10db846dcbbfe27d477ac19"
+protocol = "v3"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_DAI_500"
+address = "0x60594a405d53811d3bc4766596efd80fd545a270"
+protocol = "v3"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_DAI_3000"
+address = "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8"
+protocol = "v3"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_DAI_10000"
+address = "0xa80964c5bbd1a0e95777094420555fead1a26c1e"
+protocol = "v3"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_WETH_WBTC_100"
+address = "0xe6ff8b9a37b0fab776134636d9981aa778c4e718"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_WETH_WBTC_500"
+address = "0x4585fe77225b41b697c938b018e2ac67ac5a20c0"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_WETH_WBTC_3000"
+address = "0xcbcdf9626bc03e24f779434178a73a0b4bad62ed"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_WETH_WBTC_10000"
+address = "0x6ab3bba2f41e7eaa262fa5a1a9b3932fa161526f"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDC_USDT_100"
+address = "0x3416cf6c708da44db2624d63ea0aaef7113527c6"
+protocol = "v3"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDC_USDT_500"
+address = "0x7858e59e0c01ea06df3af3d20ac7b0003275d4bf"
+protocol = "v3"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDC_USDT_3000"
+address = "0xee4cf3b78a74affa38c6a926282bcd8b5952818d"
+protocol = "v3"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDC_USDT_10000"
+address = "0xbb256c2f1b677e27118b0345fd2b3894d2e6d487"
+protocol = "v3"
+token0 = "USDC"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDC_DAI_100"
+address = "0x5777d92f208679db4b9778590fa3cab3ac9e2168"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDC_DAI_500"
+address = "0x6c6bc977e13df9b0de53b251522280bb72383700"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDC_DAI_3000"
+address = "0xa63b490aa077f541c9d64bfc1cc0db2a752157b5"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDC_DAI_10000"
+address = "0x6958686b6348c3d6d5f2dca3106a5c09c156873a"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "UNI_USDT_WBTC_100"
+address = "0xf98cf0d979cfbb780774f318e3da4f7317af50d7"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "UNI_USDT_WBTC_500"
+address = "0x56534741cd8b152df6d48adf7ac51f75169a83b2"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "UNI_USDT_WBTC_3000"
+address = "0x9db9e0e53058c89e5b94e29621a205198648425b"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "UNI_USDT_WBTC_10000"
+address = "0x5a59e4e647a3acc42b01715f3a1d271c1f7e7aeb"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 100
+

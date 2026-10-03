@@ -56,6 +56,10 @@ pub struct AppConfig {
     pub pools: Vec<PoolEntry>,
     pub tokens: HashMap<String, String>,
     pub token_usd_prices: HashMap<String, f64>,
+    /// `[leaders]` — optional leader-wallet observation registry
+    /// (arb-leaders Phase 0/1; absent or empty = feature off).
+    #[serde(default)]
+    pub leaders: arb_leaders::LeadersConfig,
 }
 
 #[derive(Debug, Deserialize)]

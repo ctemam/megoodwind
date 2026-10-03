@@ -63,6 +63,9 @@ alloy::sol! {
 /// Aerodrome Slipstream QuoterV2 on Base.
 const UNI_QUOTER_BSC: Address = alloy_primitives::address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997");
 const UNI_QUOTER_BASE: Address = alloy_primitives::address!("3d4e44Eb1374240CE5F1B871ab261CD16335B76a");
+/// Canonical Uniswap V3 QuoterV2 — deterministic CREATE2 deployment, same
+/// address on Ethereum, Polygon and most UniV3 chains.
+const UNI_QUOTER_UNI: Address = alloy_primitives::address!("61fFE014bA17989E743c5F6cB21bF9697530B21e");
 const SLIP_QUOTER_BASE: Address = alloy_primitives::address!("254cF9E1E6e233aa1AC962CB9B05b2cfeAae15b0");
 
 /// A concentrated-liquidity pool can report `liquidity() > 0` while its
@@ -140,7 +143,8 @@ async fn probe_dead_v3_pools(
                 } else if chain_id == spec::BASE_CHAIN_ID {
                     UNI_QUOTER_BASE
                 } else {
-                    continue;
+                    // Other UniV3 chains share the canonical QuoterV2 deploy.
+                    UNI_QUOTER_UNI
                 };
                 (q, v3.fee)
             }
@@ -873,7 +877,23 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
     // ===== Submitters =====
     let mut submitters: Vec<Box<dyn Submitter>> = Vec::new();
-    let chain_label: &'static str = if cfg.chain.chain_id == spec::BASE_CHAIN_ID { "Base" } else { "BSC" };
+    let chain_label: &'static str = Box::leak(cfg.chain.name.clone().into_boxed_str());
+
+    // Leader Wallet Intelligence (Phase 0/1): observation only — registered
+    // wallets' pending swaps are recorded to data/leaders/<chain>/*.jsonl.
+    // Empty/disabled registry = no-op. Nothing is ever copied or submitted.
+    let leader_observer = {
+        let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
+        (!registry.is_empty()).then(|| {
+            let obs = arb_leaders::LeaderObserver::new(
+                registry,
+                std::path::PathBuf::from("data/leaders"),
+                cfg.chain.name.clone(),
+            );
+            info!(chain = chain_label, wallets = obs.wallet_count(), "leader wallet observation enabled");
+            obs
+        })
+    };
 
     if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         if let Some(url) = is_nonempty(&cfg.submission.puissant_url) {
@@ -966,8 +986,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // venue ordering by measured health, 60s bench on repeated misses.
     let (submit_budget_ms, slot_budget_ms) = if cfg.chain.chain_id == spec::BASE_CHAIN_ID {
         (spec::BASE_SUBMIT_TIMEOUT_MS, spec::BASE_SLOT_BUDGET_MS)
-    } else {
+    } else if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         (spec::BSC_MEV_SUBMIT_TIMEOUT_MS, spec::BSC_SLOT_BUDGET_MS)
+    } else {
+        // Generic chains: scale budgets off the configured block cadence.
+        let bt = cfg.chain.block_time_ms.max(500);
+        ((bt / 6).clamp(50, 250), bt * 4 / 5)
     };
     let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
     info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
@@ -1025,7 +1049,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let sub = ws_provider.subscribe_blocks().await?;
     let mut block_stream = sub.into_stream();
 
-    let arb_contract: Address = cfg.chain.arb_contract.parse()?;
+    let arb_contract: Address = cfg.chain.arb_contract.parse().unwrap_or_else(|_| {
+        warn!(chain = %cfg.chain.name, "arb_contract unset/invalid — executor calls will revert; scan-only mode");
+        Address::ZERO
+    });
     let dry_run = dry_run_override;
 
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
@@ -1430,6 +1457,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
         // Process pending mempool swaps for backrun opportunities
         while let Ok(pending) = mempool_rx.try_recv() {
+            if let Some(obs) = &leader_observer {
+                obs.observe(&pending);
+            }
             // Direct pool calls carry no input amount in calldata (it's
             // recovered inside projection); router decodes need one.
             let amount_in = match pending.decoded.amount_in {

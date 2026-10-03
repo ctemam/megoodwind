@@ -840,6 +840,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "arb-leaders"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "anyhow",
+ "arb-mempool",
+ "hex",
+ "lazy_static",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "arb-mempool"
 version = "0.1.0"
 dependencies = [
@@ -912,6 +928,7 @@ dependencies = [
  "anyhow",
  "arb-core",
  "arb-discovery",
+ "arb-leaders",
  "arb-mempool",
  "arb-paths",
  "arb-rpc",
