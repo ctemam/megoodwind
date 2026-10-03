@@ -424,7 +424,7 @@ async fn main() -> Result<()> {
     let mut sh_pools_total = 0usize;
     let mut sh_pools_tracked = 0usize;
     let mut shadow_routes: HashMap<Address, (f64, Vec<String>)> = HashMap::new();
-    for (addr, _score, _net, _wr, _mw, class, _c) in scored.iter().take(5) {
+    for (addr, _score, _net, _wr, _mw, class, _c) in scored.iter().take(10) {
         let Some(wallet) = ranked.iter().find(|(a, _, _)| a == addr) else {
             continue;
         };

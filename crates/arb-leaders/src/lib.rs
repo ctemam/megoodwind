@@ -647,6 +647,14 @@ pub struct StrategyRecord {
     /// 0..1 — fraction of route counterparties inside our pool registry.
     #[serde(default)]
     pub coverage: f64,
+    /// Simulation verification: our own engine reproduced a positive profit
+    /// through this strategy's route pools on live state. REQUIRED for
+    /// bounded_live — discovery alone can never approve execution.
+    #[serde(default)]
+    pub sim_verified: bool,
+    /// Best gross profit our simulator found through the route pools, USD.
+    #[serde(default)]
+    pub verified_profit_usd: f64,
     #[serde(default)]
     pub confidence: f64,
     pub state: StrategyState,
@@ -725,6 +733,8 @@ impl StrategyRegistry {
             median_profit_usd: 0.0,
             net_pnl_usd: 0.0,
             coverage: 0.0,
+            sim_verified: false,
+            verified_profit_usd: 0.0,
             confidence: 0.0,
             state: StrategyState::Observe,
             created_block: block,
@@ -771,10 +781,38 @@ impl StrategyRegistry {
         }
     }
 
-    /// Ops-only promotion — bounded live requires an explicit notional cap.
+    /// Simulation verification result (auto mode): a verified strategy in
+    /// shadow state is auto-approved to bounded_live under `cap_usd` — the
+    /// ONLY path to execution. Manual ops approval requires the same
+    /// sim_verified precondition, so discovery alone can never execute.
+    pub fn mark_verified(&mut self, strategy_id: &str, profit_usd: f64, cap_usd: f64) -> bool {
+        match self.records.get_mut(strategy_id) {
+            Some(r) if r.state == StrategyState::Shadow && profit_usd > 0.0 => {
+                r.sim_verified = true;
+                r.verified_profit_usd = profit_usd;
+                r.max_notional_usd = cap_usd;
+                r.state = StrategyState::BoundedLive;
+                true
+            }
+            Some(r) => {
+                if profit_usd <= 0.0 {
+                    r.sim_verified = false;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Ops-only promotion — requires simulation verification AND an
+    /// explicit notional cap.
     pub fn approve_bounded_live(&mut self, strategy_id: &str, max_notional_usd: f64) -> bool {
         match self.records.get_mut(strategy_id) {
-            Some(r) if r.state == StrategyState::Shadow && max_notional_usd > 0.0 => {
+            Some(r)
+                if r.state == StrategyState::Shadow
+                    && r.sim_verified
+                    && max_notional_usd > 0.0 =>
+            {
                 r.max_notional_usd = max_notional_usd;
                 r.state = StrategyState::BoundedLive;
                 true
@@ -983,9 +1021,11 @@ mod tests {
         // Full route coverage → Shadow.
         reg.mark_coverage("0xbbb", "bundle_backrunner", 1.0);
         assert_eq!(reg.records["0xbbb/bundle_backrunner"].state, StrategyState::Shadow);
-        // Bounded live needs ops notional cap.
-        assert!(reg.approve_bounded_live("0xbbb/bundle_backrunner", 250.0));
+        // Bounded live needs sim verification + cap. Unverified is refused.
+        assert!(!reg.approve_bounded_live("0xbbb/bundle_backrunner", 250.0));
+        assert!(reg.mark_verified("0xbbb/bundle_backrunner", 42.0, 25.0));
         assert_eq!(reg.records["0xbbb/bundle_backrunner"].state, StrategyState::BoundedLive);
+        assert!(reg.records["0xbbb/bundle_backrunner"].sim_verified);
         // Stale record expires past ttl.
         let (s, _) = reg.upsert_evidence(
             "0xccc", "atomic_arb", 90.0, 3, 1.0, 30.0, "",

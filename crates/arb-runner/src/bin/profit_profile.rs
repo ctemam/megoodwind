@@ -344,6 +344,73 @@ async fn main() -> Result<()> {
             println!("PROFILER quarantined_pools={quarantined:?}");
         }
 
+        // Sim verification gate — Commander directive: discovery→execution is
+        // auto-approved ONLY after our own simulator reproduces a positive
+        // profit through a shadow strategy's route pools on live state.
+        // Bounded cap $25 notional. replay/shadow records are evaluated;
+        // mark_verified performs the shadow->bounded_live auto-transition.
+        {
+            const VERIFY_CAP_USD: f64 = 25.0;
+            let mut strat = arb_leaders::StrategyRegistry::load(&cfg.chain.name, 20_000);
+            let hi = store.last_block();
+            let mut n_ver = 0u32;
+            let ids: Vec<(String, Vec<String>)> = strat
+                .records
+                .values()
+                .filter(|r| matches!(r.state,
+                    arb_leaders::StrategyState::Shadow
+                        | arb_leaders::StrategyState::Replay
+                        | arb_leaders::StrategyState::BoundedLive))
+                .filter(|r| !r.route_pools.is_empty())
+                .map(|r| (r.strategy_id.clone(), r.route_pools.clone()))
+                .collect();
+            for (id, route) in &ids {
+                // Candidate paths sharing at least one route pool, minus quarantined.
+                let mut cand: HashMap<usize, usize> = HashMap::new();
+                for p in route {
+                    let pa = match p.parse::<Address>() { Ok(a) => a, Err(_) => continue };
+                    if let Some(v) = pool_to_paths.get(&pa) {
+                        for &i in v { *cand.entry(i).or_default() += 1; }
+                    }
+                }
+                let mut ranked: Vec<usize> = cand.iter()
+                    .filter(|(&i, _)| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)))
+                    .map(|(&i, _)| i)
+                    .collect();
+                ranked.sort_unstable_by(|&a, &b| cand[&b].cmp(&cand[&a]));
+                let mut best_usd = 0.0;
+                for &pi in ranked.iter().take(30) {
+                    let path = &paths[pi];
+                    let (min_a, token_max) = flash_bounds
+                        .get(&path.flash_token)
+                        .copied()
+                        .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
+                    let hi = token_max.min(path_max_flash(path, &store, 0.05, token_max));
+                    if let Some((_, prof)) = find_optimal_amount(
+                        path, &store, min_a, hi,
+                        cfg.scanner.optimization_iterations) {
+                        if !prof.is_zero() {
+                            let usd = usd_value(
+                                prof, &path.flash_token,
+                                &token_usd_prices, &token_decimals);
+                            if usd > best_usd { best_usd = usd; }
+                        }
+                    }
+                }
+                if best_usd > 0.0 {
+                    if strat.mark_verified(id, best_usd, VERIFY_CAP_USD) {
+                        println!("VERIFY {id} profit_usd={best_usd:.1} cap_usd={VERIFY_CAP_USD} -> bounded_live");
+                        n_ver += 1;
+                    }
+                }
+            }
+            if n_ver > 0 || !ids.is_empty() {
+                let _ = strat.expire_stale(hi);
+                let _ = strat.save();
+            }
+            println!("STRATEGY_VERIFY evaluated={} verified={n_ver} block={hi}", ids.len());
+        }
+
         let mut wss_urls = cfg.chain.rpc_wss_pool.clone();
         wss_urls.retain(|u| !u.trim().is_empty());
         if wss_urls.is_empty() {
