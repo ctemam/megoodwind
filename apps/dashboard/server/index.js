@@ -89,6 +89,85 @@ app.get('/api/metrics/all', async (_req, res) => {
   res.json({ live: isLive(), chains: out, profit: profitSummary(net), commit: BUILD_COMMIT })
 })
 
+// ── Canonical metrics contract ──────────────────────────────────────────
+// One normalized definition across API, UI and runner (improvement plan
+// Phase 3): net = gross − warp spend − gas. Pages should consume this
+// rather than interpreting raw Prometheus counters independently.
+const histP = (m, name, q) => {
+  const buckets = []
+  let count = null
+  for (const [k, v] of Object.entries(m)) {
+    const mm = k.match(new RegExp(`^${name}_bucket\\{le="([^"]+)"\\}$`))
+    if (mm) buckets.push([mm[1] === '+Inf' ? Infinity : +mm[1], v])
+    if (k === `${name}_count`) count = v
+  }
+  if (!count || !buckets.length) return null
+  buckets.sort((a, b) => a[0] - b[0])
+  const target = count * q
+  const hit = buckets.find(b => b[1] >= target)
+  if (!hit) return null
+  // +Inf means the quantile exceeds the highest finite bucket — report the
+  // top finite edge (a lower bound) rather than JSON-stringifying Infinity
+  // into a misleading null.
+  if (hit[0] === Infinity)
+    return buckets.filter(b => isFinite(b[0])).pop()?.[0] ?? null
+  return hit[0]
+}
+const histAvg = (m, name) => {
+  const s = m[`${name}_sum`], c = m[`${name}_count`]
+  return (s != null && c) ? s / c : null
+}
+
+app.get('/api/metrics/canonical', async (req, res) => {
+  const out = { live: isLive(), sampled_at: new Date().toISOString(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    let m = null
+    try { m = await fetchMetrics(c) } catch {}
+    if (!m) { out.chains[c] = null; continue }
+    // Gas USD uses the engine's own configured native-token price — the
+    // same assumption the profit gate makes, not an external oracle.
+    let nativeUsd = null
+    try {
+      nativeUsd = +(tomlScalar(tomlSection(readToml(c), 'token_usd_prices'), 'WBNB')
+        || tomlScalar(tomlSection(readToml(c), 'token_usd_prices'), 'ETH') || 0) || null
+    } catch {}
+    const gasUsd = nativeUsd != null
+      ? (m['arb_gas_spent_wei_total'] || 0) / 1e18 * nativeUsd : null
+    const landed = k => {
+      for (const [key, v] of Object.entries(m))
+        if (key === `arb_submit_landed_total{status="${k}"}`) return v
+      return 0
+    }
+    out.chains[c] = {
+      gross_usd: m['arb_gross_profit_usd_total'] ?? null,
+      warp_spend_usd: m['arb_warp_spend_usd_total'] ?? null,
+      gas_usd: gasUsd,
+      net_usd: m['arb_net_profit_usd_total'] ?? null,
+      paths_evaluated: m['arb_paths_evaluated_total'] ?? null,
+      profitable_paths: m['arb_profitable_found_total'] ?? null,
+      backrun_candidates: m['arb_backrun_candidates_total'] ?? null,
+      submit_attempts: m['arb_submit_attempts_total'] ?? null,
+      landed_success: landed('success'),
+      landed_revert: landed('revert'),
+      landed_dropped: landed('dropped'),
+      scan_latency_avg_ms: (() => { const v = histAvg(m, 'arb_scan_latency_seconds'); return v == null ? null : v * 1000 })(),
+      scan_latency_p95_ms: (() => { const v = histP(m, 'arb_scan_latency_seconds', 0.95); return v == null ? null : v * 1000 })(),
+      state_refresh_avg_ms: (() => { const v = histAvg(m, 'arb_state_refresh_seconds'); return v == null ? null : v * 1000 })(),
+      pending_to_eval_p50_ms: (() => { const v = histP(m, 'arb_pending_to_eval_seconds', 0.5); return v == null ? null : v * 1000 })(),
+      pending_to_submit_p95_ms: (() => { const v = histP(m, 'arb_pending_to_submit_seconds', 0.95); return v == null ? null : v * 1000 })(),
+      leader_observe_p99_us: (() => { const v = histP(m, 'arb_leader_observe_seconds', 0.99); return v == null ? null : v * 1e6 })(),
+      // Counter registers lazily on first drop — absent means zero drops.
+      leader_queue_dropped: (() => {
+        for (const [k, v] of Object.entries(m))
+          if (k.startsWith('arb_leader_queue_dropped_total')) return v
+        return 0
+      })(),
+      current_block: m['arb_current_block'] ?? null,
+    }
+  }
+  res.json(out)
+})
+
 // Rolling profit history — the UI's "last 24h" mode needs a baseline from
 // 24h ago, which Prometheus counters can't express (they're cumulative).
 // Sampled in the background so the window builds even when nobody is

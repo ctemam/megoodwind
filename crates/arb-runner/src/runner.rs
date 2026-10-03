@@ -1612,6 +1612,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             }
             if candidate_ids.is_empty() { continue; }
             metrics::BACKRUN_CANDIDATES.inc();
+            // Phase-1 latency budget: how long from seeing the victim to
+            // starting candidate evaluation — this is the race window.
+            metrics::PENDING_TO_EVAL.observe(pending.seen_at.elapsed().as_secs_f64());
 
             {
                 // Rank candidates by cheap single-point profit so the 20
@@ -1752,6 +1755,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 let sub_results = router
                                     .submit_all(&bundle, false, scan_start.elapsed())
                                     .await;
+                                metrics::PENDING_TO_SUBMIT
+                                    .observe(pending.seen_at.elapsed().as_secs_f64());
                                 if sub_results.is_empty() && bundle.victim_tx.is_some() {
                                     metrics::BACKRUN_NO_VENUE.inc();
                                     warn!(

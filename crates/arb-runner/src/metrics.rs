@@ -72,6 +72,21 @@ lazy_static::lazy_static! {
         vec![0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5]
     ).unwrap();
 
+    /// Phase-1 latency budget: pending-swap receipt → first candidate
+    /// evaluation, and pending receipt → bundle submit. These are the two
+    /// numbers that decide whether we win the same-block backrun race.
+    pub static ref PENDING_TO_EVAL: Histogram = register_histogram!(
+        "arb_pending_to_eval_seconds",
+        "Pending-swap receive to candidate evaluation latency in seconds",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    ).unwrap();
+
+    pub static ref PENDING_TO_SUBMIT: Histogram = register_histogram!(
+        "arb_pending_to_submit_seconds",
+        "Pending-swap receive to backrun bundle submit latency in seconds",
+        vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+    ).unwrap();
+
     pub static ref CURRENT_BLOCK: Gauge = register_gauge!(
         "arb_current_block",
         "Latest block number processed"

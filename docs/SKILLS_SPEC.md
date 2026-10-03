@@ -1,45 +1,52 @@
-Here is the updated Product Specification Matrix and Skill Ingestion Blueprint for allbrightA.
-This guide outlines the precise engineering competencies your Windsurf Builder Agent must look up and ingest from technical documentation repositories to prevent any architectural drift and complete the engine.
-------------------------------
-## Core Specifications & Benchmark Scoring Matrix
+# Skill Matrix — allbrightA (current architecture)
 
-| Architectural Vector | Proposed allbrightA Spec | Elite-Grade MEV Standard | Target Score | Engineering Guardrails & Drift Prevention |
-|---|---|---|---|---|
-| Core Processing Latency | Local stack-allocated loop running sub-5 microseconds (<5μs) | Proprietary FPGA / custom C++ pipeline executing at sub-1 microsecond (<1μs) | 90% | No Dynamic Vectors: Agent must strictly use primitive static arrays. Zero heap allocation (Vec, HashMap) allowed in the main calculation cycle. |
-| Gas Optimization Cost | 100% Gasless Mode utilizing Pimlico Account Abstraction Paymaster sponsorship | Custom optimized Assembly (Yul) smart contract gas-packing algorithms | 100% | Zero Native Inventory: The bot must never require native ETH/BNB token balances to execute bundles. Gas bidding must skew high to guarantee priority placement. |
-| Liquidity Sourcing Efficiency | 0% Borrow Overhead routing via Balancer Vault, DODO, and Uniswap v4 Hooks | Custom private liquidity provider credit lines + flash minting protocols | 90% | Fee Lock Elimination: The routing matrix must immediately reject paths routing through traditional lenders charging >0.03% unless the spread is >1.5%. |
-| Network Architecture Resiliency | Dynamic 200+ Public RPC pool split (180 Reads / 20 Writes) | Co-located private validator RPC nodes directly inside mining pools | 100% | Load Balancing Safety: Agent must keep read pipelines isolated from execution pipelines to prevent RPC connection chokepoints. |
-| Node Failure Recovery Time | Automated round-robin hot-swap failing nodes in under 10 milliseconds (<10ms) | Hardwired kernel network card failover switching loops under 1 millisecond (<1ms) | 95% | Instant Failover: If an RPC node returns a 429 Rate Limit or timeout, it must be blacklisted instantly for 60 seconds without pausing execution cycles. |
+This file is the lead-architect skill matrix for the *implemented* system —
+the multi-crate Alloy/Tokio engine under `crates/`, not the single-file
+prototype previously described here. Review cadence: refresh after any
+architecture change; label sources per the governance rules below.
 
-------------------------------
-## Skill Acquisition & Ingestion Matrix for the Agent
-Instruct your Windsurf Agent to index, pull, and ingest documentation from the following specific reference authorities to build each subsystem correctly:
+## Lead-architect capability requirements
 
-| Core Skill Needed | Target Subsystem Impact | Authoritative Reference Sources to Ingest |
+| capability | depth | reason |
 |---|---|---|
-| Low-Latency Rust Core Optimization | Keeping computation execution under the strict sub-5μs barrier by avoiding allocation penalties. | 1. The Rust Performance Book (Section: The Heap vs. The Stack / Avoid Allocations) 2. Rust std::hint::black_box Documentation 3. bytemuck Crate Reference Manual (Zero-copy data casting) |
-| ERC-4337 Account Abstraction | Packaging UserOperations and formatting gasless sponsorship loops via Paymasters. | 1. Pimlico Developer Docs (Guides: Sponsoring Gasless Transactions via API / Bundlers) 2. ERC-4337 Standard Specification (Ethers.js / Rust structures for UserOperation) |
-| Zero-Fee Protocol Architecture | Hooking smart contracts directly into uncollateralized 0%-fee flash loan callbacks. | 1. Balancer V2/V3 Developer Reference (Section: Flash Loans / Vault Subsystem) 2. DODO Core Documentation (Section: Flash Loans / IDODOFlashLoan Callback) 3. Uniswap v4 Core Docs (Section: Transient Storage tstore / Flash Accounting Hooks) |
-| EVM Concurrent Network Streams | Managing a split array of 200+ multi-chain public RPC endpoints without creating network IO deadlocks. | 1. Tokio Async Architecture Guides (Section: Concurrent Task Spawning / tokio::select! / Channel Buffering) 2. Alloy / Ethers-RS Provider Documentation (Section: Dynamic Failover WS Providers) |
-| Background Daemon Stability | Maintaining persistent execution, port listening, and structured logging in a headless local environment. | 1. PM2 Process File Guide (Section: Ecosystem JSON Configuration / Environment Overrides / Clustering) |
+| EVM execution and transaction ordering | Expert | nonce, receipts, reorgs, gas, private orderflow, inclusion |
+| MEV/searcher architecture | Expert | backruns, bundles, builder simulation, private channels, competition |
+| AMM mathematics | Expert | V2 reserves, V3 ticks/liquidity, fee tiers, stable pools, DODO, Curve/Wombat |
+| Rust performance | Expert | allocation control, profiling, cache behavior, lock contention, latency budgets |
+| Tokio/concurrency | Expert | non-blocking channels, backpressure, cancellation, bounded workers, failover |
+| RPC/node operations | Expert | WSS ingestion, HTTP reads, rate limits, endpoint disagreement, block consistency |
+| Solidity/EVM security | Expert | approvals, callbacks, token taxes, honeypots, reentrancy, access control |
+| Private submission systems | Strong | venue routing, builder rejection, replacement, signing, inclusion measurement |
+| Quantitative research | Strong | P&L attribution, confidence, sample size, counter resets, experiment design |
+| Data engineering | Strong | cursors, replay datasets, schema versions, retention, reproducibility |
+| SRE/observability | Strong | Prometheus semantics, histograms, alerting, PM2, rollback, incident response |
+| Product/dashboard contracts | Strong | one canonical metric definition across API, UI and runner |
+| Governance/risk | Expert | promotion gates, notional limits, expiry, kill switches, auditability |
 
-------------------------------
-## Implementation Guardrails Execution Command
-To ensure the agent reads the documentation correctly and does not break performance invariants during active development, enforce this execution rule as its terminal confirmation step:
+## Skill → subsystem → sources matrix
 
-# Force the agent to test compile-time code alignment against local host architecture optimizations
-RUSTFLAGS="-C target-cpu=native" cargo test --release --manifest-path ./allbrightA/Cargo.toml
+| core skill | subsystem impact | authoritative sources (status) |
+|---|---|---|
+| EVM execution & ordering | `arb-runner` block loop, nonce/finality | Ethereum Yellow Paper `[recommended]` · Ethereum JSON-RPC spec `[recommended]` · EIP-1559 `[recommended]` |
+| Account abstraction | `arb-submit` Pimlico/UserOp venue | EIP-4337 `[verified — deployed gaslessly via UserOp]` · Pimlico docs `[verified — working sponsored UserOps]` |
+| AMM math | `arb-core` quote kernels, `arb-sim` | Uniswap V2 protocol overview `[verified]` · Uniswap V3 concentrated liquidity + IUniswapV3PoolState `[verified]` · DODO flash-loan docs `[recommended]` · Balancer flash-loan docs `[recommended]` |
+| Low-latency Rust | `arb-sim` hot loops, `arb-state` DashMap store | Rust Performance Book `[recommended]` |
+| Tokio/concurrency | `arb-mempool` WSS watcher, `arb-runner` pipelines, `arb-leaders` async writer | Tokio tutorial `[verified — bounded channels + try_send implemented]` |
+| RPC operations | `arb-rpc` endpoint pool, `arb-state` refresher | Ethereum JSON-RPC `[verified]` |
+| Solidity/EVM security | `contracts/` BscFlashArb, provenance gate | Solidity security considerations `[recommended]` |
+| MEV architecture | `arb-submit` venue router, bundle construction | Flashbots docs `[recommended]` · Flashbots research `[recommended]` · Flash Boys 2.0 (arXiv:1904.05234) `[recommended]` |
+| Observability | `arb-runner` Prometheus surface, dashboard | Prometheus metric types `[verified]` · Prometheus naming practices `[verified]` |
+| Process ops | PM2 deployment, log rotation | PM2 quick-start `[recommended]` |
 
-Would you like me to generate a pre-configured reading prompt that you can feed into Windsurf to force it to crawl and parse these documentation URLs before it begins editing the code?
+Source status labels (per governance): `[verified]` = read and applied in
+this repository with repo evidence; `[recommended]` = authoritative source
+queued for review; `[assumption]`/`[unknown]` must never describe production
+behavior. URLs are tracked in `docs/research/SOURCES.md` with review dates.
 
-
-------------------------------
 ## Continuous Research and Skill Maintenance
 
 Every agent task keeps skills at industry cutting edge: before executing a
-Commander command, perform rapid research on industry practice for the subject
-(see `AGENTS_SPEC.md` → Commander Directive), present findings as concise
-bullets, and fold reusable results back into this document's matrices.
+Commander command, perform rapid research on industry practice for the subject.
 
 Source quality order:
 
@@ -58,3 +65,44 @@ Rules:
 - Substantial research results are filed under `docs/research/YYYY-MM-DD-<topic>.md`
   with sources, findings, decision, implementation impact, and verification.
 - Never record a practice as industry-standard without a checked source.
+
+## Commander Directive: Rapid Industry Research Before Action
+
+Whenever the Commander issues a command, the responsible agent or lead
+architect MUST perform a concise, professional rapid-research pass before
+answering or executing.
+
+The research pass MUST:
+
+- Identify current industry-standard practices relevant to the command.
+- Prefer authoritative sources: official standards, vendor documentation,
+  primary technical papers, and maintained project documentation.
+- Distinguish verified facts, repository evidence, assumptions, and unknowns.
+- Identify applicable risks, constraints, and alternatives.
+- Produce concise bullet-point findings before proposing execution.
+- Update the relevant skills/knowledge documentation when the research reveals
+  a reusable practice, changed standard, or implementation lesson.
+- Avoid delaying urgent safety, incident-response, or rollback actions; in those
+  cases, stabilize first and research immediately afterward.
+- Never claim research was performed when sources were not checked.
+
+Required response structure:
+
+1. **Research findings**
+2. **Repository impact**
+3. **Recommended decision**
+4. **Implementation plan**
+5. **Verification and rollback**
+
+External research is required wherever it can affect architecture, security,
+production operations, financial risk, compliance, or a new technology choice;
+routine commands need only a repository-evidence pass.
+
+## Historical note
+
+This file previously described a single-file `src/main.rs` prototype
+(ethers-rs, mock RPC, sub-5µs static-array claims). That prototype does not
+exist in this repository — the production engine is the workspace under
+`crates/` described in `docs/AGENTS_SPEC.md`. Prototype-era constants
+(`TARGET_MATH_LATENCY_MICROS = 5`, `RPC_MAX_LATENCY_MS = 10`) were aspirational
+and are superseded by the measured latency budgets in AGENTS_SPEC §Invariants.

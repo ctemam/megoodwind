@@ -13,8 +13,8 @@ use alloy_primitives::{Address, B256, U256};
 use arb_mempool::watcher::PendingSwap;
 use lazy_static::lazy_static;
 use prometheus::{
-    register_counter_vec, register_int_counter_vec, register_int_gauge_vec, CounterVec,
-    IntCounterVec, IntGaugeVec,
+    register_counter_vec, register_histogram_vec, register_int_counter_vec,
+    register_int_gauge_vec, CounterVec, HistogramVec, IntCounterVec, IntGaugeVec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,6 +58,16 @@ lazy_static! {
         "arb_leader_observe_us_total",
         "Total microseconds spent persisting leader observations",
         &["chain"]
+    )
+    .unwrap();
+    /// Per-observation enqueue latency — the Phase-1 observer budget is
+    /// p50 <100µs / p95 <500µs / p99 <2ms, so this histogram is what proves
+    /// the async writer keeps intelligence off the execution path.
+    pub static ref LEADER_OBSERVE_SECS: HistogramVec = register_histogram_vec!(
+        "arb_leader_observe_seconds",
+        "Leader observation enqueue latency in seconds",
+        &["chain"],
+        vec![0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.002, 0.005]
     )
     .unwrap();
     /// Wallets auto-promoted into the registry by real-time discovery.
@@ -451,6 +461,28 @@ impl LeaderObserver {
         Self { registry, discoverer, writer_tx, depth, chain }
     }
 
+    /// Test-only constructor: inject queue capacity and hand the receiver to
+    /// the caller so tests can hold the queue undrained (saturation) or drop
+    /// it (disconnection) — the two non-blocking failure modes.
+    #[cfg(test)]
+    fn new_with_queue(
+        registry: LeaderRegistry,
+        chain: &str,
+        cap: usize,
+    ) -> (Self, mpsc::Receiver<WriterJob>) {
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterJob>(cap);
+        (
+            Self {
+                registry: std::sync::Arc::new(registry),
+                discoverer: None,
+                writer_tx,
+                depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                chain: chain.to_string(),
+            },
+            writer_rx,
+        )
+    }
+
     /// Flush + stop the writer thread (tests and clean shutdown).
     pub fn shutdown_writer(&self) {
         let _ = self.writer_tx.try_send(WriterJob::Shutdown);
@@ -546,9 +578,13 @@ impl LeaderObserver {
                 LEADER_WRITE_ERRORS.with_label_values(&[&self.chain]).inc();
             }
         }
+        let elapsed = t0.elapsed();
         LEADER_OBSERVE_US
             .with_label_values(&[&self.chain])
-            .inc_by(t0.elapsed().as_micros() as f64);
+            .inc_by(elapsed.as_micros() as f64);
+        LEADER_OBSERVE_SECS
+            .with_label_values(&[&self.chain])
+            .observe(elapsed.as_secs_f64());
     }
 }
 
@@ -1261,5 +1297,71 @@ mod tests {
 
         std::env::set_current_dir(cwd).unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn pending_for(addr: alloy_primitives::Address) -> PendingSwap {
+        PendingSwap {
+            tx_hash: B256::ZERO,
+            from: addr,
+            to: address!("5555555555555555555555555555555555555555"),
+            value: U256::ZERO,
+            decoded: DecodedSwap {
+                router: "uniswap_v2_router",
+                token_in: None,
+                token_out: None,
+                amount_in: Some(U256::from(1000u64)),
+                path: vec![address!("6666666666666666666666666666666666666666")],
+                first_hop_fee: None,
+                hop_fees: vec![],
+                direct: None,
+                pools_touched: vec![],
+            },
+            raw_input: vec![1, 2, 3],
+            raw_tx: vec![4, 5],
+            seen_at: std::time::Instant::now(),
+        }
+    }
+
+    #[test]
+    fn queue_saturation_drops_without_blocking() {
+        // Phase-4: a saturated writer queue must drop observations — never
+        // block the execution path — and count each drop.
+        let chain = "TSTSAT";
+        let cfg = cfg_one("0x4444444444444444444444444444444444444444");
+        let (obs, _rx_held_undrained) =
+            LeaderObserver::new_with_queue(LeaderRegistry::new(&cfg), chain, 2);
+        let pending =
+            pending_for(address!("4444444444444444444444444444444444444444"));
+        let before = LEADER_QUEUE_DROPPED.with_label_values(&[chain]).get();
+        let t0 = std::time::Instant::now();
+        for _ in 0..6 {
+            obs.observe(&pending);
+        }
+        let elapsed = t0.elapsed();
+        let after = LEADER_QUEUE_DROPPED.with_label_values(&[chain]).get();
+        // 6 observations into a cap-2 queue: ≥4 drops, counted — and the
+        // loop returning at all proves observe never blocks.
+        assert!(after - before >= 4, "expected ≥4 drops, got {}", after - before);
+        assert!(
+            elapsed.as_millis() < 500,
+            "observe blocked for {:?} under queue saturation",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn disconnected_writer_errors_without_blocking() {
+        // Phase-4: a dead writer must surface as counted errors, not a stall.
+        let chain = "TSTDIS";
+        let cfg = cfg_one("0x4444444444444444444444444444444444444444");
+        let (obs, rx) =
+            LeaderObserver::new_with_queue(LeaderRegistry::new(&cfg), chain, 2);
+        drop(rx); // simulate writer thread death
+        let pending =
+            pending_for(address!("4444444444444444444444444444444444444444"));
+        let before = LEADER_WRITE_ERRORS.with_label_values(&[chain]).get();
+        obs.observe(&pending);
+        let after = LEADER_WRITE_ERRORS.with_label_values(&[chain]).get();
+        assert!(after > before, "disconnected writer not counted as error");
     }
 }
