@@ -65,6 +65,13 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize)]
 pub struct WalletConfig {
     pub private_key_env: String,
+    /// Optional signer rotation pool (stealth L1): env var names holding
+    /// additional EOA keys. When set, submit calls round-robin across all
+    /// signers so no single address fingerprints the operation. Each EOA
+    /// must be funded independently — shared funding sources defeat the
+    /// rotation (see docs/research/STEALTH_OPSEC.md L0).
+    #[serde(default)]
+    pub private_key_envs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

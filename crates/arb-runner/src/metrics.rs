@@ -92,6 +92,11 @@ lazy_static::lazy_static! {
         "Paths suppressed by circuit breaker"
     ).unwrap();
 
+    pub static ref BAIT_SUSPECT: Counter = register_counter!(
+        "arb_bait_suspect_total",
+        "Pools suppressed by bait telemetry (repeated gate-pass-then-revert signature)"
+    ).unwrap();
+
     pub static ref BUILDER_SIM_REJECT: Counter = register_counter!(
         "arb_builder_sim_reject_total",
         "Builder simulation rejections (pre-revert signal)"

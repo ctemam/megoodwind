@@ -391,6 +391,10 @@ struct TokenCircuitBreaker {
     suppression_blocks: u64,
     blacklist: HashSet<Address>,
     popular_intermediaries: HashSet<Address>,
+    /// Bait telemetry (stealth L4): pools repeatedly present in paths that
+    /// gate-pass then revert on exec-probe/submit are griefing or honeypot
+    /// signatures — flagged pools suppress candidate paths like tokens.
+    pool_stats: HashMap<Address, TokenBreakerStats>,
 }
 
 struct TokenBreakerStats {
@@ -407,6 +411,7 @@ impl TokenCircuitBreaker {
             suppression_blocks,
             blacklist: HashSet::new(),
             popular_intermediaries: HashSet::new(),
+            pool_stats: HashMap::new(),
         }
     }
 
@@ -442,15 +447,41 @@ impl TokenCircuitBreaker {
         }
     }
 
+    fn is_pool_bait_flagged(&self, pool: Address, current_block: u64) -> bool {
+        self.pool_stats
+            .get(&pool)
+            .map_or(false, |s| current_block < s.suppressed_until_block)
+    }
+
     fn is_path_token_suppressed(&self, path: &PathTemplate, current_block: u64) -> bool {
         path.hops.iter().any(|hop| {
             self.is_token_suppressed(hop.token_in, current_block)
                 || self.is_token_suppressed(hop.token_out, current_block)
+                || self.is_pool_bait_flagged(hop.pool, current_block)
         })
     }
 
     fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
         for hop in &path.hops {
+            // Pool-level bait accounting: same decay/threshold as tokens.
+            {
+                let s = self.pool_stats.entry(hop.pool).or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+                if block > s.last_revert_block + 200 {
+                    s.consecutive_reverts = 0;
+                }
+                s.consecutive_reverts += 1;
+                s.last_revert_block = block;
+                if s.consecutive_reverts >= self.revert_threshold {
+                    s.suppressed_until_block = block + self.suppression_blocks;
+                    metrics::BAIT_SUSPECT.inc();
+                    warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
+                        "Bait-suspect pool suppressed — repeated gate-pass-then-revert signature");
+                }
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if token == path.flash_token || self.popular_intermediaries.contains(&token) {
                     continue;
@@ -476,6 +507,10 @@ impl TokenCircuitBreaker {
 
     fn record_success_for_path(&mut self, path: &PathTemplate) {
         for hop in &path.hops {
+            if let Some(s) = self.pool_stats.get_mut(&hop.pool) {
+                s.consecutive_reverts = 0;
+                s.suppressed_until_block = 0;
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if let Some(s) = self.stats.get_mut(&token) {
                     s.consecutive_reverts = 0;
@@ -595,8 +630,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let pk_env = &cfg.wallet.private_key_env;
     let private_key = std::env::var(pk_env)
         .map_err(|_| anyhow::anyhow!("Missing env var {pk_env}"))?;
-    let signer: PrivateKeySigner = private_key.parse()?;
-    info!(address = %signer.address(), "Wallet loaded");
+    let mut signers: Vec<PrivateKeySigner> = vec![private_key.parse()?];
+    if let Some(extra) = &cfg.wallet.private_key_envs {
+        for env_name in extra {
+            let Ok(pk) = std::env::var(env_name) else {
+                warn!(env = %env_name, "signer rotation: env var unset — skipped");
+                continue;
+            };
+            match pk.parse::<PrivateKeySigner>() {
+                Ok(s) => signers.push(s),
+                Err(e) => warn!(env = %env_name, error = %e, "signer rotation: bad key — skipped"),
+            }
+        }
+    }
+    let signer: PrivateKeySigner = signers[0].clone();
+    let signer_rot = std::sync::atomic::AtomicUsize::new(0);
+    if signers.len() > 1 {
+        info!(n = signers.len(), "Signer rotation pool loaded — submit calls round-robin EOAs");
+    } else {
+        info!(address = %signer.address(), "Wallet loaded");
+    }
 
     let trader_url = cfg.chain.trader_rpc.as_deref();
     let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
@@ -1223,8 +1276,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     let optimized_path = &paths[best_path_idx];
 
                     let target_block = block_number + 3;
+                    let submit_signer = &signers[signer_rot
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        % signers.len()];
                     match presign_pool.build_fast(
-                        best.path_id, best.flash_amount, &endpoint, arb_contract, &signer, target_block,
+                        best.path_id, best.flash_amount, &endpoint, arb_contract, submit_signer, target_block,
                     ).await {
                         Ok(bundle) => {
                             // On-chain exec probe: simulate the exact
@@ -1449,9 +1505,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     // if a policy is set, sign it, and log the wire JSON.
                     if let Some(pimlico) = &pimlico_venue {
                         let target_block = block_number + 3;
+                        let submit_signer = &signers[signer_rot
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                            % signers.len()];
                         match presign_pool
                             .build_fast(best.path_id, best.flash_amount, &endpoint,
-                                arb_contract, &signer, target_block)
+                                arb_contract, submit_signer, target_block)
                             .await
                         {
                             Ok(bundle) => match pimlico.preview(&bundle).await {
@@ -1612,8 +1671,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             // signed bytes are available — bundle venues prepend
                             // them and our tx lands immediately after the victim.
                             let target_block = block_number + 1;
+                            let submit_signer = &signers[signer_rot
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                % signers.len()];
                             if let Ok(mut bundle) = presign_pool.build_fast(
-                                path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
+                                path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
                             ).await {
                                 if !pending.raw_tx.is_empty() {
                                     bundle.victim_tx = Some(pending.raw_tx.clone());
