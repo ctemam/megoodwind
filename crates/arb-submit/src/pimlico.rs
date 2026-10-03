@@ -29,12 +29,9 @@ pub struct PimlicoConfig {
     pub entry_point: Address,
     pub account_factory: Address,
     pub salt: U256,
-    /// Pimlico sponsorship policy id (sp_...). None = no sponsorship.
+    /// Pimlico sponsorship policy id (sp_...). None = no sponsorship —
+    /// ops are rejected, never self-funded.
     pub sponsor_policy_id: Option<String>,
-    /// Gasless-only rule: when false, ops that cannot be sponsored are
-    /// rejected instead of falling back to a self-funded UserOperation.
-    /// `ALLBRIGHTA_SELF_FUNDED_FALLBACK=true` re-enables the fallback.
-    pub self_funded_fallback: bool,
 }
 
 impl PimlicoConfig {
@@ -48,9 +45,6 @@ impl PimlicoConfig {
         let sponsor_policy_id = sponsor_policy_id_env
             .and_then(|env| std::env::var(env).ok())
             .filter(|v| !v.is_empty());
-        let self_funded_fallback = std::env::var("ALLBRIGHTA_SELF_FUNDED_FALLBACK")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
         Ok(Self {
             bundler_url: bundler_url.to_string(),
             entry_point: Address::from_str(entry_point.unwrap_or(ENTRY_POINT_V06))
@@ -59,7 +53,6 @@ impl PimlicoConfig {
                 .context("invalid account_factory address")?,
             salt: U256::from(salt),
             sponsor_policy_id,
-            self_funded_fallback,
         })
     }
 }
@@ -108,28 +101,52 @@ impl PimlicoClient {
     }
 
     /// `pm_sponsorUserOperation` (v0.6): returns paymasterAndData + gas fields.
+    /// Errors come back classified as `SponsorReject` so callers can label
+    /// metrics and distinguish transient transport faults from policy rejects.
     pub async fn sponsor(
         &self,
         op_json: &serde_json::Value,
         entry_point: Address,
         policy_id: &str,
-    ) -> Result<(Bytes, UserOpGas)> {
-        let res = self
-            .rpc(
-                "pm_sponsorUserOperation",
-                json!([op_json, format!("{:#x}", entry_point), { "sponsorshipPolicyId": policy_id }]),
-            )
-            .await?;
+    ) -> std::result::Result<(Bytes, UserOpGas), SponsorReject> {
+        let payload = json!({
+            "jsonrpc": "2.0", "id": 1,
+            "method": "pm_sponsorUserOperation",
+            "params": [op_json, format!("{:#x}", entry_point), { "sponsorshipPolicyId": policy_id }],
+        });
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| SponsorReject::transport(format!("paymaster unreachable: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(SponsorReject::transport(format!("paymaster HTTP {}", resp.status())));
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SponsorReject::transport(format!("paymaster bad JSON: {e}")))?;
+        if let Some(err) = body.get("error") {
+            return Err(SponsorReject::classify(err.to_string()));
+        }
+        let res = body.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        let res = (|| -> Result<serde_json::Value> { Ok(res) })()
+            .map_err(|e: anyhow::Error| SponsorReject::permanent("bad_response", format!("{e}")))?;
         let pmd_hex = res["paymasterAndData"].as_str().unwrap_or("0x").to_string();
-        let paymaster_and_data = Bytes::from_str(&pmd_hex).context("bad paymasterAndData")?;
-        let gas = UserOpGas {
-            call_gas_limit: Self::parse_u256(&res["callGasLimit"])?,
-            verification_gas_limit: Self::parse_u256(&res["verificationGasLimit"])?,
-            pre_verification_gas: Self::parse_u256(&res["preVerificationGas"])?,
-            max_fee_per_gas: Self::parse_u256(&res["maxFeePerGas"])?,
-            max_priority_fee_per_gas: Self::parse_u256(&res["maxPriorityFeePerGas"])?,
+        let parse = || -> Result<(Bytes, UserOpGas)> {
+            let paymaster_and_data = Bytes::from_str(&pmd_hex).context("bad paymasterAndData")?;
+            let gas = UserOpGas {
+                call_gas_limit: Self::parse_u256(&res["callGasLimit"])?,
+                verification_gas_limit: Self::parse_u256(&res["verificationGasLimit"])?,
+                pre_verification_gas: Self::parse_u256(&res["preVerificationGas"])?,
+                max_fee_per_gas: Self::parse_u256(&res["maxFeePerGas"])?,
+                max_priority_fee_per_gas: Self::parse_u256(&res["maxPriorityFeePerGas"])?,
+            };
+            Ok((paymaster_and_data, gas))
         };
-        Ok((paymaster_and_data, gas))
+        parse().map_err(|e: anyhow::Error| SponsorReject::permanent("bad_response", format!("{e}")))
     }
 
     /// `eth_sendUserOperation` → userOpHash.
@@ -148,6 +165,63 @@ impl PimlicoClient {
             .map(String::from)
             .context("eth_sendUserOperation returned no userOpHash")
     }
+}
+
+/// Classified sponsorship failure. `reason` is a stable label for metrics;
+/// `transient` marks transport faults worth retrying next block.
+#[derive(Debug)]
+pub struct SponsorReject {
+    pub reason: &'static str,
+    pub transient: bool,
+    pub detail: String,
+}
+
+impl SponsorReject {
+    fn permanent(reason: &'static str, detail: String) -> Self {
+        Self { reason, transient: false, detail }
+    }
+    fn transport(detail: String) -> Self {
+        Self { reason: "transport", transient: true, detail }
+    }
+    /// Map a paymaster JSON-RPC error body to a stable reason label.
+    fn classify(err: String) -> Self {
+        let s = err.to_lowercase();
+        let (reason, transient) = if s.contains("quota") || s.contains("spend")
+            || s.contains("limit") || s.contains("exceeded") || s.contains("cap")
+        {
+            ("quota_exhausted", false)
+        } else if s.contains("insufficient") || s.contains("balance") || s.contains("deposit") {
+            ("paymaster_balance", false)
+        } else if s.contains("not found") || s.contains("does not exist")
+            || s.contains("unknown") || s.contains("invalid") || s.contains("disabled")
+        {
+            ("policy_invalid", false)
+        } else if s.contains("allowlist") || s.contains("chain") || s.contains("sender")
+            || s.contains("policy") || s.contains("denied") || s.contains("forbidden")
+        {
+            ("policy_rejected", false)
+        } else if s.contains("timeout") || s.contains("rate limit") || s.contains("429")
+            || s.contains("503") || s.contains("internal")
+        {
+            ("transport", true)
+        } else {
+            ("rejected", false)
+        };
+        Self { reason, transient, detail: err }
+    }
+}
+
+impl std::fmt::Display for SponsorReject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sponsorship {}: {}", self.reason, self.detail)
+    }
+}
+impl std::error::Error for SponsorReject {}
+
+/// Extract the stable reason label from an error chain, if the failure was
+/// a classified sponsorship rejection.
+pub fn sponsorship_reject_reason(err: &anyhow::Error) -> Option<&'static str> {
+    err.downcast_ref::<SponsorReject>().map(|r| r.reason)
 }
 
 /// `Submitter` implementation: wraps each candidate call into a sponsored
@@ -209,20 +283,22 @@ impl PimlicoSubmitter {
                     gas = sponsored_gas;
                     paymaster_and_data = pmd;
                 }
-                Err(e) => {
+                Err(reject) => {
                     // Gasless-only rule: a sponsorship rejection rejects the
-                    // operation — no silent self-funded submission unless the
-                    // operator explicitly re-enables the fallback.
-                    if !self.cfg.self_funded_fallback {
-                        anyhow::bail!("pm_sponsorUserOperation rejected and self-funded fallback disabled: {e}");
+                    // operation. There is no funded-wallet fallback.
+                    if reject.transient {
+                        warn!(reason = reject.reason, error = %reject, "sponsorship transiently unavailable — op rejected");
+                    } else {
+                        warn!(reason = reject.reason, error = %reject, "sponsorship rejected — op rejected (fix policy/budget)");
                     }
-                    warn!(error = %e, "pm_sponsorUserOperation failed — falling back to self-funded op");
+                    return Err(anyhow::Error::new(reject));
                 }
             }
-        } else if !self.cfg.self_funded_fallback {
-            anyhow::bail!(
-                "gasless mode: no sponsor policy configured (ALLBRIGHTA_SPONSOR_POLICY_ID) and self-funded fallback disabled"
-            );
+        } else {
+            return Err(anyhow::Error::new(SponsorReject::permanent(
+                "no_policy",
+                "gasless mode: ALLBRIGHTA_SPONSOR_POLICY_ID not set — op rejected, no funded-wallet fallback".to_string(),
+            )));
         }
 
         let mut op = unsigned;
@@ -241,6 +317,17 @@ impl PimlicoSubmitter {
         }
 
         self.assembler.sign(&op).await
+    }
+
+    /// Boot-time reachability probe — a paymaster that can't answer gas
+    /// prices will fail every sponsorship request.
+    pub async fn paymaster_reachable(&self) -> bool {
+        self.client.gas_price().await.is_ok()
+    }
+
+    /// Whether a sponsorship policy is configured.
+    pub fn sponsored(&self) -> bool {
+        self.cfg.sponsor_policy_id.is_some()
     }
 
     /// Assemble + sign and return the wire JSON — no send. Used for dry runs.

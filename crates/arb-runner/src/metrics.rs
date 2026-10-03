@@ -97,6 +97,12 @@ lazy_static::lazy_static! {
         "Builder simulation rejections (pre-revert signal)"
     ).unwrap();
 
+    pub static ref SPONSORSHIP_REJECTS: CounterVec = register_counter_vec!(
+        "arb_sponsorship_rejects_total",
+        "Sponsored UserOperation rejections by reason (gasless mode)",
+        &["reason"]
+    ).unwrap();
+
     pub static ref BACKRUN_CANDIDATES: Counter = register_counter!(
         "arb_backrun_candidates_total",
         "Pending swaps matched for backrun evaluation"

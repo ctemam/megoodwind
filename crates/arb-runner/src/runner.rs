@@ -603,9 +603,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             signer.clone(),
                             cfg.chain.chain_id,
                         );
+                        let reachable = venue.paymaster_reachable().await;
+                        if reachable {
+                            info!(sponsored, "Pimlico ERC-4337 gasless venue configured — paymaster reachable");
+                        } else {
+                            warn!("Pimlico paymaster UNREACHABLE at boot — sponsorship will fail; ops rejected, no fallback");
+                        }
+                        if !sponsored {
+                            warn!("No sponsor policy (ALLBRIGHTA_SPONSOR_POLICY_ID) — every op will be rejected in gasless mode");
+                        }
                         pimlico_venue = Some(venue.clone());
                         submitters.push(Box::new(venue));
-                        info!(sponsored, "Pimlico ERC-4337 gasless venue configured");
                     }
                     Err(e) => warn!(error = %e, "Pimlico venue misconfigured — disabled"),
                 }
@@ -890,7 +898,19 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         }
                                         debug!(venue, error = ?r.error, "Rejected");
                                     }
-                                    Err(e) => warn!(venue, error = %e, "Error"),
+                                    Err(e) => {
+                                        if let Some(reason) =
+                                            arb_submit::pimlico::sponsorship_reject_reason(&e)
+                                        {
+                                            metrics::SPONSORSHIP_REJECTS
+                                                .with_label_values(&[reason])
+                                                .inc();
+                                            warn!(venue, reason, error = %e,
+                                                "Sponsorship blocked — op rejected, no funded-wallet fallback");
+                                        } else {
+                                            warn!(venue, error = %e, "Error");
+                                        }
+                                    }
                                 }
                             }
 

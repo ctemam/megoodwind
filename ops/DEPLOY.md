@@ -48,11 +48,13 @@ Already wired: `sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"` in
 both TOMLs. Create an `sp_…` policy in the Pimlico dashboard (allowlist
 chains 56 + 8453, set a spend cap), set it in `.env`, restart.
 
-**Sponsorship is mandatory in gasless mode.** If the paymaster policy is
-unavailable or rejects the UserOperation, the operation is rejected — no
-self-funded fallback is permitted (`ALLBRIGHTA_SELF_FUNDED_FALLBACK=true`
-re-enables it for emergencies). User wallet funding is never required;
-the operator's sponsorship budget funds gas.
+**Sponsorship is mandatory in gasless mode — there is no funded-wallet
+fallback.** If the paymaster policy is unavailable or rejects the
+UserOperation, the operation is rejected and classified by reason
+(`arb_sponsorship_rejects_total{reason}`): `no_policy`, `policy_invalid`,
+`policy_rejected`, `quota_exhausted`, `paymaster_balance`, `transport`.
+User wallet funding is never required; the operator's sponsorship budget
+funds gas.
 
 ## Premium RPC keys (the 200+ node path)
 
