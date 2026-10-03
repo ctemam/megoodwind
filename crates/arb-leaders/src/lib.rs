@@ -601,6 +601,230 @@ impl LeaderDiscoverer {
     }
 }
 
+// ============================================================================
+// Strategy registry — the persistent, expiring artifact connecting outcome
+// discovery to safe execution (observe → replay → shadow → bounded_live →
+// expired). leader_scan upserts evidence every run; nothing here ever
+// executes — bounded_live stays a manual/ops transition with a notional cap.
+// ============================================================================
+
+/// Lifecycle states for an internalized leader strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyState {
+    /// Collecting outcome evidence from mined blocks.
+    Observe,
+    /// Evidence thresholds met — qualifies for P&L replay measurement.
+    Replay,
+    /// Route reproduced inside our pool graph — shadow coverage proven.
+    Shadow,
+    /// Ops-approved live deployment under max_notional_usd. Never automatic.
+    BoundedLive,
+    /// Evidence went stale or replay/execution failed — disabled.
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyRecord {
+    /// Stable id: "<wallet>/<class>".
+    pub strategy_id: String,
+    pub wallet: String,
+    pub class: String,
+    /// Route counterparties seen in the wallet's winning txs.
+    #[serde(default)]
+    pub route_pools: Vec<String>,
+    /// Executor contract most used by this wallet, if any.
+    #[serde(default)]
+    pub executor_family: String,
+    #[serde(default)]
+    pub sample_trades: u32,
+    #[serde(default)]
+    pub win_rate: f64,
+    #[serde(default)]
+    pub median_profit_usd: f64,
+    #[serde(default)]
+    pub net_pnl_usd: f64,
+    /// 0..1 — fraction of route counterparties inside our pool registry.
+    #[serde(default)]
+    pub coverage: f64,
+    #[serde(default)]
+    pub confidence: f64,
+    pub state: StrategyState,
+    #[serde(default)]
+    pub created_block: u64,
+    #[serde(default)]
+    pub last_seen_block: u64,
+    #[serde(default)]
+    pub expires_at_block: u64,
+    /// 0 = never deployable. BoundedLive requires this > 0 set by ops.
+    #[serde(default)]
+    pub max_notional_usd: f64,
+}
+
+/// Evidence thresholds promoting a wallet Observe -> Replay.
+#[derive(Debug, Clone, Copy)]
+pub struct PromoteThresholds {
+    pub min_net_usd: f64,
+    pub min_txs: u32,
+    pub min_win_rate: f64,
+}
+
+impl Default for PromoteThresholds {
+    fn default() -> Self {
+        Self { min_net_usd: 50.0, min_txs: 2, min_win_rate: 0.5 }
+    }
+}
+
+/// JSONL-backed persistent strategy store at
+/// `data/leaders/<chain>/_strategies.jsonl`.
+pub struct StrategyRegistry {
+    path: PathBuf,
+    pub records: HashMap<String, StrategyRecord>,
+    /// Blocks of inactivity before a strategy expires.
+    ttl_blocks: u64,
+}
+
+impl StrategyRegistry {
+    pub fn load(chain: &str, ttl_blocks: u64) -> Self {
+        let path = PathBuf::from(format!("data/leaders/{chain}/_strategies.jsonl"));
+        let mut records = HashMap::new();
+        if let Ok(txt) = std::fs::read_to_string(&path) {
+            for line in txt.lines() {
+                if let Ok(r) = serde_json::from_str::<StrategyRecord>(line) {
+                    records.insert(r.strategy_id.clone(), r);
+                }
+            }
+        }
+        Self { path, records, ttl_blocks }
+    }
+
+    /// Upsert outcome evidence for a wallet. Returns (transitioned_to, is_new).
+    pub fn upsert_evidence(
+        &mut self,
+        wallet: &str,
+        class: &str,
+        net_pnl_usd: f64,
+        txs: u32,
+        win_rate: f64,
+        median_profit_usd: f64,
+        executor_family: &str,
+        route_pools: Vec<String>,
+        block: u64,
+        th: &PromoteThresholds,
+    ) -> (StrategyState, bool) {
+        let id = format!("{wallet}/{class}");
+        let is_new = !self.records.contains_key(&id);
+        let r = self.records.entry(id.clone()).or_insert_with(|| StrategyRecord {
+            strategy_id: id,
+            wallet: wallet.to_string(),
+            class: class.to_string(),
+            route_pools: vec![],
+            executor_family: String::new(),
+            sample_trades: 0,
+            win_rate: 0.0,
+            median_profit_usd: 0.0,
+            net_pnl_usd: 0.0,
+            coverage: 0.0,
+            confidence: 0.0,
+            state: StrategyState::Observe,
+            created_block: block,
+            last_seen_block: block,
+            expires_at_block: block + self.ttl_blocks,
+            max_notional_usd: 0.0,
+        });
+        r.last_seen_block = block;
+        r.expires_at_block = block + self.ttl_blocks;
+        // Latest evidence wins — scans are cumulative windows.
+        r.net_pnl_usd = net_pnl_usd;
+        r.sample_trades = txs;
+        r.win_rate = win_rate;
+        r.median_profit_usd = median_profit_usd;
+        if !executor_family.is_empty() {
+            r.executor_family = executor_family.to_string();
+        }
+        if !route_pools.is_empty() {
+            r.route_pools = route_pools;
+        }
+        r.confidence = (r.sample_trades as f64 / 10.0).min(1.0)
+            * (0.5 + 0.5 * r.win_rate);
+        // Promotion: evidence thresholds move Observe -> Replay. Higher
+        // states are only ever moved by mark_coverage / ops.
+        if r.state == StrategyState::Observe
+            && r.net_pnl_usd >= th.min_net_usd
+            && r.sample_trades >= th.min_txs
+            && r.win_rate >= th.min_win_rate
+        {
+            r.state = StrategyState::Replay;
+        }
+        (r.state, is_new)
+    }
+
+    /// Shadow coverage result for a wallet's route. Replay -> Shadow when
+    /// the whole route sits inside our pool registry.
+    pub fn mark_coverage(&mut self, wallet: &str, class: &str, coverage: f64) {
+        let id = format!("{wallet}/{class}");
+        if let Some(r) = self.records.get_mut(&id) {
+            r.coverage = coverage;
+            if r.state == StrategyState::Replay && coverage >= 0.999 {
+                r.state = StrategyState::Shadow;
+            }
+        }
+    }
+
+    /// Ops-only promotion — bounded live requires an explicit notional cap.
+    pub fn approve_bounded_live(&mut self, strategy_id: &str, max_notional_usd: f64) -> bool {
+        match self.records.get_mut(strategy_id) {
+            Some(r) if r.state == StrategyState::Shadow && max_notional_usd > 0.0 => {
+                r.max_notional_usd = max_notional_usd;
+                r.state = StrategyState::BoundedLive;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Expire strategies whose evidence went stale.
+    pub fn expire_stale(&mut self, current_block: u64) -> Vec<String> {
+        let mut expired = Vec::new();
+        for r in self.records.values_mut() {
+            if r.state != StrategyState::Expired && current_block > r.expires_at_block {
+                r.state = StrategyState::Expired;
+                expired.push(r.strategy_id.clone());
+            }
+        }
+        expired
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        if let Some(dir) = self.path.parent() {
+            create_dir_all(dir)?;
+        }
+        let mut out = String::new();
+        for r in self.records.values() {
+            out.push_str(&serde_json::to_string(r).unwrap_or_default());
+            out.push('\n');
+        }
+        std::fs::write(&self.path, out)
+    }
+
+    /// Incremental scan cursor — last block scanned per chain, persisted at
+    /// `data/leaders/<chain>/_cursor.json` so each run scans only new blocks.
+    pub fn load_cursor(chain: &str) -> Option<u64> {
+        let txt = std::fs::read_to_string(format!("data/leaders/{chain}/_cursor.json")).ok()?;
+        serde_json::from_str::<serde_json::Value>(&txt).ok()?
+            .get("last_scanned_block")?.as_u64()
+    }
+
+    pub fn save_cursor(chain: &str, block: u64) -> std::io::Result<()> {
+        let dir = format!("data/leaders/{chain}");
+        create_dir_all(&dir)?;
+        std::fs::write(
+            format!("{dir}/_cursor.json"),
+            format!("{{\"last_scanned_block\":{block}}}\n"),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,6 +957,50 @@ mod tests {
         assert!(std::fs::read_to_string(&disc)
             .unwrap()
             .contains("0x8888888888888888888888888888888888888888"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn strategy_lifecycle_promote_cover_expire() {
+        let dir = std::env::temp_dir().join(format!("leaders_test_{:?}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("BSC")).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let mut reg = StrategyRegistry::load("BSC", 100);
+        let th = PromoteThresholds { min_net_usd: 50.0, min_txs: 2, min_win_rate: 0.5 };
+        // Below thresholds → stays Observe.
+        let (s, _) = reg.upsert_evidence(
+            "0xaaa", "bundle_backrunner", 30.0, 1, 0.4, 20.0, "0xexec",
+            vec!["0xpool1".into()], 1000, &th);
+        assert_eq!(s, StrategyState::Observe);
+        // Meets thresholds → promoted to Replay.
+        let (s, _) = reg.upsert_evidence(
+            "0xbbb", "bundle_backrunner", 500.0, 5, 0.8, 120.0, "0xexec",
+            vec!["0xpool1".into(), "0xpool2".into()], 1000, &th);
+        assert_eq!(s, StrategyState::Replay);
+        // Full route coverage → Shadow.
+        reg.mark_coverage("0xbbb", "bundle_backrunner", 1.0);
+        assert_eq!(reg.records["0xbbb/bundle_backrunner"].state, StrategyState::Shadow);
+        // Bounded live needs ops notional cap.
+        assert!(reg.approve_bounded_live("0xbbb/bundle_backrunner", 250.0));
+        assert_eq!(reg.records["0xbbb/bundle_backrunner"].state, StrategyState::BoundedLive);
+        // Stale record expires past ttl.
+        let (s, _) = reg.upsert_evidence(
+            "0xccc", "atomic_arb", 90.0, 3, 1.0, 30.0, "",
+            vec![], 900, &th);
+        assert_eq!(s, StrategyState::Replay);
+        let expired = reg.expire_stale(1200);
+        assert!(expired.contains(&"0xccc/atomic_arb".to_string()));
+        // Persist + reload keeps records.
+        reg.save().unwrap();
+        StrategyRegistry::save_cursor("BSC", 1234).unwrap();
+        let reloaded = StrategyRegistry::load("BSC", 100);
+        assert!(reloaded.records.contains_key("0xbbb/bundle_backrunner"));
+        assert_eq!(StrategyRegistry::load_cursor("BSC"), Some(1234));
+
+        std::env::set_current_dir(cwd).unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 }

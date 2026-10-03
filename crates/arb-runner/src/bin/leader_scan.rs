@@ -130,7 +130,16 @@ async fn main() -> Result<()> {
 
     let latest = endpoint.block_number().await?;
     let hi = if from_block > 0 { from_block } else { latest };
-    let lo = hi.saturating_sub(n_blocks as u64);
+    // Incremental scanning: with no explicit --from, resume one block past
+    // the persisted cursor so each run covers only new ground.
+    let lo = if from_block > 0 {
+        hi.saturating_sub(n_blocks as u64)
+    } else {
+        arb_leaders::StrategyRegistry::load_cursor(&chain)
+            .map(|c| c + 1)
+            .unwrap_or_else(|| hi.saturating_sub(n_blocks as u64))
+            .min(hi)
+    };
     println!(
         "LEADER_SCAN chain={chain} scanning blocks {lo}..{hi} \
          priced_tokens={}",
@@ -414,6 +423,7 @@ async fn main() -> Result<()> {
         .collect();
     let mut sh_pools_total = 0usize;
     let mut sh_pools_tracked = 0usize;
+    let mut shadow_routes: HashMap<Address, (f64, Vec<String>)> = HashMap::new();
     for (addr, _score, _net, _wr, _mw, class, _c) in scored.iter().take(5) {
         let Some(wallet) = ranked.iter().find(|(a, _, _)| a == addr) else {
             continue;
@@ -471,6 +481,17 @@ async fn main() -> Result<()> {
         }
         sh_pools_total += route_pools.len();
         sh_pools_tracked += covered;
+        shadow_routes.insert(
+            *addr,
+            (
+                if route_pools.is_empty() {
+                    0.0
+                } else {
+                    covered as f64 / route_pools.len() as f64
+                },
+                route_pools.iter().map(|p| format!("{p:#x}")).collect(),
+            ),
+        );
         println!(
             "SHADOW {addr:#x} class={class} route_pools={} covered={covered} \
              missing=[{}]",
@@ -486,6 +507,55 @@ async fn main() -> Result<()> {
             sh_pools_total
         );
     }
+
+    // ---- Strategy registry: persist outcome evidence per scored wallet.
+    // Observe -> Replay on evidence thresholds; Replay -> Shadow on full
+    // route coverage; BoundedLive stays ops-only. Stale entries expire.
+    let mut strat = arb_leaders::StrategyRegistry::load(&chain, 20_000);
+    let th = arb_leaders::PromoteThresholds::default();
+    for (addr, _score, net, wr, mw, class, contracts) in &scored {
+        let wallet_hex = format!("{addr:#x}");
+        let top_c = contracts.split(',').next().unwrap_or("");
+        let family = match top_c.rfind('x') {
+            Some(i) if i > 2 => top_c[..i].to_string(),
+            _ => top_c.to_string(),
+        };
+        let (cov, pools) = shadow_routes
+            .get(addr)
+            .cloned()
+            .unwrap_or((0.0, Vec::new()));
+        let txs = ranked
+            .iter()
+            .find(|(a, _, _)| a == addr)
+            .map(|(_, _, s)| s.trade_txs)
+            .unwrap_or(0);
+        let (state, is_new) = strat.upsert_evidence(
+            &wallet_hex, class, *net, txs, *wr, *mw, &family, pools, hi, &th,
+        );
+        strat.mark_coverage(&wallet_hex, class, cov);
+        if is_new || state != arb_leaders::StrategyState::Observe {
+            println!(
+                "STRATEGY {wallet_hex} class={class} state={state:?} \
+                 net={net:.2} win_rate={wr:.2} coverage={cov:.2}{}",
+                if is_new { " NEW" } else { "" }
+            );
+        }
+    }
+    let expired = strat.expire_stale(hi);
+    for id in &expired {
+        println!("STRATEGY_EXPIRED {id}");
+    }
+    let _ = strat.save();
+    let _ = arb_leaders::StrategyRegistry::save_cursor(&chain, hi);
+    let n_live = strat
+        .records
+        .values()
+        .filter(|r| r.state != arb_leaders::StrategyState::Expired)
+        .count();
+    println!(
+        "STRATEGY_REGISTRY active={n_live} expired={} -> data/leaders/{chain}/_strategies.jsonl",
+        expired.len()
+    );
 
     // ---- Pool auto-import: probe the most-hit counterparties on-chain to
     // classify V2 (getReserves 0x0902f1ac) vs V3 (slot0 0x3850c7bd) and emit
