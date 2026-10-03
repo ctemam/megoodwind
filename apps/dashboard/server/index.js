@@ -1497,6 +1497,116 @@ direct_fallback = false
 
 app.get('/api/config/audit', (_req, res) => res.json(auditLog.slice(-100).reverse()))
 
+// ── Wallet Intelligence ────────────────────────────────────────────────
+// Aggregates the leader-wallet pipeline: outcome scan (_scanned.jsonl),
+// strategy registry (_strategies.jsonl), discovery log (_discovered.jsonl),
+// scan cursor, per-wallet observation tails, plus live Prometheus counters.
+// Missing values are null — the page renders '—' and never infers.
+const readJsonl = p => {
+  try {
+    return fs.readFileSync(p, 'utf8').split('\n')
+      .map(l => { try { return JSON.parse(l) } catch { return null } })
+      .filter(Boolean)
+  } catch { return [] }
+}
+
+app.get('/api/wallet-intelligence', async (req, res) => {
+  const out = { live: isLive(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    const dir = path.join(REPO, 'data', 'leaders', cfg.label)
+    const scanned = readJsonl(path.join(dir, '_scanned.jsonl'))
+    const strategies = readJsonl(path.join(dir, '_strategies.jsonl'))
+    const discovered = readJsonl(path.join(dir, '_discovered.jsonl'))
+    let cursor = null
+    try { cursor = JSON.parse(fs.readFileSync(path.join(dir, '_cursor.json'), 'utf8')) } catch {}
+    const stratByWallet = {}
+    for (const s of strategies) stratByWallet[`${s.wallet}/${s.class}`] = s
+    const discSet = new Set(discovered.map(d => d.wallet))
+    const rows = []
+    const inRows = new Set()
+    for (const w of scanned) {
+      const strat = stratByWallet[`${w.address}/${w.class}`]
+        || strategies.find(s => s.wallet === w.address)
+      rows.push({
+        wallet: w.address, class: w.class,
+        state: strat?.state ?? 'observe',
+        trades: w.trade_txs ?? null, txs: w.txs ?? null,
+        win_rate: w.win_rate ?? null,
+        median_win_usd: w.median_win_usd ?? null,
+        net_after_gas_usd: w.net_after_gas_usd ?? null,
+        avg_profit_usd: (w.trade_txs > 0 && w.net_after_gas_usd != null)
+          ? w.net_after_gas_usd / w.trade_txs : null,
+        private_hits: w.private_hits ?? 0, atomic_txs: w.atomic_txs ?? 0,
+        coverage: strat?.coverage ?? null,
+        route_pools: strat?.route_pools ?? [],
+        executor_family: strat?.executor_family ?? null,
+        sim_verified: strat?.sim_verified ?? false,
+        verified_profit_usd: strat?.verified_profit_usd ?? null,
+        confidence: strat?.confidence ?? null,
+        last_seen_block: strat?.last_seen_block ?? null,
+        expires_at_block: strat?.expires_at_block ?? null,
+        max_notional_usd: strat?.max_notional_usd ?? null,
+        discovered_pending: discSet.has(w.address),
+        best_tx: w.best_tx ?? null,
+      })
+      inRows.add(`${w.address}/${w.class}`)
+    }
+    // Registry strategies with no scan row (expired-visibility preserved).
+    for (const s of strategies) {
+      if (inRows.has(`${s.wallet}/${s.class}`)) continue
+      rows.push({
+        wallet: s.wallet, class: s.class, state: s.state,
+        trades: s.sample_trades ?? null, txs: null,
+        win_rate: s.win_rate ?? null,
+        median_win_usd: s.median_profit_usd ?? null,
+        net_after_gas_usd: s.net_pnl_usd ?? null,
+        avg_profit_usd: (s.sample_trades > 0 && s.net_pnl_usd != null)
+          ? s.net_pnl_usd / s.sample_trades : null,
+        private_hits: 0, atomic_txs: 0,
+        coverage: s.coverage ?? null, route_pools: s.route_pools ?? [],
+        executor_family: s.executor_family ?? null,
+        sim_verified: s.sim_verified ?? false,
+        verified_profit_usd: s.verified_profit_usd ?? null,
+        confidence: s.confidence ?? null,
+        last_seen_block: s.last_seen_block ?? null,
+        expires_at_block: s.expires_at_block ?? null,
+        max_notional_usd: s.max_notional_usd ?? null,
+        discovered_pending: discSet.has(s.wallet), best_tx: null,
+      })
+    }
+    // Observation tails for the detail drawer (last 5 per wallet on demand —
+    // cheap: files are bounded and only present for observed wallets).
+    const obsTails = {}
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!/^0x[0-9a-fA-F]{40}\.jsonl$/.test(f)) continue
+        const wallet = f.slice(0, -6)
+        if (!rows.some(r => r.wallet === wallet)) continue
+        const obs = readJsonl(path.join(dir, f))
+        obsTails[wallet] = { count: obs.length, tail: obs.slice(-5) }
+      }
+    } catch {}
+    // Live counters relevant to execution risk.
+    let counters = {}
+    try {
+      const m = await fetchMetrics(c)
+      counters = {
+        bait_suspect: m['arb_bait_suspect_total'] ?? 0,
+        submit_attempts: m['arb_submit_attempts_total'] ?? 0,
+        builder_sim_rejects: m['arb_builder_sim_reject_total'] ?? 0,
+        path_suppressed: m['arb_path_suppressed_total'] ?? 0,
+        current_block: m['arb_current_block'] ?? null,
+      }
+    } catch { counters = null }
+    out.chains[c] = {
+      online: counters != null, cursor_block: cursor?.last_scanned_block ?? null,
+      scanned_wallets: scanned.length, strategies: strategies.length,
+      rows, obs_tails: obsTails, counters,
+    }
+  }
+  res.json(out)
+})
+
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))
 

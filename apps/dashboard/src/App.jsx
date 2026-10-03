@@ -9,6 +9,7 @@ import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
 import ChainConfig from './pages/ChainConfig.jsx'
+import WalletIntelligence from './pages/WalletIntelligence.jsx'
 import AgentPanel from './AgentPanel.jsx'
 
 const NAV = [
@@ -18,6 +19,7 @@ const NAV = [
   ['/wallet', '◉', 'Wallet'],
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
+  ['/intel', '◈', 'Wallet Intelligence'],
   ['/infra', '⛓', 'Infrastructure'],
   ['/config', '⚙', 'Chain Config'],
 ]
@@ -83,6 +85,7 @@ export default function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />
+          <Route path="/intel" element={<WalletIntelligence />} />
           <Route path="/infra" element={<Infra />} />
           <Route path="/config" element={<ChainConfig />} />
         </Routes>
