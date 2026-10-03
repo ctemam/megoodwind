@@ -781,11 +781,35 @@ app.get('/api/config/capacity', (_req, res) => {
     }
     const scans = acc['arb_scan_latency_seconds_count'] || 0
     const avgScanMs = scans ? (acc['arb_scan_latency_seconds_sum'] / scans) * 1000 : 0
+    const evals = acc['arb_paths_evaluated_total'] || 0
+    const hits = acc['arb_profitable_found_total'] || 0
+    const submits = acc['arb_submit_attempts_total'] || 0
+    const landed = acc['arb_submit_landed_total'] || 0
+    const gross = acc['arb_gross_profit_usd_total'] || 0
+    // Chain score = opportunity_density × liquidity × net_profit × rpc stability
+    // × exec success ÷ infra cost — computed from measured data only; a factor
+    // with no signal is neutral (1.0) so it never fabricates ranking.
+    const oppDensity = evals > 0 ? (hits / evals) * 1e6 : 0
+    const rpcStability = (() => {
+      const h = healthCache.get(c)?.v
+      if (!h?.endpoints?.length) return 1
+      return h.endpoints.filter(e => e.status === 'healthy').length / h.endpoints.length || 0.05
+    })()
+    const execSuccess = submits > 0 ? landed / submits : 1
+    const tokenHits = {}
+    for (const [k, v] of Object.entries(acc)) {
+      const m = k.match(/^arb_profitable_by_token_total\{token="([^"]+)"\}$/)
+      if (m) tokenHits[m[1]] = (tokenHits[m[1]] || 0) + v
+    }
+    const zeroHit = Object.keys(cfg.tokens).filter(s => !tokenHits[s])
     chains[c] = {
       avg_scan_ms: avgScanMs, block_time_ms: cfg.block_time_ms,
       utilization: cfg.block_time_ms ? avgScanMs / cfg.block_time_ms : 0,
       pools: cfg.pools.length, tokens: Object.keys(cfg.tokens).length,
       online: !!(histLog[histLog.length - 1]?.chains[c]),
+      hits_per_m: oppDensity, gross_profit_usd: gross,
+      score: oppDensity * cfg.pools.length * Math.max(gross, 0.01) * rpcStability * execSuccess,
+      token_hits: tokenHits, zero_hit_tokens: zeroHit,
     }
   }
   const scanUtil = Math.max(0, ...Object.values(chains).map(c => c.utilization))
@@ -796,16 +820,19 @@ app.get('/api/config/capacity', (_req, res) => {
       .map(p => ({ name: p.name, cpu: p.monit?.cpu ?? 0, mem_mb: Math.round((p.monit?.memory || 0) / 1048576) }))
   } catch {}
   const fleet = Math.max(cpuPct, memPct, scanUtil)
+  // Expansion policy (sidechat): green ≤50% — expansion only inside the green
+  // zone; >50% review, >70% throttle (no new chains/tokens), >85% freeze.
+  const band = fleet > 0.85 ? 'freeze' : fleet > 0.7 ? 'throttle' : fleet > 0.5 ? 'review' : 'green'
   res.json({
     cpu_pct: cpuPct, mem_pct: memPct, cpus,
     mem_used_gb: +((os.totalmem() - os.freemem()) / 1073741824).toFixed(1),
     mem_total_gb: +(os.totalmem() / 1073741824).toFixed(1),
     load1: os.loadavg()[0],
     scan_util: scanUtil, chains, runners,
-    fleet_capacity_pct: fleet,
-    band: fleet > 0.9 ? 'critical' : fleet > 0.8 ? 'warning' : 'normal',
-    // estimated additional chain slots before the tightest dimension saturates
-    headroom_chains: fleet >= 1 ? 0 : Math.max(0, Math.floor((0.8 - fleet) / Math.max(0.01, fleet / Math.max(1, Object.keys(chains).length)))),
+    fleet_capacity_pct: fleet, band,
+    expansion_eligible: band === 'green',
+    headroom_chains: fleet >= 0.5 ? 0 :
+      Math.max(0, Math.floor((0.5 - fleet) / Math.max(0.01, fleet / Math.max(1, Object.keys(chains).length)))),
   })
 })
 
@@ -849,8 +876,9 @@ async function validateDraft(d) {
       env[`${keyBase}_ARB_CONTRACT`] ? env[`${keyBase}_ARB_CONTRACT`].slice(0, 12) + '…' : `needs ${keyBase}_ARB_CONTRACT (deploy via ops/DEPLOY.md)`)
     const fleet = Math.max(Math.min(1, os.loadavg()[0] / os.cpus().length),
       1 - os.freemem() / os.totalmem())
-    add('capacity headroom', fleet < 0.9,
-      `fleet at ${(fleet * 100).toFixed(0)}% — warn>80%, blocked>90%`)
+    // Expansion is gated at the throttle line: >70% blocks new chains.
+    add('capacity headroom', fleet < 0.7,
+      `fleet at ${(fleet * 100).toFixed(0)}% — green≤50%, review>50%, throttle>70%, freeze>85%`)
     d.checks = checks; d.validated_at = Date.now()
     d.status = checks.every(x => x.ok) ? 'validated' : 'rejected'
     return checks
@@ -961,7 +989,7 @@ app.post('/api/config/drafts/:id/simulate', async (req, res) => {
       add('rpc stable', blk > 0, `block ${blk}`)
       const fleet = Math.max(Math.min(1, os.loadavg()[0] / os.cpus().length),
         1 - os.freemem() / os.totalmem())
-      add('fleet headroom <90%', fleet < 0.9, `${(fleet * 100).toFixed(0)}%`)
+      add('fleet headroom <70% (throttle)', fleet < 0.7, `${(fleet * 100).toFixed(0)}%`)
     }
   } catch (e) { add('simulation probe', false, e.message) }
   d.sim = sim

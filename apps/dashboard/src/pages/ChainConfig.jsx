@@ -62,48 +62,71 @@ export default function ChainConfig() {
         <div className="card"><div className="k">Coverage</div><div className="v">{cfg ? `${cfg.pools.length} pools` : '—'}</div><div className="s">{cfg ? `${Object.keys(cfg.tokens).length} tokens · ${Object.keys(cfg.dexes).length} protocols` : ''}</div></div>
       </div>
 
-      {/* ── Fleet capacity — expansion headroom, 80% warn / 90% critical ── */}
-      {capacity && (
+      {/* ── Fleet capacity — expansion policy: green ≤50%, review >50%,
+          throttle >70%, freeze >85% ── */}
+      {capacity && (() => {
+        const BAND = {
+          green:    { c: 'var(--acc)',  label: 'GREEN — expansion eligible' },
+          review:   { c: 'var(--warn)', label: 'REVIEW — >50%, expansion under review' },
+          throttle: { c: '#ff9540',     label: 'THROTTLE — >70%, expansion blocked' },
+          freeze:   { c: 'var(--neg)',  label: 'FREEZE — >85%, all expansion frozen' },
+        }
+        const b = BAND[capacity.band] || BAND.green
+        const pct = capacity.fleet_capacity_pct * 100
+        return (
         <div className="panel">
-          <h3>Fleet capacity — expansion headroom</h3>
-          {capacity.band !== 'normal' && (
-            <div style={{ padding: '8px 12px', marginBottom: 10, borderRadius: 6, fontSize: 13,
-              background: capacity.band === 'critical' ? 'rgba(255,80,80,.12)' : 'rgba(255,180,0,.1)',
-              color: capacity.band === 'critical' ? 'var(--neg)' : 'var(--warn)' }}>
-              {capacity.band === 'critical'
-                ? `⚠ CRITICAL: fleet at ${(capacity.fleet_capacity_pct * 100).toFixed(0)}% of theoretical capacity (>90%) — expansion will degrade live scanning`
-                : `⚠ WARNING: fleet at ${(capacity.fleet_capacity_pct * 100).toFixed(0)}% of theoretical capacity (>80%) — plan expansion carefully`}
+          <h3>Fleet capacity — expansion policy</h3>
+          <div style={{ padding: '8px 12px', marginBottom: 10, borderRadius: 6, fontSize: 13,
+            background: 'rgba(255,255,255,.04)', color: b.c, borderLeft: `3px solid ${b.c}` }}>
+            {b.label} — fleet at {pct.toFixed(0)}% of theoretical capacity
+            {capacity.expansion_eligible
+              ? ` · ~${capacity.headroom_chains} chain slot${capacity.headroom_chains === 1 ? '' : 's'} of headroom at current load`
+              : ' · new chains/tokens blocked until utilization returns below 50%'}
+          </div>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
+            <div style={{ flex: 1, height: 14, background: '#12203d', borderRadius: 7, overflow: 'hidden', position: 'relative' }}>
+              <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', transition: 'width .4s', background: b.c }} />
+              {[50, 70, 85].map(x => (
+                <div key={x} style={{ position: 'absolute', left: `${x}%`, top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,.35)' }} />
+              ))}
             </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
-            <div style={{ flex: 1, height: 14, background: '#12203d', borderRadius: 7, overflow: 'hidden' }}>
-              <div style={{ width: `${Math.min(100, capacity.fleet_capacity_pct * 100)}%`, height: '100%', transition: 'width .4s',
-                background: capacity.fleet_capacity_pct > 0.9 ? 'var(--neg)' : capacity.fleet_capacity_pct > 0.8 ? 'var(--warn)' : 'var(--acc)' }} />
-            </div>
-            <b style={{ fontSize: 15, color: capacity.fleet_capacity_pct > 0.9 ? 'var(--neg)' : capacity.fleet_capacity_pct > 0.8 ? 'var(--warn)' : 'var(--acc)' }}>
-              {(capacity.fleet_capacity_pct * 100).toFixed(0)}%
-            </b>
+            <b style={{ fontSize: 15, color: b.c }}>{pct.toFixed(0)}%</b>
           </div>
           <div style={{ display: 'flex', gap: 24, fontSize: 12.5, color: 'var(--dim)', flexWrap: 'wrap' }}>
             <span>CPU {(capacity.cpu_pct * 100).toFixed(0)}% (load {capacity.load1?.toFixed(2)}/{capacity.cpus} cores)</span>
             <span>MEM {(capacity.mem_pct * 100).toFixed(0)}% ({capacity.mem_used_gb}/{capacity.mem_total_gb} GB)</span>
             <span>Scan util {(capacity.scan_util * 100).toFixed(1)}% of block budget</span>
-            <span>Est. headroom: <b style={{ color: 'var(--txt)' }}>~{capacity.headroom_chains} more chain{capacity.headroom_chains === 1 ? '' : 's'}</b> at current load</span>
+            <span style={{ color: 'var(--dim)' }}>zones: ≤50 green · >50 review · >70 throttle · >85 freeze</span>
           </div>
           {capacity.chains && (
+            <table style={{ marginTop: 10 }}>
+              <thead><tr><th>Chain</th><th>Scan util</th><th>Avg scan / budget</th><th>Pools</th><th>Tokens</th><th>Hits/M evals (1h)</th><th>Gross (1h)</th><th>Score</th></tr></thead>
+              <tbody>
+                {Object.entries(capacity.chains).map(([c, m]) => (
+                  <tr key={c}>
+                    <td>{c.toUpperCase()}</td>
+                    <td style={{ color: m.utilization > 0.5 ? 'var(--warn)' : 'var(--acc)' }}>{(m.utilization * 100).toFixed(1)}%</td>
+                    <td className="dim">{m.avg_scan_ms.toFixed(0)}ms / {m.block_time_ms}ms</td>
+                    <td>{m.pools}</td>
+                    <td>{m.tokens}</td>
+                    <td>{m.hits_per_m.toFixed(1)}</td>
+                    <td>${m.gross_profit_usd.toFixed(4)}</td>
+                    <td>{m.score.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {capacity.runners?.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--dim)' }}>
-              {Object.entries(capacity.chains).map(([c, m]) => (
-                <span key={c} style={{ marginRight: 18 }}>
-                  {c.toUpperCase()}: {(m.utilization * 100).toFixed(1)}% ({m.avg_scan_ms.toFixed(0)}ms / {m.block_time_ms}ms) · {m.pools}p {m.tokens}t
-                </span>
-              ))}
-              {capacity.runners?.length > 0 && capacity.runners.map(r => (
+              {capacity.runners.map(r => (
                 <span key={r.name} style={{ marginRight: 18 }}>{r.name}: {r.cpu.toFixed(0)}%cpu {r.mem_mb}MB</span>
               ))}
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {/* ── Capacity & health ── */}
       <div className="panel">
@@ -137,6 +160,42 @@ export default function ChainConfig() {
           Unhealthy endpoints are auto-benched by the runner's 60s circuit breaker — config is never silently edited.
         </div>
       </div>
+
+      {/* ── Token batch optimization — staged admission, 25–50 per chain,
+          quarantine zero-hit tokens ── */}
+      {capacity?.chains?.[chain] && (() => {
+        const m = capacity.chains[chain]
+        const ranked = Object.entries(m.token_hits || {}).sort((a, b) => b[1] - a[1])
+        const zeroHit = m.zero_hit_tokens || []
+        const batchOk = m.tokens >= 25 && m.tokens <= 50
+        return (
+        <div className="panel">
+          <h3>Token batch — {chain.toUpperCase()}</h3>
+          <div style={{ display: 'flex', gap: 24, fontSize: 12.5, flexWrap: 'wrap', marginBottom: 8 }}>
+            <span className="dim">Tokens: <b style={{ color: 'var(--txt)' }}>{m.tokens}</b>
+              {' '}<span style={{ color: batchOk ? 'var(--acc)' : 'var(--warn)' }}>
+                ({batchOk ? 'within' : m.tokens < 25 ? 'below' : 'above'} 25–50 target batch)</span></span>
+            <span className="dim">Earning hits (1h): <b style={{ color: 'var(--acc)' }}>{ranked.length}</b></span>
+            <span className="dim">Quarantine candidates: <b style={{ color: zeroHit.length ? 'var(--warn)' : 'var(--acc)' }}>{zeroHit.length}</b> (0 profitable hits)</span>
+          </div>
+          {ranked.length > 0 && (
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              <span className="dim">Top by hits: </span>
+              {ranked.slice(0, 8).map(([sym, n]) => (
+                <span key={sym} style={{ marginRight: 14, color: 'var(--txt)' }}>{sym} <b>{n}</b></span>
+              ))}
+            </div>
+          )}
+          {zeroHit.length > 0 && (
+            <div style={{ fontSize: 12 }}>
+              <span className="dim">Zero-hit: </span>
+              {zeroHit.map(sym => <span key={sym} style={{ marginRight: 12, color: 'var(--warn)' }}>{sym}</span>))}
+              <span className="dim"> — review for removal; rank by net profit per scan capacity, not raw path count</span>
+            </div>
+          )}
+        </div>
+        )
+      })()}
 
       {/* ── Tokens & DEXes ── */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
