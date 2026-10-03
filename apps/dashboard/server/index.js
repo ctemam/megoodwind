@@ -86,7 +86,7 @@ app.get('/api/metrics/all', async (_req, res) => {
   const net = Object.values(out).reduce(
     (s, m) => s + (m ? m['arb_gross_profit_usd_total'] || 0 : 0), 0)
   recordProfit(net)
-  res.json({ live: isLive(), chains: out, profit: profitSummary(net) })
+  res.json({ live: isLive(), chains: out, profit: profitSummary(net), commit: BUILD_COMMIT })
 })
 
 // Rolling profit history — the UI's "last 24h" mode needs a baseline from
@@ -876,6 +876,10 @@ try { agentModels = JSON.parse(fs.readFileSync(AGENT_MODELS_FILE, 'utf8')) } cat
 try { agentFeed = JSON.parse(fs.readFileSync(AGENT_FEED_FILE, 'utf8')) } catch {}
 const saveModels = () => fs.writeFileSync(AGENT_MODELS_FILE, JSON.stringify(agentModels, null, 1))
 const saveFeed = () => fs.writeFileSync(AGENT_FEED_FILE, JSON.stringify(agentFeed.slice(-100)))
+
+// Dashboard build commit — shown in the universal footer.
+let BUILD_COMMIT = 'unknown'
+try { BUILD_COMMIT = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO }).toString().trim() } catch {}
 
 async function fleetBrief() {
   // Compact live context injected into every agent call + monitoring checks.

@@ -50,7 +50,7 @@ export default function App() {
         </button>
         <div className="tagline"><b>Smarter Capital</b>Brighter Returns</div>
       </nav>
-      <main>
+      <main className={collapsed ? 'wide' : ''}>
         <header>
           <div className="pulse">
             <div className={`dot ${online ? '' : 'off'}`} />
@@ -87,9 +87,16 @@ export default function App() {
           <Route path="/config" element={<ChainConfig />} />
         </Routes>
         <div className="footer-strip">
-          <div className="seg"><b>AllBright</b> · Autonomous Arbitrage Engine</div>
-          <div className="seg">Scan → Evaluate → Execute → Settle</div>
-          <div className="seg" style={{ marginLeft: 'auto' }}>Flash Loan · DeFi Arbitrage · MEV-aware</div>
+          <div className="seg"><b>ALLBRIGHT</b></div>
+          {Object.entries(all.chains || {}).map(([c, m]) => (
+            <div className="seg" key={c}>
+              <span className={`fd ${m ? 'on' : 'off'}`} />
+              {c.toUpperCase()}{m?.arb_current_block ? ` · ${Math.round(m.arb_current_block)}` : ''}
+            </div>
+          ))}
+          <div className="seg">{all.live ? 'LIVE' : 'DRY-RUN'}</div>
+          <div className="seg" style={{ marginLeft: 'auto' }}>Scan → Evaluate → Execute → Settle</div>
+          {all.commit && <div className="seg dim" style={{ fontFamily: 'monospace' }}>{all.commit}</div>}
         </div>
         <AgentPanel open={agentOpen} onClose={() => setAgentOpen(false)} />
       </main>
