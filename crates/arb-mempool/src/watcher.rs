@@ -84,7 +84,7 @@ impl MempoolWatcher {
                 if input.len() < 4 {
                     continue;
                 }
-                let Some(decoded) = self.decoder.decode(to_addr, input) else {
+                let Some(decoded) = self.decoder.decode(to_addr, pending_tx.value(), input) else {
                     continue;
                 };
                 let swap = PendingSwap {

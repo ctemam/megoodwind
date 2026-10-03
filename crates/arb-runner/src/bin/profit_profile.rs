@@ -25,6 +25,7 @@ use anyhow::Result;
 
 use arb_core::types::*;
 use arb_core::AmmQuoter;
+use arb_mempool::MempoolWatcher;
 use arb_paths::{PathEnumerator, PathTemplate};
 use arb_rpc::Endpoint;
 use arb_sim::evaluate::evaluate_all;
@@ -32,6 +33,7 @@ use arb_sim::optimize::{find_optimal_amount, path_max_flash};
 use arb_sim::ProfitGate;
 use arb_state::refresher::{PoolConfig, StateRefresher};
 use arb_state::PoolStore;
+use tokio::sync::mpsc;
 
 #[path = "../config.rs"]
 mod config;
@@ -155,6 +157,14 @@ async fn main() -> Result<()> {
     // 0 = only pass-1 survivors get optimized; 1 = every path gets optimized
     // (counterfactual: does the fixed-probe filter drop profitable paths?).
     let optimize_all: bool = args.iter().any(|a| a == "--optimize-all");
+    // --backrun <secs>: instead of scanning resting state, stream pending swaps
+    // for `secs` seconds, project each onto the pool(s) it hits, and measure
+    // post-swap profitability — the mode the runner's backrun path uses.
+    let backrun_secs: Option<u64> = args
+        .iter()
+        .position(|a| a == "--backrun")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok());
 
     let cfg = config::load_config(config_path)?;
     println!("PROFILER chain={} config={config_path} cycles={cycles} optimize_all={optimize_all}", cfg.chain.name);
@@ -242,6 +252,8 @@ async fn main() -> Result<()> {
         println!("PROFILER normalized_flipped_pools={normalized}");
     }
 
+    let pool_fee_bps: HashMap<Address, u32> =
+        pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse().unwrap_or(Address::ZERO);
     let refresher = StateRefresher::new(
@@ -282,6 +294,168 @@ async fn main() -> Result<()> {
     let free_gate = ProfitGate::new(
         0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone(),
     );
+
+    if let Some(secs) = backrun_secs {
+        // Same indexes the runner's backrun path uses.
+        let mut pair_to_pools: HashMap<(Address, Address), Vec<(Address, u32)>> = HashMap::new();
+        for p in &pool_infos {
+            let key = if p.token0 < p.token1 { (p.token0, p.token1) } else { (p.token1, p.token0) };
+            let fee = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
+            pair_to_pools.entry(key).or_default().push((p.address, fee));
+        }
+        let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
+        for (idx, path) in paths.iter().enumerate() {
+            for hop in &path.hops {
+                pool_to_paths.entry(hop.pool).or_default().push(idx);
+            }
+        }
+
+        // Fresh state so projections sit on current reserves.
+        let _ = refresher.refresh(&store).await?;
+        pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
+
+        let mut wss_urls = cfg.chain.rpc_wss_pool.clone();
+        wss_urls.retain(|u| !u.trim().is_empty());
+        if wss_urls.is_empty() {
+            wss_urls.push(cfg.chain.rpc_wss.clone());
+        }
+        let (tx, mut rx) = mpsc::channel(1000);
+        let cid = cfg.chain.chain_id;
+        tokio::spawn(async move {
+            let watcher = MempoolWatcher::new(&wss_urls, cid);
+            let _ = watcher.start(tx).await;
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let mut last_refresh = std::time::Instant::now();
+        let (mut n_rx, mut n_amt, mut n_pair, mut n_cand) = (0u64, 0u64, 0u64, 0u64);
+        let (mut n_prof, mut n_gate) = (0u64, 0u64);
+        let mut best_bps = 0u32;
+        let mut top: Vec<(u32, f64, &'static str)> = Vec::new();
+        let mut router_stats: HashMap<&'static str, (u64, u64)> = HashMap::new();
+        let mut dumped = 0u32;
+
+        while std::time::Instant::now() < deadline {
+            let pending = match tokio::time::timeout(
+                std::time::Duration::from_millis(100), rx.recv(),
+            ).await {
+                Ok(Some(p)) => p,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
+            n_rx += 1;
+            router_stats.entry(pending.decoded.router).or_insert((0, 0)).0 += 1;
+            if last_refresh.elapsed() > std::time::Duration::from_secs(20) {
+                let _ = refresher.refresh(&store).await;
+                last_refresh = std::time::Instant::now();
+            }
+            let Some(amount_in) = pending.decoded.amount_in else {
+                if dumped < 3 {
+                    dumped += 1;
+                    let hex: String = pending.raw_input.iter().map(|b| format!("{b:02x}")).collect();
+                    println!("PROFILER   DUMP {} to={} len={} calldata={}",
+                        pending.decoded.router, pending.to, pending.raw_input.len(), hex);
+                }
+                continue;
+            };
+            n_amt += 1;
+            router_stats.get_mut(pending.decoded.router).map(|s| s.1 += 1);
+            let (hop_in, hop_out) = if pending.decoded.path.len() >= 2 {
+                (pending.decoded.path[0], pending.decoded.path[1])
+            } else if let (Some(i), Some(o)) = (pending.decoded.token_in, pending.decoded.token_out) {
+                (i, o)
+            } else {
+                continue;
+            };
+            let pair_key = if hop_in < hop_out { (hop_in, hop_out) } else { (hop_out, hop_in) };
+            let Some(pair_pools) = pair_to_pools.get(&pair_key) else { continue };
+            n_pair += 1;
+            let hit_pools: Vec<Address> = match pending.decoded.first_hop_fee {
+                Some(fee) => {
+                    let fee_bps = fee / 100;
+                    let exact: Vec<Address> = pair_pools.iter()
+                        .filter(|(_, f)| *f == fee_bps && fee_bps != 0)
+                        .map(|(a, _)| *a)
+                        .collect();
+                    if exact.is_empty() { pair_pools.iter().map(|(a, _)| *a).collect() } else { exact }
+                }
+                None => pair_pools.iter().map(|(a, _)| *a).collect(),
+            };
+            let mut cand: Vec<usize> = Vec::new();
+            for pa in &hit_pools {
+                if let Some(ids) = pool_to_paths.get(pa) {
+                    cand.extend_from_slice(ids);
+                }
+            }
+            if cand.is_empty() { continue; }
+            cand.sort_unstable();
+            cand.dedup();
+            n_cand += 1;
+
+            let projected = PoolStore::new();
+            for (a, s) in store.get_all() {
+                projected.update(a, s);
+            }
+            for pa in &hit_pools {
+                if let Some(ns) =
+                    arb_mempool::impact::project_post_state(*pa, hop_in, amount_in, &projected)
+                {
+                    projected.update(*pa, ns);
+                }
+            }
+
+            let mut best_for_swap: Option<(U256, u32, Address)> = None;
+            for &pidx in cand.iter().take(20) {
+                let path = &paths[pidx];
+                let (min_a, token_max) = flash_bounds
+                    .get(&path.flash_token)
+                    .copied()
+                    .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
+                let liq_max = path_max_flash(path, &projected, 0.05, token_max);
+                let hi = token_max.min(liq_max);
+                let Some((amt, prof)) =
+                    find_optimal_amount(path, &projected, min_a, hi, cfg.scanner.optimization_iterations)
+                else { continue };
+                if prof.is_zero() { continue; }
+                let bps: u32 = ((prof * U256::from(10000u32)) / amt).try_into().unwrap_or(u32::MAX);
+                let sim = arb_sim::SimResult {
+                    path_id: path.id,
+                    flash_token: path.flash_token,
+                    flash_amount: amt,
+                    final_amount: amt + prof,
+                    gross_profit: prof,
+                    profit_bps: bps,
+                };
+                if real_gate.should_submit(&sim, path).accept {
+                    n_gate += 1;
+                }
+                if best_for_swap.map_or(true, |(p, _, _)| prof > p) {
+                    best_for_swap = Some((prof, bps, path.flash_token));
+                }
+            }
+            if let Some((prof, bps, ft)) = best_for_swap {
+                n_prof += 1;
+                if bps > best_bps { best_bps = bps; }
+                let usd = usd_value(prof, &ft, &token_usd_prices, &token_decimals);
+                top.push((bps, usd, pending.decoded.router));
+            }
+        }
+        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        println!(
+            "PROFILER backrun window_secs={secs} pending_rx={n_rx} with_amount={n_amt} \
+             pair_match={n_pair} candidates={n_cand} projected_profitable={n_prof} \
+             gate_pass={n_gate} best_bps={best_bps}"
+        );
+        for (bps, usd, router) in top.iter().take(10) {
+            println!("PROFILER   BACKRUN bps={bps} gross_usd={usd:.4} router={router}");
+        }
+        let mut rs: Vec<_> = router_stats.into_iter().collect();
+        rs.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        for (router, (dec, amt)) in rs {
+            println!("PROFILER   ROUTER {router} decoded={dec} with_amount={amt}");
+        }
+        return Ok(());
+    }
 
     let mut best_ever: Option<(f64, String)> = None;
     let mut gate_hist: HashMap<&'static str, u64> = HashMap::new();

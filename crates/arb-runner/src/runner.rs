@@ -802,6 +802,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
     }
 
+    let pool_fee_bps: HashMap<Address, u32> =
+        pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
     let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
@@ -844,6 +846,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         .filter_map(|(name, bounds)| tokens.get(name).map(|&addr| (addr, (U256::from(bounds.min), U256::from(bounds.max)))))
         .collect();
 
+    // Index: unordered token pair -> configured pools on that pair (with fee for
+    // V3-tier disambiguation). Locates the pool(s) a pending swap will move.
+    let mut pair_to_pools: HashMap<(Address, Address), Vec<(Address, u32)>> = HashMap::new();
+    for p in &pool_infos {
+        let key = if p.token0 < p.token1 { (p.token0, p.token1) } else { (p.token1, p.token0) };
+        let fee_bps = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
+        pair_to_pools.entry(key).or_default().push((p.address, fee_bps));
+    }
+
     let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
         .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
     let paths = enumerator.enumerate();
@@ -851,12 +862,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
     let presign_pool = PresignPool::new(&paths, cfg.chain.chain_id);
 
-    // Build index: (token_in, token_out) -> vec of path indices that touch that pair.
+    // Build index: pool address -> vec of path indices that traverse that pool.
     // Used for fast backrun lookups when a pending swap is detected.
-    let mut token_pair_to_paths: HashMap<(Address, Address), Vec<usize>> = HashMap::new();
+    let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
     for (idx, path) in paths.iter().enumerate() {
         for hop in &path.hops {
-            token_pair_to_paths.entry((hop.token_in, hop.token_out)).or_default().push(idx);
+            pool_to_paths.entry(hop.pool).or_default().push(idx);
         }
     }
 
@@ -1419,79 +1430,134 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
         // Process pending mempool swaps for backrun opportunities
         while let Ok(pending) = mempool_rx.try_recv() {
-            if let (Some(token_in), Some(token_out), Some(_amount_in)) =
-                (pending.decoded.token_in, pending.decoded.token_out, pending.decoded.amount_in)
+            let Some(amount_in) = pending.decoded.amount_in else { continue };
+
+            // First hop of the pending swap — the pool that receives the full
+            // amount_in price impact. Decoded calldata gives the token path;
+            // fall back to the swap's in/out pair for path-less selectors.
+            let (hop_in, hop_out) = if pending.decoded.path.len() >= 2 {
+                (pending.decoded.path[0], pending.decoded.path[1])
+            } else if let (Some(i), Some(o)) = (pending.decoded.token_in, pending.decoded.token_out) {
+                (i, o)
+            } else {
+                continue;
+            };
+
+            // Configured pools on that pair — the pending swap moves exactly
+            // one of them, but the calldata only carries tokens, not pools.
+            // When a V3 fee is decoded, prefer the matching fee tier; if none
+            // matches, project onto all of them (screening approximation —
+            // the gate still has to see real profit on the projected state).
+            let pair_key = if hop_in < hop_out { (hop_in, hop_out) } else { (hop_out, hop_in) };
+            let Some(pair_pools) = pair_to_pools.get(&pair_key) else { continue };
+            let hit_pools: Vec<Address> = match pending.decoded.first_hop_fee {
+                Some(fee) => {
+                    let fee_bps = fee / 100;
+                    let exact: Vec<Address> = pair_pools.iter()
+                        .filter(|(_, f)| *f == fee_bps && fee_bps != 0)
+                        .map(|(a, _)| *a)
+                        .collect();
+                    if exact.is_empty() {
+                        pair_pools.iter().map(|(a, _)| *a).collect()
+                    } else {
+                        exact
+                    }
+                }
+                None => pair_pools.iter().map(|(a, _)| *a).collect(),
+            };
+
+            let mut candidate_ids: Vec<usize> = Vec::new();
+            for pool_addr in &hit_pools {
+                if let Some(ids) = pool_to_paths.get(pool_addr) {
+                    candidate_ids.extend_from_slice(ids);
+                }
+            }
+            if candidate_ids.is_empty() { continue; }
+            candidate_ids.sort_unstable();
+            candidate_ids.dedup();
+            metrics::BACKRUN_CANDIDATES.inc();
+
+            // Project the pending swap's impact onto the pools it hits: the
+            // resting state has no spread — the pending swap creates one.
+            // Only the first hop is projected (full amount_in lands there;
+            // later hops of a multi-hop victim get progressively less, so
+            // skipping them is conservative).
+            let projected = PoolStore::new();
+            for (addr, st) in store.get_all() {
+                projected.update(addr, st);
+            }
+            for pool_addr in &hit_pools {
+                if let Some(new_state) =
+                    arb_mempool::impact::project_post_state(*pool_addr, hop_in, amount_in, &projected)
+                {
+                    projected.update(*pool_addr, new_state);
+                }
+            }
+
             {
-                let affected_paths = token_pair_to_paths.get(&(token_in, token_out));
-                if let Some(path_ids) = affected_paths {
-                    if path_ids.is_empty() { continue; }
-                    metrics::BACKRUN_CANDIDATES.inc();
+                for &pidx in candidate_ids.iter().take(20) {
+                    let path = &paths[pidx];
+                    if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
 
-                    // Project post-swap state for affected pools
-                    for &pidx in path_ids.iter().take(20) {
-                        let path = &paths[pidx];
-                        if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
+                    // Evaluate against the projected post-swap state — that is
+                    // the state our tx would see if it lands right after the
+                    // pending swap in the same block.
+                    let profit = arb_sim::optimize::find_optimal_amount(
+                        path, &projected,
+                        flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
+                        {
+                            let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
+                                .unwrap_or(path.flash_amount * U256::from(10u32));
+                            let liq_max = arb_sim::optimize::path_max_flash(path, &projected, 0.05, token_max);
+                            token_max.min(liq_max)
+                        },
+                        optimization_iterations,
+                    );
 
-                        // Evaluate the path with current state (the pending swap hasn't
-                        // landed yet — its impact creates a bigger spread for us).
-                        // The actual backrun bundle would include the pending tx first.
-                        let profit = arb_sim::optimize::find_optimal_amount(
-                            path, &store, 
-                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
-                            {
-                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
-                                    .unwrap_or(path.flash_amount * U256::from(10u32));
-                                let liq_max = arb_sim::optimize::path_max_flash(path, &store, 0.05, token_max);
-                                token_max.min(liq_max)
-                            },
-                            optimization_iterations,
-                        );
+                    if let Some((opt_amount, opt_profit)) = profit {
+                        let profit_bps: u32 = if !opt_amount.is_zero() {
+                            ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
+                        } else { 0 };
 
-                        if let Some((opt_amount, opt_profit)) = profit {
-                            let profit_bps: u32 = if !opt_amount.is_zero() {
-                                ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
-                            } else { 0 };
+                        let sim = arb_sim::SimResult {
+                            path_id: path.id,
+                            flash_token: path.flash_token,
+                            flash_amount: opt_amount,
+                            final_amount: opt_amount + opt_profit,
+                            gross_profit: opt_profit,
+                            profit_bps,
+                        };
 
-                            let sim = arb_sim::SimResult {
-                                path_id: path.id,
-                                flash_token: path.flash_token,
-                                flash_amount: opt_amount,
-                                final_amount: opt_amount + opt_profit,
-                                gross_profit: opt_profit,
-                                profit_bps,
-                            };
+                        let decision = profit_gate.should_submit(&sim, path);
+                        if decision.accept && !dry_run {
+                            info!(
+                                path_id = path.id, profit_bps,
+                                pending_router = pending.decoded.router,
+                                pending_tx = %pending.tx_hash,
+                                "Backrun candidate found"
+                            );
+                            metrics::BACKRUN_SUBMITTED.inc();
 
-                            let decision = profit_gate.should_submit(&sim, path);
-                            if decision.accept && !dry_run {
-                                info!(
-                                    path_id = path.id, profit_bps,
-                                    pending_router = pending.decoded.router,
-                                    pending_tx = %pending.tx_hash,
-                                    "Backrun candidate found"
-                                );
-                                metrics::BACKRUN_SUBMITTED.inc();
-
-                                // Build and submit as regular (non-bundle) for now.
-                                // True 2-tx backrun bundles require target tx raw bytes
-                                // which we don't always have from the watcher.
-                                let target_block = block_number + 1;
-                                if let Ok(bundle) = presign_pool.build_fast(
-                                    path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
-                                ).await {
-                                    endpoint.bump_nonce();
-                                    let sub_results = router
-                                        .submit_all(&bundle, false, scan_start.elapsed())
-                                        .await;
-                                    for r in sub_results {
-                                        match r.result {
-                                            Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
-                                            Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
-                                            Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
-                                        }
+                            // Build and submit as regular (non-bundle) for now.
+                            // True 2-tx backrun bundles require target tx raw bytes
+                            // which we don't always have from the watcher.
+                            let target_block = block_number + 1;
+                            if let Ok(bundle) = presign_pool.build_fast(
+                                path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
+                            ).await {
+                                endpoint.bump_nonce();
+                                let sub_results = router
+                                    .submit_all(&bundle, false, scan_start.elapsed())
+                                    .await;
+                                for r in sub_results {
+                                    match r.result {
+                                        Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
+                                        Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
+                                        Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
                                     }
                                 }
-                                break;
                             }
+                            break;
                         }
                     }
                 }
