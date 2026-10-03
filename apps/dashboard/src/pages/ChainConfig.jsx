@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useApp, fmt } from '../state.jsx'
+import Collap from '../Collap.jsx'
 
 const CHAIN_ORDER = ['bsc', 'base']
 const STATUS_COLOR = { healthy: 'var(--acc)', degraded: 'var(--warn)', slow: 'var(--warn)', noisy: '#ff7a45', down: 'var(--neg)' }
@@ -48,11 +49,11 @@ export default function ChainConfig() {
     <div className="grid">
       <div className="panel" style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
         <h3 style={{ margin: 0, marginRight: 'auto' }}>Chain configuration — Draft → Validate → Simulate → Apply</h3>
-        {CHAIN_ORDER.map(c => (
-          <button key={c} className={chain === c ? 'primary' : ''} onClick={() => setChain(c)}>
-            {chains?.chains?.[c]?.label || c}
-          </button>
-        ))}
+        <select value={chain} onChange={e => setChain(e.target.value)}>
+          {(chains ? Object.keys(chains.chains || {}) : CHAIN_ORDER).map(c => (
+            <option key={c} value={c}>{chains?.chains?.[c]?.label || c}</option>
+          ))}
+        </select>
       </div>
 
       {/* ── Chain summary ── */}
@@ -142,20 +143,22 @@ export default function ChainConfig() {
           </div>
         )}
         {health?.endpoints && (
-          <table>
-            <thead><tr><th>Endpoint</th><th>chainId</th><th>Block</th><th>RTT</th><th>Status</th></tr></thead>
-            <tbody>
-              {[...health.endpoints].sort((a, b) => (a.ms ?? 9e9) - (b.ms ?? 9e9)).map(e => (
-                <tr key={e.url}>
-                  <td className="mono" style={{ fontSize: 11 }}>{e.url}</td>
-                  <td>{e.chain_id ?? '—'}</td>
-                  <td className="mono">{e.block?.toLocaleString() ?? '—'}</td>
-                  <td className="mono">{e.ms != null ? `${e.ms}ms` : '—'}</td>
-                  <td><span className="tag" style={{ color: STATUS_COLOR[e.status], borderColor: STATUS_COLOR[e.status] }}>{e.status}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Collap bare open={false} title={`Endpoint probes (${health.endpoints.length})`}>
+            <table>
+              <thead><tr><th>Endpoint</th><th>chainId</th><th>Block</th><th>RTT</th><th>Status</th></tr></thead>
+              <tbody>
+                {[...health.endpoints].sort((a, b) => (a.ms ?? 9e9) - (b.ms ?? 9e9)).map(e => (
+                  <tr key={e.url}>
+                    <td className="mono" style={{ fontSize: 11 }}>{e.url}</td>
+                    <td>{e.chain_id ?? '—'}</td>
+                    <td className="mono">{e.block?.toLocaleString() ?? '—'}</td>
+                    <td className="mono">{e.ms != null ? `${e.ms}ms` : '—'}</td>
+                    <td><span className="tag" style={{ color: STATUS_COLOR[e.status], borderColor: STATUS_COLOR[e.status] }}>{e.status}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Collap>
         )}
         <div className="dim" style={{ fontSize: 12, marginTop: 8 }}>
           Unhealthy endpoints are auto-benched by the runner's 60s circuit breaker — config is never silently edited.
@@ -201,8 +204,7 @@ export default function ChainConfig() {
 
       {/* ── Tokens & DEXes ── */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <div className="panel" style={{ marginTop: 0 }}>
-          <h3>Tokens ({cfg ? Object.keys(cfg.tokens).length : 0})</h3>
+        <Collap style={{ marginTop: 0 }} open={false} title={`Tokens (${cfg ? Object.keys(cfg.tokens).length : 0})`}>
           <table>
             <thead><tr><th>Symbol</th><th>Address</th><th>Flash</th><th>USD price</th></tr></thead>
             <tbody>
@@ -216,9 +218,8 @@ export default function ChainConfig() {
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="panel" style={{ marginTop: 0 }}>
-          <h3>DEXes & pools ({cfg?.pools.length ?? 0})</h3>
+        </Collap>
+        <Collap style={{ marginTop: 0 }} open={false} title={`DEXes & pools (${cfg?.pools.length ?? 0})`}>
           <div style={{ marginBottom: 8 }}>
             {cfg && Object.entries(cfg.dexes).map(([p, n]) => (
               <span key={p} className="tag" style={{ marginRight: 6 }}>{p} ×{n}</span>
@@ -237,16 +238,14 @@ export default function ChainConfig() {
               ))}
             </tbody>
           </table>
-        </div>
+        </Collap>
       </div>
 
       {/* ── Recommended expansion queue ── ranked from DefiLlama TVL,
           chainid.network, canonical token lists + live probes only ── */}
       {recs && (
-        <div className="panel">
-          <h3>Recommended expansion queue
-            <span className="dim" style={{ fontSize: 11, fontWeight: 400 }}> — admission: {recs.admissible}</span></h3>
-
+        <Collap title={<>Recommended expansion queue
+            <span className="dim" style={{ fontSize: 11, fontWeight: 400 }}> — admission: {recs.admissible}</span></>}>
           <h4 style={{ margin: '10px 0 4px', color: 'var(--dim)' }}>Next chains (DefiLlama TVL × live RPC probe)</h4>
           <table>
             <thead><tr><th>#</th><th>Chain</th><th>TVL</th><th>RPC health</th><th>Block int.</th><th>Latency</th><th>RPCs</th><th>Score</th><th>Action</th></tr></thead>
@@ -298,7 +297,7 @@ export default function ChainConfig() {
                 <td className="dim">{r.action}</td>
               </tr>))}</tbody>
           </table>
-        </div>
+        </Collap>
       )}
 
       {/* ── Expansion drafts ── */}
@@ -331,6 +330,7 @@ export default function ChainConfig() {
           <button className="primary" disabled={busy}>Create draft</button>
         </form>
         {(drafts || []).length > 0 && (
+          <Collap bare open={false} title={`Drafts (${drafts.length})`}>
           <table style={{ marginTop: 10 }}>
             <thead><tr><th>Draft</th><th>Type</th><th>Payload</th><th>Status</th><th>Checks</th><th>Actions</th></tr></thead>
             <tbody>
@@ -355,13 +355,13 @@ export default function ChainConfig() {
               ))}
             </tbody>
           </table>
+          </Collap>
         )}
       </div>
 
       {/* ── Audit + engine flags (merged from Settings) ── */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <div className="panel" style={{ marginTop: 0 }}>
-          <h3>Config audit log</h3>
+        <Collap style={{ marginTop: 0 }} open={false} title={`Config audit log (${(audit || []).length})`}>
           {(audit || []).length === 0 ? <div className="dim" style={{ fontSize: 12.5 }}>No config events yet.</div> : (
             <table>
               <thead><tr><th>Time</th><th>Action</th><th>Detail</th></tr></thead>
@@ -376,9 +376,8 @@ export default function ChainConfig() {
               </tbody>
             </table>
           )}
-        </div>
-        <div className="panel" style={{ marginTop: 0 }}>
-          <h3>Console & engine flags</h3>
+        </Collap>
+        <Collap style={{ marginTop: 0 }} open={false} title="Console & engine flags">
           <form className="inline">
             <label className="dim">Refresh</label>
             <select value={refreshMs} onChange={e => setRefreshMs(+e.target.value)}>
@@ -395,7 +394,7 @@ export default function ChainConfig() {
           <div className="step"><span className="n">MODE</span><div><strong>{all.live ? 'LIVE' : 'DRY-RUN'}</strong> — flip via Deployment → Go live</div></div>
           <div className="step"><span className="n">GATE</span><div>min_net_profit $1.50 floor · max 3 hops · strict_4337 submission</div></div>
           <div className="step"><span className="n">GOV</span><div>No live tx without SIMULATION_VERIFIED + Commander approval (.windsurfrules)</div></div>
-        </div>
+        </Collap>
       </div>
     </div>
   )

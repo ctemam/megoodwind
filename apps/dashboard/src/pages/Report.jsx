@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useApp, fmt } from '../state.jsx'
+import Collap from '../Collap.jsx'
 
 const LABEL = { bsc: 'BNB Chain', base: 'Base' }
 const COLOR = { bsc: '#f0b90b', base: '#38b6ff' }
@@ -98,8 +99,7 @@ export default function Report() {
       </div>
 
       {/* per-chain analytics */}
-      <div className="panel">
-        <h3>Per-chain analytics</h3>
+      <Collap title="Per-chain analytics">
         <table>
           <thead><tr>
             <th>Chain</th><th>Profit</th><th>$/h</th><th>Hits</th><th>Hits/h</th>
@@ -128,11 +128,10 @@ export default function Report() {
             })}
           </tbody>
         </table>
-      </div>
+      </Collap>
 
       {/* token matrix */}
-      <div className="panel">
-        <h3>Token matrix — profit attribution by flash token</h3>
+      <Collap open={false} title={`Token matrix — profit attribution by flash token (${(data?.tokens || []).length})`}>
         {(data?.tokens || []).length === 0 ? (
           <div className="dim" style={{ fontSize: 12.5 }}>No token-attributed profit in this window. Counters populate as profitable paths are evaluated.</div>
         ) : (
@@ -151,11 +150,10 @@ export default function Report() {
             </tbody>
           </table>
         )}
-      </div>
+      </Collap>
 
       {/* recommendations */}
-      <div className="panel">
-        <h3>Recommendations</h3>
+      <Collap title={`Recommendations (${(data?.recommendations || []).length})`}>
         {(data?.recommendations || []).length === 0 ? (
           <div className="dim" style={{ fontSize: 12.5 }}>Collecting data — recommendations appear once the window has signal.</div>
         ) : (
@@ -166,7 +164,7 @@ export default function Report() {
             </div>
           ))
         )}
-      </div>
+      </Collap>
     </div>
   )
 }

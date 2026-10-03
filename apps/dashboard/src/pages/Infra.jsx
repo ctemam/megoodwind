@@ -1,5 +1,6 @@
 import React from 'react'
 import { useApp } from '../state.jsx'
+import Collap from '../Collap.jsx'
 
 function pct(m, le) {
   const under = m[`arb_scan_latency_seconds_bucket{le="${le}"}`] ?? 0
@@ -34,13 +35,12 @@ export default function Infra() {
           </tbody>
         </table>
       </div>
-      <div className="panel">
-        <h3>Infrastructure notes</h3>
+      <Collap title="Infrastructure notes" open={false}>
         <div className="step"><span className="n">RPC</span><div>32 BSC / 17 Base verified read nodes, 60s blacklist failover; premium keys via <code>gen_rpc_pool.py --alchemy-key …</code></div></div>
         <div className="step"><span className="n">WSS</span><div>BSC mempool p50 2µs / p99 4µs (publicnode); Base via onfinality — sole free emitter found</div></div>
         <div className="step"><span className="n">MC3</span><div>Multicall3 salvage: 8/8 pools per block in one round-trip; deployless mode covers V2/V3</div></div>
         <div className="step"><span className="n">VNU</span><div>VenueRouter: EMA-ordered submits, 60s bench on 3 misses; per-chain budgets 8/400ms BSC, 250/1600ms Base</div></div>
-      </div>
+      </Collap>
     </div>
   )
 }

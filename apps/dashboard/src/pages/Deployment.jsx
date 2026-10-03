@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useApp, fmt } from '../state.jsx'
+import Collap from '../Collap.jsx'
 
 const LABEL = { bsc: 'BNB Chain', base: 'Base' }
 
@@ -126,8 +127,7 @@ export default function Deployment() {
       </div>
 
       {/* ── Deployment registry — auto-registered instances ── */}
-      <div className="panel">
-        <h3>Deployment registry</h3>
+      <Collap title={`Deployment registry (${(deploys?.instances || []).length})`}>
         <table>
           <thead>
             <tr>
@@ -173,7 +173,7 @@ export default function Deployment() {
               ))}
           </tbody>
         </table>
-      </div>
+      </Collap>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useApp, fmt } from '../state.jsx'
+import Collap from '../Collap.jsx'
 
 export default function Wallet() {
   const { prices, currency } = useApp()
@@ -55,8 +56,7 @@ export default function Wallet() {
         </table>
       </div>
 
-      <div className="panel">
-        <h3>Auto-withdrawal</h3>
+      <Collap title="Auto-withdrawal">
         <form className="inline">
           <label className="dim">Sweep when balance ≥ USD</label>
           <input type="number" value={cfg?.thresholdUsd ?? 100} onChange={e => setAuto({ thresholdUsd: +e.target.value })} style={{ width: 100 }} />
@@ -67,10 +67,9 @@ export default function Wallet() {
           </button>
           {cfg?.enabled && <span className={`tag ${live ? 'live' : 'dry'}`}>{live ? 'ARMED' : 'ARMED (dry-run)'}</span>}
         </form>
-      </div>
+      </Collap>
 
-      <div className="panel">
-        <h3>Manual withdrawal</h3>
+      <Collap title="Manual withdrawal">
         <form className="inline" onSubmit={manual}>
           <select value={form.chain} onChange={e => setForm(f => ({ ...f, chain: e.target.value }))}>
             <option value="bsc">BSC</option><option value="base">Base</option>
@@ -83,7 +82,7 @@ export default function Wallet() {
         <div className="dim" style={{ marginTop: 10, fontSize: 12 }}>
           Manual withdraw calls the executor's owner-only <code>emergencyWithdraw</code>. Broadcast is gated by <code>LIVE_COMMANDER_APPROVED</code> — in dry-run it returns the exact call it would make.
         </div>
-      </div>
+      </Collap>
     </div>
   )
 }
