@@ -15,7 +15,7 @@ rpc_https_pool = [
     "https://rpc.mevblocker.io",
     "https://endpoints.omniatech.io/v1/eth/mainnet/public",
 ]
-rpc_wss = ""
+rpc_wss = "wss://eth.drpc.org"
 rpc_wss_pool = [
     "wss://ethereum-rpc.publicnode.com",
     "wss://eth.drpc.org",
@@ -434,3 +434,7 @@ token0 = "WBTC"
 token1 = "USDT"
 fee_bps = 100
 
+
+# Wallet intelligence: real-time top-wallet discovery (observation only).
+[leaders]
+discover = true

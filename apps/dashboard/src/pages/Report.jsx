@@ -4,8 +4,8 @@ import { useApp, fmt } from '../state.jsx'
 import Collap from '../Collap.jsx'
 import { useSort } from '../Sortable.jsx'
 
-const LABEL = { bsc: 'BNB Chain', base: 'Base' }
-const COLOR = { bsc: '#f0b90b', base: '#38b6ff' }
+const LABEL = { bsc: 'BNB Chain', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
+const COLOR = { bsc: '#f0b90b', base: '#38b6ff', ethereum: '#627eea', polygon: '#8247e5' }
 const WINDOWS = [['1h', '1 hour'], ['6h', '6 hours'], ['24h', '24 hours'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All']]
 
 export default function Report() {
@@ -23,7 +23,7 @@ export default function Report() {
   }, [win, refreshMs])
 
   const chains = data?.chains || {}
-  const names = ['bsc', 'base'].filter(c => chains[c]?.online)
+  const names = ['bsc', 'base', 'ethereum', 'polygon'].filter(c => chains[c]?.online)
   const totGross = names.reduce((s, c) => s + chains[c].grossUsd, 0)
   const totEvals = names.reduce((s, c) => s + chains[c].evals, 0)
   const totHits = names.reduce((s, c) => s + chains[c].hits, 0)

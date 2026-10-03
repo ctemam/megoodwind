@@ -14,7 +14,7 @@ rpc_https_pool = [
     "https://polygon.meowrpc.com",
     "https://polygon-rpc.com",
 ]
-rpc_wss = ""
+rpc_wss = "wss://polygon-bor-rpc.publicnode.com"
 rpc_wss_pool = [
     "wss://polygon-bor-rpc.publicnode.com",
     "wss://polygon.drpc.org",
@@ -570,3 +570,7 @@ token0 = "USDC"
 token1 = "WETH"
 fee_bps = 100
 
+
+# Wallet intelligence: real-time top-wallet discovery (observation only).
+[leaders]
+discover = true

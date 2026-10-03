@@ -19,6 +19,8 @@ const HOST = process.env.DASHBOARD_HOST || '127.0.0.1'
 const CHAINS = {
   bsc: { metrics: 'http://localhost:9100/metrics', rpc: 'https://bsc-rpc.publicnode.com', chainId: 56, label: 'BSC' },
   base: { metrics: 'http://localhost:9101/metrics', rpc: 'https://base-rpc.publicnode.com', chainId: 8453, label: 'Base' },
+  ethereum: { metrics: 'http://localhost:9102/metrics', rpc: 'https://ethereum-rpc.publicnode.com', chainId: 1, label: 'Ethereum' },
+  polygon: { metrics: 'http://localhost:9103/metrics', rpc: 'https://polygon-bor-rpc.publicnode.com', chainId: 137, label: 'Polygon' },
 }
 
 const ENV_PATH = path.join(REPO, '.env')
@@ -713,7 +715,7 @@ app.post('/api/withdraw', async (req, res) => {
 // Guarded Draft → Validate → Simulate → Apply workflow. Validation and
 // simulation probe the live chain; apply writes the TOML atomically and
 // restarts only the affected runner. Every step lands in the audit log.
-const CONFIG_FILES = { bsc: 'config/bsc.toml', base: 'config/base.toml' }
+const CONFIG_FILES = { bsc: 'config/bsc.toml', base: 'config/base.toml', ethereum: 'config/ethereum.toml', polygon: 'config/polygon.toml' }
 const DRAFTS_LOG = path.join(__dirname, '.config-drafts.json')
 const AUDIT_LOG = path.join(__dirname, '.config-audit.json')
 let drafts = []

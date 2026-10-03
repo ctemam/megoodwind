@@ -27,7 +27,7 @@ export default function PnL() {
   const [open, setOpen] = useState({})
   const [win, setWin] = useState('all')
   const [winData, setWinData] = useState(null)
-  const names = { bsc: 'BSC', base: 'Base' }
+  const names = { bsc: 'BSC', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
 
   useEffect(() => {
     if (win === 'all') { setWinData(null); return }

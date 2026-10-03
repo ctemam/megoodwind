@@ -102,7 +102,8 @@ export default function Wallet() {
     setMsg(r.dryRun ? `DRY-RUN: would call ${r.wouldCall} on ${r.chain} → ${r.to || '(owner)'} ${r.amountWei || ''} wei` : (r.error || 'submitted'))
   }
   const eth = (wei) => wei ? Number(BigInt(wei)) / 1e18 : null
-  const usdOf = (c, n) => n != null ? n * ((c === 'bsc' ? prices?.binancecoin?.usd : prices?.ethereum?.usd) ?? 0) : null
+  const NATIVE_PRICE = { bsc: 'binancecoin', base: 'ethereum', ethereum: 'ethereum', polygon: 'matic-network' }
+  const usdOf = (c, n) => n != null ? n * (prices?.[NATIVE_PRICE[c]]?.usd ?? 0) : null
 
   // Unified rows: one row per account, per-chain balance columns + total.
   const rows = [
@@ -112,6 +113,7 @@ export default function Wallet() {
         address: w.address, role: w.kind.replace('_', ' '),
         nick: nicks[w.address.toLowerCase()] || '',
         bsc: w.chain === 'bsc' ? n : null, base: w.chain === 'base' ? n : null,
+        ethereum: w.chain === 'ethereum' ? n : null, polygon: w.chain === 'polygon' ? n : null,
         usd: w.chain ? usdOf(w.chain, n) : null,
       }
     }),
@@ -120,9 +122,12 @@ export default function Wallet() {
       const key = addr.toLowerCase()
       const b = mmBals[key] || {}
       const bsc = eth(b.bsc), base = eth(b.base)
-      const usd = [usdOf('bsc', bsc), usdOf('base', base)].reduce((s, v) => s + (v ?? 0), 0)
+      const ethereum = eth(b.ethereum), polygon = eth(b.polygon)
+      const usd = [usdOf('bsc', bsc), usdOf('base', base), usdOf('ethereum', ethereum), usdOf('polygon', polygon)]
+        .reduce((s, v) => s + (v ?? 0), 0)
       return { address: addr, role: 'metamask', nick: nicks[key] || '', removable: true,
-        bsc, base, usd: (bsc != null || base != null) ? usd : null }
+        bsc, base, ethereum, polygon,
+        usd: (bsc != null || base != null || ethereum != null || polygon != null) ? usd : null }
     }),
   ]
   const sorted = rows.slice().sort((a, b) => {
@@ -157,7 +162,8 @@ export default function Wallet() {
         <table>
           <thead><tr>
             {th('nick', 'Nickname')}{th('role', 'Role')}{th('address', 'Address')}
-            {th('bsc', 'BSC · BNB')}{th('base', 'BASE · ETH')}{th('usd', 'Total USD')}<th></th>
+            {th('bsc', 'BSC · BNB')}{th('base', 'BASE · ETH')}
+            {th('ethereum', 'ETH · ETH')}{th('polygon', 'POLY · POL')}{th('usd', 'Total USD')}<th></th>
           </tr></thead>
           <tbody>
             {sorted.map((r, i) => (
@@ -172,17 +178,21 @@ export default function Wallet() {
                 <td className="mono">{r.address.slice(0, 10)}…{r.address.slice(-6)}</td>
                 <td className="mono">{showN(r.bsc, 'BNB')}</td>
                 <td className="mono">{showN(r.base, 'ETH')}</td>
+                <td className="mono">{showN(r.ethereum, 'ETH')}</td>
+                <td className="mono">{showN(r.polygon, 'POL')}</td>
                 <td>{r.usd != null ? fmt(r.usd, currency, prices) : '—'}</td>
                 <td>{r.removable && <button title="Remove" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => removeAcct(r.address)}>✕</button>}</td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={7} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
+            {!rows.length && <tr><td colSpan={9} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
           </tbody>
           {rows.length > 0 && (
             <tfoot><tr className="total">
               <td colSpan={3}><b>Total · {rows.length} accounts</b></td>
               <td className="mono"><b>{showN(tot('bsc'), 'BNB')}</b></td>
               <td className="mono"><b>{showN(tot('base'), 'ETH')}</b></td>
+              <td className="mono"><b>{showN(tot('ethereum'), 'ETH')}</b></td>
+              <td className="mono"><b>{showN(tot('polygon'), 'POL')}</b></td>
               <td><b>{fmt(totUsd, currency, prices)}</b></td>
               <td></td>
             </tr></tfoot>
@@ -208,6 +218,7 @@ export default function Wallet() {
         <form className="inline" onSubmit={manual}>
           <select value={form.chain} onChange={e => setForm(f => ({ ...f, chain: e.target.value }))}>
             <option value="bsc">BSC</option><option value="base">Base</option>
+            <option value="ethereum">Ethereum</option><option value="polygon">Polygon</option>
           </select>
           <input placeholder="to address (0x…)" value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} style={{ width: 340 }} />
           <input placeholder="amount (wei)" value={form.amountWei} onChange={e => setForm(f => ({ ...f, amountWei: e.target.value }))} style={{ width: 160 }} />
