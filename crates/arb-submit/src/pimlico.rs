@@ -29,8 +29,12 @@ pub struct PimlicoConfig {
     pub entry_point: Address,
     pub account_factory: Address,
     pub salt: U256,
-    /// Pimlico sponsorship policy id (sp_...). None = self-funded smart account.
+    /// Pimlico sponsorship policy id (sp_...). None = no sponsorship.
     pub sponsor_policy_id: Option<String>,
+    /// Gasless-only rule: when false, ops that cannot be sponsored are
+    /// rejected instead of falling back to a self-funded UserOperation.
+    /// `ALLBRIGHTA_SELF_FUNDED_FALLBACK=true` re-enables the fallback.
+    pub self_funded_fallback: bool,
 }
 
 impl PimlicoConfig {
@@ -44,6 +48,9 @@ impl PimlicoConfig {
         let sponsor_policy_id = sponsor_policy_id_env
             .and_then(|env| std::env::var(env).ok())
             .filter(|v| !v.is_empty());
+        let self_funded_fallback = std::env::var("ALLBRIGHTA_SELF_FUNDED_FALLBACK")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
         Ok(Self {
             bundler_url: bundler_url.to_string(),
             entry_point: Address::from_str(entry_point.unwrap_or(ENTRY_POINT_V06))
@@ -52,6 +59,7 @@ impl PimlicoConfig {
                 .context("invalid account_factory address")?,
             salt: U256::from(salt),
             sponsor_policy_id,
+            self_funded_fallback,
         })
     }
 }
@@ -202,9 +210,19 @@ impl PimlicoSubmitter {
                     paymaster_and_data = pmd;
                 }
                 Err(e) => {
+                    // Gasless-only rule: a sponsorship rejection rejects the
+                    // operation — no silent self-funded submission unless the
+                    // operator explicitly re-enables the fallback.
+                    if !self.cfg.self_funded_fallback {
+                        anyhow::bail!("pm_sponsorUserOperation rejected and self-funded fallback disabled: {e}");
+                    }
                     warn!(error = %e, "pm_sponsorUserOperation failed — falling back to self-funded op");
                 }
             }
+        } else if !self.cfg.self_funded_fallback {
+            anyhow::bail!(
+                "gasless mode: no sponsor policy configured (ALLBRIGHTA_SPONSOR_POLICY_ID) and self-funded fallback disabled"
+            );
         }
 
         let mut op = unsigned;
@@ -231,8 +249,7 @@ impl PimlicoSubmitter {
         Ok(json!({
             "entryPoint": format!("{:#x}", self.cfg.entry_point),
             "chainId": self.assembler.chain_id,
-            "sponsored": self.cfg.sponsor_policy_id.is_some()
-                && !op.paymaster_and_data.is_empty(),
+            "sponsored": !op.paymaster_and_data.is_empty(),
             "userOperation": op.to_json(),
         }))
     }

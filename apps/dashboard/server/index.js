@@ -469,6 +469,13 @@ app.get('/api/deploy/preflight', async (_req, res) => {
       checks.push({ name: `${cfg.label} runner`, ok: false, detail: `unreachable: ${e.message}` })
     }
   }
+  // Gasless-mode gate: strict_4337 requires a sponsor policy — ops are
+  // rejected rather than self-funded when it is missing.
+  const sponsorSet = !!env.ALLBRIGHTA_SPONSOR_POLICY_ID
+  checks.push({ name: 'Sponsor policy (gasless)', ok: sponsorSet,
+    detail: sponsorSet
+      ? `ALLBRIGHTA_SPONSOR_POLICY_ID set — paymaster covers gas, user funding: NO`
+      : 'missing — strict_4337 ops will be rejected until ALLBRIGHTA_SPONSOR_POLICY_ID is set' })
   for (const key of ['BSC_ARB_CONTRACT', 'BASE_ARB_CONTRACT', 'PIMLICO_API_KEY', 'PRIVATE_KEY']) {
     const set = !!env[key]
     checks.push({ name: `env ${key}`, ok: set, detail: set ? 'set' : 'missing from .env' })
