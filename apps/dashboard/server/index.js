@@ -137,6 +137,8 @@ const HIST_KEYS = [
   'arb_state_refresh_seconds_count', 'arb_state_refresh_seconds_sum',
   'arb_backrun_candidates_total', 'arb_submit_attempts_total',
   'arb_warp_spend_usd_total', 'arb_current_block',
+  'arb_gas_spent_wei_total', 'arb_path_suppressed_total',
+  'arb_builder_sim_reject_total',
 ]
 
 async function sampleHistory() {
@@ -149,7 +151,8 @@ async function sampleHistory() {
       // Token-labeled counters arrive flattened as name{token="SYM"}.
       for (const [k, v] of Object.entries(m)) {
         if (k.startsWith('arb_profitable_by_token_total{') ||
-            k.startsWith('arb_token_profit_usd_total{')) o[k] = v
+            k.startsWith('arb_token_profit_usd_total{') ||
+            k.startsWith('arb_submit_landed_total{')) o[k] = v
       }
       snap.chains[c] = o
     } catch { /* chain offline — record nothing */ }
@@ -175,6 +178,37 @@ sampleHistory()
 setInterval(sampleHistory, 60_000)
 
 const WINDOWS = { '1h': 3600e3, '6h': 6 * 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3, all: Infinity }
+
+// P&L window endpoint — window is minutes, or 'all' for lifetime.
+// Same reset-tolerant accumulation as /api/report.
+app.get('/api/pnl', async (req, res) => {
+  const q = req.query.window
+  const minutes = (!q || q === 'all') ? null : Math.max(1, Number(q) || 0)
+  const out = { live: isLive(), chains: {} }
+  const liveMaps = {}
+  for (const c of Object.keys(CHAINS)) {
+    try { liveMaps[c] = await fetchMetrics(c) } catch {}
+  }
+  for (const c of Object.keys(CHAINS)) {
+    out.chains[c] = { online: !!liveMaps[c] }
+    if (minutes === null) { // lifetime — return live cumulative counters
+      if (liveMaps[c]) Object.assign(out.chains[c], liveMaps[c])
+      continue
+    }
+    const since = Date.now() - minutes * 60000
+    const snaps = histLog.filter(s => s.t >= since).map(s => s.chains[c]).filter(Boolean)
+    if (snaps.length < 2) continue
+    const prev = {}, acc = {}
+    for (const m of snaps) {
+      for (const [k, v] of Object.entries(m)) {
+        if (k in prev) acc[k] = (acc[k] || 0) + Math.max(0, v - prev[k])
+        prev[k] = v
+      }
+    }
+    Object.assign(out.chains[c], acc)
+  }
+  res.json(out)
+})
 
 app.get('/api/report', (req, res) => {
   const w = WINDOWS[req.query.window] ?? WINDOWS['24h']
