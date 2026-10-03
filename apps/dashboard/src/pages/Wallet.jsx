@@ -5,6 +5,7 @@ import Collap from '../Collap.jsx'
 export default function Wallet() {
   const { prices, currency } = useApp()
   const [wallets, setWallets] = useState([])
+  const [accts, setAccts] = useState([])   // registered user accounts (persisted)
   const [live, setLive] = useState(false)
   const [cfg, setCfg] = useState(null)
   const [form, setForm] = useState({ chain: 'bsc', to: '', amountWei: '' })
@@ -26,26 +27,42 @@ export default function Wallet() {
     fetch('/api/wallet/nicknames').then(r => r.json()).then(setNicks).catch(() => {})
   }, [])
 
-  // Per-chain balances for each detected MetaMask account — queried on
-  // EVERY configured chain server-side, not just MetaMask's active one.
+  // Per-chain balances for every user account (registered + detected) —
+  // queried on EVERY configured chain, not just MetaMask's active one.
   useEffect(() => {
-    for (const a of mm?.accounts || []) {
-      const key = a.address.toLowerCase()
-      if (mmBals[key]) continue
-      fetch(`/api/wallet/balance?address=${a.address}`).then(r => r.json())
+    const seen = new Set()
+    for (const a of [...accts.map(x => x.address), ...(mm?.accounts || []).map(x => x.address)]) {
+      const key = a.toLowerCase()
+      if (seen.has(key) || mmBals[key]) continue
+      seen.add(key)
+      fetch(`/api/wallet/balance?address=${a}`).then(r => r.json())
         .then(d => setMmBals(x => ({ ...x, [key]: d }))).catch(() => {})
     }
-  }, [mm])
+  }, [mm, accts])
 
   const load = async () => {
     const [w, c] = await Promise.all([
       fetch('/api/wallets').then(r => r.json()).catch(() => null),
       fetch('/api/withdraw/config').then(r => r.json()).catch(() => null),
     ])
-    if (w) { setWallets(w.wallets || []); setLive(w.live) }
+    if (w) { setWallets(w.wallets || []); setLive(w.live); setAccts(w.accounts || []) }
     if (c) setCfg(c.auto)
   }
   useEffect(() => { load() }, [])
+
+  // Register a detected account server-side — it then stays in the table
+  // permanently with per-chain balances even without MetaMask open.
+  const register = async (address, chainId) => {
+    const r = await fetch('/api/wallet/accounts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, chainId, source: 'metamask' }),
+    }).then(r => r.json()).catch(() => null)
+    if (r?.ok) load()
+  }
+  const removeAcct = async (address) => {
+    await fetch(`/api/wallet/accounts/${address}`, { method: 'DELETE' })
+    load()
+  }
 
   // ── MetaMask auto-detect: silent read of already-connected accounts,
   //    one-click connect otherwise. eth_getBalance on the active chain. ──
@@ -63,6 +80,7 @@ export default function Wallet() {
         rows.push({ address, chainId, balanceWei })
       }
       setMm({ available: true, accounts: rows })
+      for (const a of rows) register(a.address, chainId)
       if (!eth.__abWatch) {
         eth.__abWatch = true
         eth.on?.('accountsChanged', () => detect(false))
@@ -97,12 +115,13 @@ export default function Wallet() {
         usd: w.chain ? usdOf(w.chain, n) : null,
       }
     }),
-    ...(mm?.accounts || []).map(a => {
-      const key = a.address.toLowerCase()
+    // user accounts — union of persisted registrations + live MetaMask
+    ...[...new Set([...accts.map(x => x.address), ...(mm?.accounts || []).map(x => x.address)])].map(addr => {
+      const key = addr.toLowerCase()
       const b = mmBals[key] || {}
       const bsc = eth(b.bsc), base = eth(b.base)
       const usd = [usdOf('bsc', bsc), usdOf('base', base)].reduce((s, v) => s + (v ?? 0), 0)
-      return { address: a.address, role: 'metamask', nick: nicks[key] || '',
+      return { address: addr, role: 'metamask', nick: nicks[key] || '', removable: true,
         bsc, base, usd: (bsc != null || base != null) ? usd : null }
     }),
   ]
@@ -138,7 +157,7 @@ export default function Wallet() {
         <table>
           <thead><tr>
             {th('nick', 'Nickname')}{th('role', 'Role')}{th('address', 'Address')}
-            {th('bsc', 'BSC · BNB')}{th('base', 'BASE · ETH')}{th('usd', 'Total USD')}
+            {th('bsc', 'BSC · BNB')}{th('base', 'BASE · ETH')}{th('usd', 'Total USD')}<th></th>
           </tr></thead>
           <tbody>
             {sorted.map((r, i) => (
@@ -154,9 +173,10 @@ export default function Wallet() {
                 <td className="mono">{showN(r.bsc, 'BNB')}</td>
                 <td className="mono">{showN(r.base, 'ETH')}</td>
                 <td>{r.usd != null ? fmt(r.usd, currency, prices) : '—'}</td>
+                <td>{r.removable && <button title="Remove" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => removeAcct(r.address)}>✕</button>}</td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={6} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
+            {!rows.length && <tr><td colSpan={7} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
           </tbody>
           {rows.length > 0 && (
             <tfoot><tr className="total">
@@ -164,6 +184,7 @@ export default function Wallet() {
               <td className="mono"><b>{showN(tot('bsc'), 'BNB')}</b></td>
               <td className="mono"><b>{showN(tot('base'), 'ETH')}</b></td>
               <td><b>{fmt(totUsd, currency, prices)}</b></td>
+              <td></td>
             </tr></tfoot>
           )}
         </table>

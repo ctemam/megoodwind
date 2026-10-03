@@ -345,6 +345,36 @@ async function rpc(chain, method, params) {
   return (await r.json()).result
 }
 
+// User-registered accounts — MetaMask accounts detected via the Wallet
+// page are persisted here so they stay in the table permanently, with
+// balances refreshed on every configured chain.
+const ACCT_FILE = path.join(__dirname, '.wallet-accounts.json')
+let accounts = []
+try { accounts = JSON.parse(fs.readFileSync(ACCT_FILE, 'utf8')) } catch {}
+
+app.get('/api/wallet/accounts', (_req, res) => res.json({ accounts }))
+app.post('/api/wallet/accounts', async (req, res) => {
+  const { address, chainId, source } = req.body || {}
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address || '')) return res.status(400).json({ error: 'invalid address' })
+  const key = address.toLowerCase()
+  const existing = accounts.find(a => a.address === key)
+  if (existing) { existing.last_chain_id = chainId ?? existing.last_chain_id; existing.seen_at = Date.now() }
+  else accounts.push({ address: key, source: source || 'metamask', last_chain_id: chainId ?? null, added_at: Date.now(), seen_at: Date.now() })
+  fs.writeFile(ACCT_FILE, JSON.stringify(accounts), () => {})
+  // Detect balances on every configured chain right away.
+  const d = {}
+  for (const c of Object.keys(CHAINS)) {
+    try { d[c] = await rpc(c, 'eth_getBalance', [key, 'latest']) } catch { d[c] = null }
+  }
+  balCache.set(key, { t: Date.now(), d: { address: key, ...d } })
+  res.json({ ok: true, account: { address: key, ...d } })
+})
+app.delete('/api/wallet/accounts/:address', (req, res) => {
+  accounts = accounts.filter(a => a.address !== req.params.address.toLowerCase())
+  fs.writeFile(ACCT_FILE, JSON.stringify(accounts), () => {})
+  res.json({ ok: true, accounts })
+})
+
 // Wallet/contract balances — addresses from repo .env, never exposed raw keys.
 app.get('/api/wallets', async (_req, res) => {
   const wallets = []
@@ -361,7 +391,7 @@ app.get('/api/wallets', async (_req, res) => {
       }
     }
   }
-  res.json({ live: isLive(), wallets })
+  res.json({ live: isLive(), wallets, accounts })
 })
 
 // Account nicknames — user labels for wallet rows, persisted locally.
