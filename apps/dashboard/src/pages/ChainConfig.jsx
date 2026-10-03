@@ -25,6 +25,7 @@ export default function ChainConfig() {
   const reload = () => setTick(t => t + 1)
   const chains = useApi('/api/config/chains', tick)
   const capacity = useApi('/api/config/capacity', tick)
+  const recs = useApi(`/api/config/recommendations?chain=${chain}`, `${chain}:recs`)
   const health = useApi(`/api/config/chains/${chain}/health`, `${chain}:${tick}`)
   const drafts = useApi('/api/config/drafts', tick)
   const audit = useApi('/api/config/audit', tick)
@@ -238,6 +239,67 @@ export default function ChainConfig() {
           </table>
         </div>
       </div>
+
+      {/* ── Recommended expansion queue ── ranked from DefiLlama TVL,
+          chainid.network, canonical token lists + live probes only ── */}
+      {recs && (
+        <div className="panel">
+          <h3>Recommended expansion queue
+            <span className="dim" style={{ fontSize: 11, fontWeight: 400 }}> — admission: {recs.admissible}</span></h3>
+
+          <h4 style={{ margin: '10px 0 4px', color: 'var(--dim)' }}>Next chains (DefiLlama TVL × live RPC probe)</h4>
+          <table>
+            <thead><tr><th>#</th><th>Chain</th><th>TVL</th><th>RPC health</th><th>Block int.</th><th>Latency</th><th>RPCs</th><th>Score</th><th>Action</th></tr></thead>
+            <tbody>{(recs.chains || []).map(r => (
+              <tr key={r.id}>
+                <td>{r.rank}</td>
+                <td><b>{r.name}</b> <span className="dim" style={{ fontSize: 11 }}>#{r.chain_id} {r.native}</span></td>
+                <td>${r.tvl_usd >= 1e9 ? (r.tvl_usd / 1e9).toFixed(1) + 'B' : (r.tvl_usd / 1e6).toFixed(0) + 'M'}</td>
+                <td style={{ color: r.rpc_health === 'healthy' ? 'var(--acc)' : r.rpc_health === 'degraded' ? 'var(--warn)' : 'var(--neg)' }}>{r.rpc_health}</td>
+                <td>{r.block_interval_ms ? r.block_interval_ms + 'ms' : '—'}</td>
+                <td>{r.latency_ms ? r.latency_ms + 'ms' : '—'}</td>
+                <td>{r.rpc_endpoints}</td>
+                <td>{r.score}</td>
+                <td>{r.action === 'simulate'
+                  ? <button disabled={busy} onClick={() => act(`/api/config/recommendations/${r.id}/promote`,
+                      { kind: 'chain', payload: { name: r.name.toLowerCase().replace(/[^a-z0-9-]/g, '-'), chain_id: r.chain_id, rpc_url: r.rpc_url, block_time_ms: r.block_interval_ms } })}>Draft</button>
+                  : <span className="dim">{r.action}</span>}</td>
+              </tr>))}</tbody>
+          </table>
+
+          <h4 style={{ margin: '14px 0 4px', color: 'var(--dim)' }}>Next tokens — {chain.toUpperCase()} (canonical list × on-chain verify × GoPlus)</h4>
+          <table>
+            <thead><tr><th>#</th><th>Token</th><th>On-chain</th><th>GoPlus</th><th>Priced</th><th>Score</th><th>Action</th></tr></thead>
+            <tbody>{(recs.tokens?.[chain] || []).slice(0, 10).map(r => (
+              <tr key={r.id}>
+                <td>{r.rank}</td>
+                <td><b>{r.symbol}</b> <span className="mono dim" style={{ fontSize: 10 }}>{r.address.slice(0, 10)}…</span></td>
+                <td style={{ color: r.onchain_ok ? 'var(--acc)' : 'var(--neg)' }}>{r.onchain_ok ? 'verified' : 'failed'}</td>
+                <td style={{ color: r.goplus_flags.length ? 'var(--neg)' : 'var(--acc)' }}>{r.goplus_flags.length ? r.goplus_flags.join(',') : 'clean'}</td>
+                <td>{r.priced ? '✓' : '—'}</td>
+                <td>{r.score}</td>
+                <td>{r.action === 'simulate'
+                  ? <button disabled={busy} onClick={() => act(`/api/config/recommendations/${r.id}/promote`,
+                      { kind: 'token', chain, payload: { symbol: r.symbol, address: r.address } })}>Draft</button>
+                  : <span className="dim">{r.action}</span>}</td>
+              </tr>))}</tbody>
+          </table>
+
+          <h4 style={{ margin: '14px 0 4px', color: 'var(--dim)' }}>Next DEXes — {chain.toUpperCase()} (DefiLlama chain TVL)</h4>
+          <table>
+            <thead><tr><th>#</th><th>DEX</th><th>TVL on chain</th><th>Audits</th><th>Score</th><th>Action</th></tr></thead>
+            <tbody>{(recs.dexes?.[chain] || []).map(r => (
+              <tr key={r.id}>
+                <td>{r.rank}</td>
+                <td><b>{r.name}</b></td>
+                <td>${r.tvl_usd >= 1e9 ? (r.tvl_usd / 1e9).toFixed(2) + 'B' : (r.tvl_usd / 1e6).toFixed(1) + 'M'}</td>
+                <td>{r.audits || '—'}</td>
+                <td>{r.score}</td>
+                <td className="dim">{r.action}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      )}
 
       {/* ── Expansion drafts ── */}
       <div className="panel">

@@ -865,6 +865,188 @@ app.post('/api/config/drafts', (req, res) => {
 
 app.get('/api/config/drafts', (_req, res) => res.json(drafts.slice(-50).reverse()))
 
+// ── Expansion recommendation engine ─────────────────────────────────────
+// Rankings come only from verifiable registries (DefiLlama TVL, chainid.network,
+// canonical token lists) and live chain probes. Nothing invented — factors that
+// can't be measured are reported as 'requires simulation', never scored.
+
+const regCache = new Map()
+async function registry(url, key, ttlMs = 600_000) {
+  const hit = regCache.get(key)
+  if (hit && Date.now() - hit.t < ttlMs) return hit.v
+  let v = null
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(12000) })
+    if (r.ok) v = await r.json()
+  } catch {}
+  regCache.set(key, { t: Date.now(), v })
+  return v
+}
+const llamaChains = () => registry('https://api.llama.fi/v2/chains', 'llama-chains')
+const llamaProtocols = () => registry('https://api.llama.fi/protocols', 'llama-protocols')
+const chainRegistry = () => registry('https://chainid.network/chains.json', 'chainid', 3600e3)
+
+// Canonical token lists — same sources the runner consumes (token_lists.rs).
+const TOKEN_LISTS = {
+  8453: 'https://static.optimism.io/optimism.tokenlist.json',
+  56: 'https://tokens.pancakeswap.finance/pancakeswap-extended.json',
+}
+const LLAMA_CHAIN_NAME = { 56: 'BSC', 8453: 'Base', 1: 'Ethereum', 42161: 'Arbitrum',
+  10: 'OP Mainnet', 137: 'Polygon', 43114: 'Avalanche', 324: 'zkSync Era',
+  59144: 'Linea', 534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 100: 'Gnosis',
+  130: 'Unichain', 146: 'Sonic', 999: 'Hyperliquid', 80094: 'Berachain',
+  1868: 'Soneium', 1135: 'Lisk', 480: 'World Chain', 747474: 'Katana', 34443: 'Mode' }
+
+async function probeChainCandidate(entry) {
+  // first registry RPC that doesn't need an API key
+  const url = (entry.rpc || [])
+    .map(r => typeof r === 'string' ? r : r.url)
+    .find(u => /^https:\/\//.test(u) && !u.includes('${'))
+  const t0 = Date.now()
+  const cid = parseInt(await rpcCall(null, 'eth_chainId', [], 3000, [url]), 16)
+  const b1 = parseInt(await rpcCall(null, 'eth_blockNumber', [], 3000, [url]), 16)
+  await new Promise(r => setTimeout(r, 2500))
+  const b2 = parseInt(await rpcCall(null, 'eth_blockNumber', [], 3000, [url]), 16)
+  const lat = Date.now() - t0
+  return { url, chain_id: cid, ok: cid === entry.chainId,
+    block_interval_ms: b2 > b1 ? Math.round(2500 / (b2 - b1)) : null,
+    latency_ms: lat, block: b2 }
+}
+
+app.get('/api/config/recommendations', async (req, res) => {
+  const capFleet = await fetch(`http://127.0.0.1:${PORT}/api/config/capacity`).then(r => r.json()).catch(() => null)
+  const band = capFleet?.band || 'green'
+  const admissible = band === 'green' ? 'eligible' : band === 'review' ? 'review' : 'blocked'
+  try {
+    const [lchains, lprotos, creg] = await Promise.all([llamaChains(), llamaProtocols(), chainRegistry()])
+
+    // ── 1. Next chains ── EVM majors not yet configured, scored on measured
+    // factors: DefiLlama TVL (liquidity), live chainId probe + block interval
+    // + latency, registry RPC pool size.
+    const configuredIds = new Set(Object.keys(CONFIG_FILES).map(c => parseChainConfig(c).chain_id))
+    const tvlByName = {}
+    for (const c of lchains || []) tvlByName[c.name] = c.tvl
+    const candidates = (creg || [])
+      .filter(e => LLAMA_CHAIN_NAME[e.chainId] && !configuredIds.has(e.chainId))
+      .map(e => ({ e, tvl: tvlByName[LLAMA_CHAIN_NAME[e.chainId]] ?? tvlByName[e.name] ?? 0 }))
+      .filter(x => x.tvl > 50e6)
+      .sort((a, b) => b.tvl - a.tvl).slice(0, 10)
+    const chains = (await Promise.all(candidates.map(async ({ e, tvl }) => {
+      try {
+        const p = await probeChainCandidate(e)
+        const healthyRpcs = (e.rpc || []).filter(u => /^https:\/\//.test(typeof u === 'string' ? u : u.url) && !(typeof u === 'string' ? u : u.url).includes('${')).length
+        return {
+          id: `chain-${e.chainId}`, kind: 'chain', name: e.name, chain_id: e.chainId,
+          native: e.nativeCurrency?.symbol, tvl_usd: tvl,
+          rpc_endpoints: healthyRpcs,
+          rpc_health: p.ok ? (p.latency_ms < 800 ? 'healthy' : 'degraded') : 'failing',
+          block_interval_ms: p.block_interval_ms, latency_ms: p.latency_ms,
+          capacity_cost: p.block_interval_ms ? +(100 / p.block_interval_ms).toFixed(3) : null,
+          score: p.ok ? +(Math.log10(tvl) * (800 / Math.max(p.latency_ms, 1)) *
+            (p.block_interval_ms ? Math.min(2, 3000 / p.block_interval_ms) : 0.5)).toFixed(2) : 0,
+          safety: 'registry-verified', simulation: 'required',
+          action: band === 'green' ? 'simulate' : 'blocked', rpc_url: p.url,
+        }
+      } catch (err) {
+        return { id: `chain-${e.chainId}`, kind: 'chain', name: e.name, chain_id: e.chainId,
+          tvl_usd: tvl, rpc_health: 'failing', score: 0, safety: 'registry-verified',
+          simulation: 'required', action: 'hold', error: err.message }
+      }
+    }))).sort((a, b) => b.score - a.score)
+    chains.forEach((c, i) => c.rank = i + 1)
+
+    // ── 2. Next tokens per configured chain ── canonical list entries not yet
+    // registered; verified on-chain (deployed, symbol/decimals) + GoPlus clean
+    // + DefiLlama price existence as liquidity proxy. Probes capped at 12.
+    const llamaPrices = await registry('https://coins.llama.fi/prices/current/bsc:0x0000000000000000000000000000000000000000', 'warmup', 1).catch(() => null)
+    const tokensByChain = {}
+    for (const c of Object.keys(CONFIG_FILES)) {
+      const cfg = parseChainConfig(c)
+      const listUrl = TOKEN_LISTS[cfg.chain_id]
+      if (!listUrl) { tokensByChain[c] = []; continue }
+      const list = await registry(listUrl, `list-${cfg.chain_id}`, 3600e3)
+      const registered = new Set(Object.values(cfg.tokens).map(a => a.toLowerCase()))
+      const cands = (list?.tokens || [])
+        .filter(t => t.chainId === cfg.chain_id && !registered.has(t.address.toLowerCase()))
+        .slice(0, 40)
+      const verified = []
+      for (const t of cands.slice(0, 15)) {
+        let ok = null, flags = []
+        try {
+          const code = await rpcCall(c, 'eth_getCode', [t.address, 'latest'], 3000)
+          const dec = code && code !== '0x' ? decodeUint(await ethCall(c, t.address, SEL.decimals)) : null
+          ok = code && code !== '0x' && dec !== null && Number(dec) === t.decimals
+        } catch { ok = false }
+        const risk = ok ? await goPlusRisk(cfg.chain_id, t.address) : null
+        if (risk) flags = risk.flags
+        verified.push({ t, ok, flags, goplus: risk ? 'clean' : 'unchecked' })
+      }
+      const llamaKey = LLAMA_CHAIN_NAME[cfg.chain_id]?.toLowerCase()
+      const addrs = verified.filter(v => v.ok).map(v => `${llamaKey}:${v.t.address}`).join(',')
+      let prices = {}
+      if (addrs) {
+        const pr = await registry(`https://coins.llama.fi/prices/current/${addrs}`, `px-${c}`, 600_000).catch(() => null)
+        prices = pr?.coins || {}
+      }
+      tokensByChain[c] = verified.map(v => {
+        const px = prices[`${llamaKey}:${v.t.address}`]?.price ? 1 : 0
+        const clean = v.ok && v.flags.length === 0
+        return {
+          id: `token-${c}-${v.t.address}`, kind: 'token', chain: c,
+          symbol: v.t.symbol, address: v.t.address, decimals: v.t.decimals,
+          onchain_ok: !!v.ok, goplus_flags: v.flags, priced: !!px,
+          score: clean ? px * 2 + 1 : 0,
+          safety: !v.ok ? 'on-chain check failed' : v.flags.length ? `goplus: ${v.flags.join(',')}` : 'passed',
+          simulation: 'required', action: clean ? (band === 'green' ? 'simulate' : 'blocked') : 'reject',
+        }
+      }).filter(x => x.onchain_ok !== false).sort((a, b) => b.score - a.score)
+      tokensByChain[c].forEach((t, i) => t.rank = i + 1)
+    }
+
+    // ── 3. Next DEXes per configured chain ── DefiLlama DEX protocols by
+    // chain TVL; configured protocols excluded; registry-verified only.
+    // DefiLlama names BSC 'Binance' in protocol chain lists (vs 'BSC' in
+    // /v2/chains) — separate map for the protocols endpoint.
+    const LLAMA_PROTO_NAME = { 56: 'Binance', 8453: 'Base', 1: 'Ethereum', 42161: 'Arbitrum',
+      10: 'Optimism', 137: 'Polygon', 43114: 'Avalanche', 324: 'ZKsync Era', 59144: 'Linea',
+      534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 100: 'Gnosis', 130: 'Unichain',
+      146: 'Sonic', 999: 'HyperEVM', 80094: 'Berachain', 1868: 'Soneium', 480: 'World Chain' }
+    const dexesByChain = {}
+    for (const c of Object.keys(CONFIG_FILES)) {
+      const cfg = parseChainConfig(c)
+      const llamaName = LLAMA_PROTO_NAME[cfg.chain_id]
+      const have = new Set(cfg.pools.map(p => (p.name || '').toLowerCase()))
+      const protos = (lprotos || [])
+        .filter(p => p.category === 'Dexs' && (p.chains || []).includes(llamaName))
+        .map(p => ({ p, tvl: p.chainTvls?.[llamaName] ?? 0 }))
+        .sort((a, b) => b.tvl - a.tvl).slice(0, 8)
+      dexesByChain[c] = protos.map(({ p, tvl }, i) => ({
+        id: `dex-${c}-${p.slug}`, kind: 'dex', chain: c, name: p.name, slug: p.slug,
+        tvl_usd: tvl, audits: p.audits || 0, listed: p.listedAt,
+        coverage: have.has(p.slug) || have.has(p.name.toLowerCase()) ? 'configured' : 'not-configured',
+        score: +(Math.log10(Math.max(tvl, 1)) * (p.audits ? 1.2 : 1)).toFixed(2),
+        safety: 'defillama-verified', simulation: 'required',
+        action: 'add pools via draft', rank: i + 1,
+      })).filter(d => d.coverage === 'not-configured')
+      dexesByChain[c].forEach((d, i) => d.rank = i + 1)
+    }
+
+    res.json({ band, admissible, chains, tokens: tokensByChain, dexes: dexesByChain })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Promote a recommendation into the existing draft workflow.
+app.post('/api/config/recommendations/:id/promote', (req, res) => {
+  const { kind, chain, payload } = req.body || {}
+  const d = { id: `dft-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    chain: kind === 'chain' ? (payload?.name || 'new') : chain,
+    type: kind === 'chain' ? 'chain' : kind, payload,
+    status: 'draft', created_at: Date.now(), checks: [], promoted_from: req.params.id }
+  drafts.push(d); saveDrafts()
+  audit('recommendation.promote', { rec: req.params.id, id: d.id, kind })
+  res.json({ ok: true, draft: d })
+})
+
 async function validateDraft(d) {
   const checks = []
   const add = (name, ok, detail) => checks.push({ name, ok, detail })
