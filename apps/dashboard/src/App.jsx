@@ -8,7 +8,7 @@ import Deployment from './pages/Deployment.jsx'
 import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
-import Settings from './pages/Settings.jsx'
+import ChainConfig from './pages/ChainConfig.jsx'
 
 const NAV = [
   ['/', '⌂', 'Dashboard'],
@@ -18,7 +18,7 @@ const NAV = [
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
   ['/infra', '⛓', 'Infrastructure'],
-  ['/settings', '⚙', 'Settings'],
+  ['/config', '⚙', 'Chain Config'],
 ]
 
 export default function App() {
@@ -81,7 +81,7 @@ export default function App() {
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />
           <Route path="/infra" element={<Infra />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/config" element={<ChainConfig />} />
         </Routes>
         <div className="footer-strip">
           <div className="seg"><b>AllBright</b> · Autonomous Arbitrage Engine</div>

@@ -6,6 +6,7 @@ import express from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
 import url from 'node:url'
+import { execFileSync } from 'node:child_process'
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 const REPO = path.resolve(__dirname, '../../..')
@@ -363,13 +364,19 @@ app.get('/api/wallets', async (_req, res) => {
 })
 
 // Currency conversion — CoinGecko free API (no key).
+let priceCache = null
+let priceCacheT = 0
 app.get('/api/prices', async (_req, res) => {
+  if (priceCache && Date.now() - priceCacheT < 60_000) return res.json(priceCache)
   try {
     const r = await fetch(
       'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,binancecoin,tether&vs_currencies=usd',
       { signal: AbortSignal.timeout(8000) })
-    res.json(await r.json())
+    const j = await r.json()
+    if (j?.ethereum?.usd) { priceCache = j; priceCacheT = Date.now() }
+    return res.json(priceCache || j)
   } catch (e) {
+    if (priceCache) return res.json(priceCache)
     res.status(502).json({ error: e.message })
   }
 })
@@ -546,6 +553,377 @@ app.post('/api/withdraw', async (req, res) => {
   if (!isLive()) return res.json({ dryRun: true, wouldCall: 'emergencyWithdraw', chain, to, amountWei })
   res.status(501).json({ error: 'live withdrawal requires Commander broadcast path — not enabled in this build' })
 })
+
+// ── Chain configuration control plane ──────────────────────────────────
+// Guarded Draft → Validate → Simulate → Apply workflow. Validation and
+// simulation probe the live chain; apply writes the TOML atomically and
+// restarts only the affected runner. Every step lands in the audit log.
+const CONFIG_FILES = { bsc: 'config/bsc.toml', base: 'config/base.toml' }
+const DRAFTS_LOG = path.join(__dirname, '.config-drafts.json')
+const AUDIT_LOG = path.join(__dirname, '.config-audit.json')
+let drafts = []
+try { drafts = JSON.parse(fs.readFileSync(DRAFTS_LOG, 'utf8')) } catch {}
+let auditLog = []
+try { auditLog = JSON.parse(fs.readFileSync(AUDIT_LOG, 'utf8')) } catch {}
+
+const saveDrafts = () => fs.writeFile(DRAFTS_LOG, JSON.stringify(drafts, null, 2), () => {})
+function audit(action, detail) {
+  auditLog.push({ t: Date.now(), action, detail })
+  if (auditLog.length > 500) auditLog = auditLog.slice(-500)
+  fs.writeFile(AUDIT_LOG, JSON.stringify(auditLog, null, 2), () => {})
+}
+
+const tomlPath = c => path.join(REPO, CONFIG_FILES[c])
+const readToml = c => fs.readFileSync(tomlPath(c), 'utf8')
+
+function tomlScalar(t, key) {
+  const m = t.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*(?:#.*)?$`, 'm'))
+  return m ? m[1].replace(/^["']|["'],?$/g, '') : null
+}
+function tomlList(t, key) {
+  const m = t.match(new RegExp(`${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`, 'm'))
+  if (!m) return []
+  return [...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1])
+}
+function tomlSection(t, name) {
+  // no /m — '$' must mean end-of-file, not end-of-line
+  const m = t.match(new RegExp(`\\[${name}\\]([\\s\\S]*?)(?=\\n\\[|$)`))
+  return m ? m[1] : ''
+}
+function parseChainConfig(c) {
+  const t = readToml(c)
+  const tokens = {}
+  for (const m of tomlSection(t, 'tokens').matchAll(/^\s*([A-Za-z0-9_]+)\s*=\s*"(0x[0-9a-fA-F]+)"/gm))
+    tokens[m[1]] = m[2]
+  const prices = {}
+  for (const m of tomlSection(t, 'token_usd_prices').matchAll(/^\s*([A-Za-z0-9_]+)\s*=\s*([\d.]+)/gm))
+    prices[m[1]] = parseFloat(m[2])
+  const pools = [...t.matchAll(/\[\[pools\]\]([\s\S]*?)(?=\[\[pools\]\]|\n\[(?!pools)|$)/g)]
+    .map(m => ({
+      name: tomlScalar(m[1], 'name'),
+      address: tomlScalar(m[1], 'address'),
+      protocol: tomlScalar(m[1], 'protocol'),
+      token0: tomlScalar(m[1], 'token0'),
+      token1: tomlScalar(m[1], 'token1'),
+      fee_bps: +(tomlScalar(m[1], 'fee_bps') || 0),
+    }))
+  const resolve = v => v ? v.replace(/\$\{([A-Z0-9_]+)\}/g, (m, k) => env[k] || m) : v
+  return {
+    chain_id: +(tomlScalar(t, 'chain_id') || 0),
+    name: tomlScalar(t, 'name'),
+    rpc_https_pool: tomlList(t, 'rpc_https_pool'),
+    rpc_wss_pool: tomlList(t, 'rpc_wss_pool'),
+    arb_contract: resolve(tomlScalar(t, 'arb_contract')),
+    state_reader: resolve(tomlScalar(t, 'state_reader')),
+    block_time_ms: +(tomlScalar(t, 'block_time_ms') || 0),
+    dry_run: /dry_run\s*=\s*true/.test(t),
+    flash_tokens: tomlList(t, 'flash_tokens'),
+    tokens, prices, pools,
+    submission: {
+      pimlico: /pimlico_enabled\s*=\s*true/.test(t),
+      strict_4337: /strict_4337\s*=\s*true/.test(t),
+      venues: ['blockrazor_url', 'nodereal_url', 'jetbldr_url', 'puissant_url', 'blink_url']
+        .filter(k => (tomlScalar(t, k) || '').length > 3),
+    },
+  }
+}
+
+async function rpcCall(chain, method, params, timeoutMs = 3000, urls = null) {
+  const pool = urls || parseChainConfig(chain).rpc_https_pool
+  for (const u of pool.slice(0, 10)) {
+    try {
+      const r = await fetch(u, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      const j = await r.json()
+      if (j.result !== undefined) return j.result
+    } catch {}
+  }
+  throw new Error('no endpoint answered')
+}
+
+// ABI helpers — eth_call to standard selectors.
+const SEL = { symbol: '0x95d89b41', decimals: '0x313ce567', token0: '0x0dfe1681',
+  token1: '0xd21220a7', getReserves: '0x0902f1ac', slot0: '0x3850c7bd', fee: '0xddca3f43' }
+const ethCall = (chain, to, data) => rpcCall(chain, 'eth_call', [{ to, data }, 'latest'])
+const decodeUint = h => (h && h !== '0x' ? BigInt(h) : null)
+function decodeString(h) {
+  if (!h || h === '0x') return null
+  try {
+    const b = Buffer.from(h.slice(2), 'hex')
+    // ABI dynamic string: offset(32) + len(32) + data
+    if (b.length >= 64) {
+      const len = Number(BigInt('0x' + b.slice(32, 64).toString('hex')))
+      if (len > 0 && len <= 64 && b.length >= 64 + len)
+        return b.slice(64, 64 + len).toString('utf8').replace(/\0/g, '')
+    }
+    // bytes32 symbol
+    return b.toString('utf8').replace(/\0/g, '') || null
+  } catch { return null }
+}
+
+const goPlusCache = new Map()
+async function goPlusRisk(chainId, address) {
+  const key = `${chainId}:${address}`
+  const hit = goPlusCache.get(key)
+  if (hit && Date.now() - hit.t < 600_000) return hit.v
+  let v = null
+  try {
+    const r = await fetch(`https://api.gopluslabs.io/api/v1/token_security/${chainId}?contract_addresses=${address}`,
+      { signal: AbortSignal.timeout(6000) })
+    const j = await r.json()
+    const d = j?.result?.[address.toLowerCase()]
+    if (d) {
+      const flags = []
+      if (d.is_honeypot === '1') flags.push('honeypot')
+      if (d.cannot_sell_all === '1') flags.push('cannot_sell_all')
+      const tax = Math.max(parseFloat(d.buy_tax || 0), parseFloat(d.sell_tax || 0))
+      if (tax > 0.1) flags.push(`tax>${(tax * 100).toFixed(0)}%`)
+      if (d.is_proxy === '1') flags.push('proxy')
+      if (d.hidden_owner === '1') flags.push('hidden_owner')
+      v = { flags, open_source: d.is_open_source === '1', holder_count: d.holder_count }
+    }
+  } catch {}
+  goPlusCache.set(key, { t: Date.now(), v })
+  return v
+}
+
+app.get('/api/config/chains', (_req, res) => {
+  const out = {}
+  for (const c of Object.keys(CONFIG_FILES)) {
+    try {
+      const cfg = parseChainConfig(c)
+      const dexes = {}
+      for (const p of cfg.pools) dexes[p.protocol || 'unknown'] = (dexes[p.protocol || 'unknown'] || 0) + 1
+      out[c] = { ...cfg, dexes, label: CHAINS[c]?.label || cfg.name }
+    } catch (e) { out[c] = { error: e.message } }
+  }
+  res.json({ live: isLive(), chains: out })
+})
+
+// Endpoint health: live eth_chainId + eth_blockNumber probes, 90s cache.
+const healthCache = new Map()
+app.get('/api/config/chains/:chain/health', async (req, res) => {
+  const c = req.params.chain
+  if (!CONFIG_FILES[c]) return res.status(404).json({ error: 'unknown chain' })
+  const hit = healthCache.get(c)
+  if (hit && Date.now() - hit.t < 90_000) return res.json(hit.v)
+  const cfg = parseChainConfig(c)
+  const probes = await Promise.all(cfg.rpc_https_pool.map(async u => {
+    const t0 = Date.now()
+    try {
+      const cid = await rpcCall(c, 'eth_chainId', [], 1500, [u])
+      const lat = Date.now() - t0
+      const t1 = Date.now()
+      const blk = await rpcCall(c, 'eth_blockNumber', [], 1500, [u])
+      const lat2 = Date.now() - t1
+      const ok = parseInt(cid, 16) === cfg.chain_id
+      return { url: u.replace(/\/v1\/[a-f0-9]+/i, '/v1/•••'), ok,
+        chain_id: parseInt(cid, 16), block: parseInt(blk, 16),
+        ms: lat + lat2,
+        status: !ok ? 'noisy' : lat + lat2 <= 400 ? 'healthy' : lat + lat2 <= 1200 ? 'degraded' : 'slow' }
+    } catch (e) {
+      return { url: u.replace(/\/v1\/[a-f0-9]+/i, '/v1/•••'), ok: false, status: 'down', ms: null, error: 'no answer' }
+    }
+  }))
+  // capacity from the latest metrics snapshot + window deltas
+  const last = histLog[histLog.length - 1]?.chains[c]
+  const since = Date.now() - 3600e3
+  const snaps = histLog.filter(s => s.t >= since).map(s => s.chains[c]).filter(Boolean)
+  const prev = {}, acc = {}
+  for (const m of snaps) for (const [k, v] of Object.entries(m)) {
+    if (k in prev) acc[k] = (acc[k] || 0) + Math.max(0, v - prev[k]); prev[k] = v
+  }
+  const scans = acc['arb_scan_latency_seconds_count'] || 0
+  const avgScanMs = scans ? (acc['arb_scan_latency_seconds_sum'] / scans) * 1000 : 0
+  const v = {
+    endpoints: probes,
+    healthy: probes.filter(p => p.status === 'healthy').length,
+    degraded: probes.filter(p => p.status === 'degraded' || p.status === 'slow').length,
+    noisy: probes.filter(p => p.status === 'noisy').length,
+    down: probes.filter(p => p.status === 'down').length,
+    wss_endpoints: cfg.rpc_wss_pool.length,
+    capacity: {
+      avg_scan_ms: avgScanMs,
+      block_time_ms: cfg.block_time_ms,
+      utilization: cfg.block_time_ms ? avgScanMs / cfg.block_time_ms : 0,
+      scans_last_hour: scans,
+      evals_last_hour: acc['arb_paths_evaluated_total'] || 0,
+      hits_last_hour: acc['arb_profitable_found_total'] || 0,
+      current_block: last?.arb_current_block || 0,
+      pools: cfg.pools.length,
+    },
+    t: Date.now(),
+  }
+  healthCache.set(c, { t: Date.now(), v })
+  res.json(v)
+})
+
+app.post('/api/config/drafts', (req, res) => {
+  const { chain, type, payload } = req.body || {}
+  if (!CONFIG_FILES[chain]) return res.status(400).json({ error: 'unknown chain' })
+  if (!['endpoint', 'token', 'pool'].includes(type)) return res.status(400).json({ error: 'type must be endpoint|token|pool' })
+  const d = { id: `dft-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    chain, type, payload, status: 'draft', created_at: Date.now(), checks: [] }
+  drafts.push(d); saveDrafts()
+  audit('draft.create', { id: d.id, chain, type })
+  res.json(d)
+})
+
+app.get('/api/config/drafts', (_req, res) => res.json(drafts.slice(-50).reverse()))
+
+async function validateDraft(d) {
+  const checks = []
+  const cfg = parseChainConfig(d.chain)
+  const add = (name, ok, detail) => checks.push({ name, ok, detail })
+  const p = d.payload || {}
+  if (d.type === 'endpoint') {
+    const u = (p.url || '').trim()
+    add('https URL', /^https:\/\//.test(u), u ? 'https scheme required for probing' : 'missing url')
+    try {
+      const cid = await rpcCall(d.chain, 'eth_chainId', [], 3000, [u])
+      add('eth_chainId match', parseInt(cid, 16) === cfg.chain_id, `got ${parseInt(cid, 16)}, want ${cfg.chain_id}`)
+      const t0 = Date.now()
+      const blk = await rpcCall(d.chain, 'eth_blockNumber', [], 3000, [u])
+      add('block progressing', parseInt(blk, 16) > 0, `block ${parseInt(blk, 16)} @ ${Date.now() - t0}ms`)
+    } catch (e) { add('endpoint answers', false, e.message) }
+    add('not duplicate', !cfg.rpc_https_pool.includes(u), cfg.rpc_https_pool.includes(u) ? 'already in pool' : 'new')
+  }
+  if (d.type === 'token') {
+    const sym = (p.symbol || '').trim()
+    const addr = (p.address || '').trim()
+    add('symbol', /^[A-Za-z0-9_.-]{2,16}$/.test(sym), sym)
+    add('address format', /^0x[0-9a-fA-F]{40}$/.test(addr), addr)
+    try {
+      const code = await rpcCall(d.chain, 'eth_getCode', [addr, 'latest'], 4000)
+      add('contract deployed', code && code !== '0x', `${(code?.length || 0) / 2 | 0} bytes`)
+    } catch (e) { add('contract deployed', false, e.message) }
+    try {
+      const dec = decodeUint(await ethCall(d.chain, addr, SEL.decimals))
+      add('decimals() live', dec !== null && dec >= 0n && dec <= 36n, dec?.toString())
+      if (dec != null) p.decimals = Number(dec)
+    } catch (e) { add('decimals() live', false, e.message) }
+    try {
+      const liveSym = decodeString(await ethCall(d.chain, addr, SEL.symbol))
+      add('symbol() matches', !!liveSym && liveSym.toUpperCase() === sym.toUpperCase(), liveSym || 'unreadable')
+    } catch (e) { add('symbol() matches', false, e.message) }
+    add('not duplicate', !Object.values(cfg.tokens).some(a => a.toLowerCase() === addr.toLowerCase()),
+      Object.values(cfg.tokens).some(a => a.toLowerCase() === addr.toLowerCase()) ? 'already registered' : 'new')
+    const risk = await goPlusRisk(cfg.chain_id, addr)
+    if (risk) add('GoPlus clean', risk.flags.length === 0, risk.flags.join(', ') || 'no flags')
+    else add('GoPlus lookup', true, 'unreachable — advisory only')
+  }
+  if (d.type === 'pool') {
+    const addr = (p.address || '').trim()
+    add('address format', /^0x[0-9a-fA-F]{40}$/.test(addr), addr)
+    add('protocol', ['v2', 'v3', 'algebra', 'aero', 'pcs', 'dodo', 'wombat'].includes(p.protocol), p.protocol || 'missing')
+    try {
+      const code = await rpcCall(d.chain, 'eth_getCode', [addr, 'latest'], 4000)
+      add('contract deployed', code && code !== '0x', `${(code?.length || 0) / 2 | 0} bytes`)
+    } catch (e) { add('contract deployed', false, e.message) }
+    try {
+      const t0 = decodeUint(await ethCall(d.chain, addr, SEL.token0))
+      const t1 = decodeUint(await ethCall(d.chain, addr, SEL.token1))
+      const a0 = t0 ? '0x' + t0.toString(16).padStart(40, '0') : null
+      const a1 = t1 ? '0x' + t1.toString(16).padStart(40, '0') : null
+      add('token0()/token1() readable', !!a0 && !!a1, `${a0?.slice(0, 10)}… / ${a1?.slice(0, 10)}…`)
+      if (a0 && a1) {
+        const s0 = Object.entries(cfg.tokens).find(([, a]) => a.toLowerCase() === a0.toLowerCase())?.[0]
+        const s1 = Object.entries(cfg.tokens).find(([, a]) => a.toLowerCase() === a1.toLowerCase())?.[0]
+        add('tokens registered', !!s0 && !!s1,
+          `${s0 || a0.slice(0, 10) + '…(unregistered)'} / ${s1 || a1.slice(0, 10) + '…(unregistered)'}`)
+        p.token0 = p.token0 || s0; p.token1 = p.token1 || s1
+      }
+    } catch (e) { add('pool interface probe', false, e.message) }
+    add('not duplicate', !cfg.pools.some(x => x.address?.toLowerCase() === addr.toLowerCase()),
+      cfg.pools.some(x => x.address?.toLowerCase() === addr.toLowerCase()) ? 'already in pools' : 'new')
+  }
+  d.checks = checks
+  d.validated_at = Date.now()
+  d.status = checks.every(x => x.ok) ? 'validated' : 'rejected'
+  return checks
+}
+
+app.post('/api/config/drafts/:id/validate', async (req, res) => {
+  const d = drafts.find(x => x.id === req.params.id)
+  if (!d) return res.status(404).json({ error: 'no draft' })
+  const checks = await validateDraft(d)
+  saveDrafts(); audit('draft.validate', { id: d.id, status: d.status })
+  res.json(d)
+})
+
+app.post('/api/config/drafts/:id/simulate', async (req, res) => {
+  const d = drafts.find(x => x.id === req.params.id)
+  if (!d) return res.status(404).json({ error: 'no draft' })
+  if (d.status !== 'validated') return res.status(409).json({ error: 'validate first', status: d.status })
+  const p = d.payload || {}
+  const sim = []
+  const add = (name, ok, detail) => sim.push({ name, ok, detail })
+  try {
+    if (d.type === 'endpoint') {
+      const t0 = Date.now()
+      const blk1 = parseInt(await rpcCall(d.chain, 'eth_blockNumber', [], 3000, [p.url]), 16)
+      add('stable read path', blk1 > 0, `block ${blk1} in ${Date.now() - t0}ms`)
+    }
+    if (d.type === 'token') {
+      const dec = decodeUint(await ethCall(d.chain, p.address, SEL.decimals))
+      add('transfer surface readable', dec !== null, `decimals ${dec}`)
+    }
+    if (d.type === 'pool') {
+      let liq = null
+      try { liq = decodeUint(await ethCall(d.chain, p.address, SEL.getReserves)) } catch {}
+      if (!liq) { try { liq = decodeUint(await ethCall(d.chain, p.address, SEL.slot0)) } catch {} }
+      add('live reserves/state', liq !== null && liq > 0n, liq ? 'liquidity present' : 'empty/unreadable')
+    }
+  } catch (e) { add('simulation probe', false, e.message) }
+  d.sim = sim
+  d.simulated_at = Date.now()
+  d.status = sim.every(x => x.ok) ? 'sim_passed' : 'sim_failed'
+  saveDrafts(); audit('draft.simulate', { id: d.id, status: d.status })
+  res.json(d)
+})
+
+app.post('/api/config/drafts/:id/apply', (req, res) => {
+  const d = drafts.find(x => x.id === req.params.id)
+  if (!d) return res.status(404).json({ error: 'no draft' })
+  if (d.status !== 'sim_passed') return res.status(409).json({ error: 'simulate first', status: d.status })
+  const p = d.payload || {}
+  const file = tomlPath(d.chain)
+  let t = readToml(d.chain)
+  try {
+    if (d.type === 'endpoint') {
+      t = t.replace(/(rpc_https_pool\s*=\s*\[[\s\S]*?)\]/,
+        (m, head) => `${head}    "${p.url}",\n]`)
+    }
+    if (d.type === 'token') {
+      t = t.replace(/(\[tokens\][\s\S]*?)(\n\[\[|\n\[|$)/,
+        (m, body, tail) => `${body.replace(/\s+$/, '')}\n${p.symbol} = "${p.address}"\n${tail}`)
+    }
+    if (d.type === 'pool') {
+      const name = `${(p.protocol || 'dex').toUpperCase()}_${p.token0 || '?'}_${p.token1 || '?'}`
+      t = `${t.replace(/\s+$/, '')}\n\n[[pools]]\nname = "${name}"\naddress = "${p.address}"\nprotocol = "${p.protocol}"\ntoken0 = "${p.token0}"\ntoken1 = "${p.token1}"\nfee_bps = ${p.fee_bps || 30}\n`
+    }
+    const tmp = `${file}.tmp`
+    fs.writeFileSync(tmp, t); fs.renameSync(tmp, file) // atomic replace
+  } catch (e) {
+    audit('draft.apply', { id: d.id, ok: false, error: e.message })
+    return res.status(500).json({ error: `write failed: ${e.message}` })
+  }
+  d.status = 'applied'; d.applied_at = Date.now(); saveDrafts()
+  // Restart only the affected chain's runner.
+  let restarted = false
+  try {
+    execFileSync(
+      'pm2', ['restart', `allbrightA-${d.chain}`, '--update-env'], { timeout: 20_000 })
+    restarted = true
+  } catch (e) { /* restart failure reported below */ }
+  audit('draft.apply', { id: d.id, ok: true, restarted })
+  res.json({ ok: true, draft: d, restarted })
+})
+
+app.get('/api/config/audit', (_req, res) => res.json(auditLog.slice(-100).reverse()))
 
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))

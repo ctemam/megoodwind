@@ -89,3 +89,5 @@ apps/dashboard/server/.profit-history.json
 apps/dashboard/server/.sim-state.json
 apps/dashboard/server/.deployments.json
 apps/dashboard/server/.metrics-history.json
+apps/dashboard/server/.config-drafts.json
+apps/dashboard/server/.config-audit.json
