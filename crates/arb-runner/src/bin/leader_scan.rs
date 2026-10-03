@@ -291,11 +291,30 @@ async fn main() -> Result<()> {
         // Auto-target: profitable wallets of the two proven profiles are
         // exported for the observation registry (observe -> replay -> forge).
         if *net_after_gas > 0.0 && (s.atomic_txs > 0 || s.private_hits > 0) {
+            let wins_pos_n = s.tx_nets.iter().filter(|&&n| n > 0.0).count();
+            let win_rate_e = if s.txs > 0 {
+                s.wins as f64 / s.txs as f64
+            } else {
+                0.0
+            };
+            let mut wv: Vec<f64> = s
+                .tx_nets
+                .iter()
+                .copied()
+                .filter(|&n| n > 0.0)
+                .collect();
+            wv.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median_win_e = if wv.is_empty() { 0.0 } else { wv[wv.len() / 2] };
+            let _ = wins_pos_n;
             export.push_str(&format!(
                 "{{\"address\":\"{addr:#x}\",\"class\":\"{class}\",\
-                 \"net_after_gas_usd\":{net_after_gas:.4},\
+                 \"net_after_gas_usd\":{net_after_gas:.4},\"txs\":{},\
+                 \"trade_txs\":{},\"win_rate\":{win_rate_e:.4},\
+                 \"median_win_usd\":{median_win_e:.4},\
                  \"atomic_txs\":{},\"private_hits\":{},\
                  \"best_tx\":\"{}\"}}\n",
+                s.txs,
+                s.trade_txs,
                 s.atomic_txs,
                 s.private_hits,
                 s.best_tx.map(|h| format!("{h:#x}")).unwrap_or_default()
