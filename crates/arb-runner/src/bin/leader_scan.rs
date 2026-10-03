@@ -45,6 +45,10 @@ struct SenderAgg {
     private_hits: u32,
     /// Single-tx wins touching >=3 tokens — multi-hop atomic arb signature.
     atomic_txs: u32,
+    /// Txs with BOTH an inflow and an outflow — real trades. Wallets whose
+    /// only flows are inflows are receivers (payments/CEX withdrawals),
+    /// not traders; they must not top a profit leaderboard.
+    trade_txs: u32,
 }
 
 #[tokio::main]
@@ -132,6 +136,8 @@ async fn main() -> Result<()> {
             let sender = receipt.from;
             let mut net_usd = 0.0f64;
             let mut unpriced = 0u32;
+            let mut had_in = false;
+            let mut had_out = false;
             let mut tx_tokens: std::collections::HashSet<Address> =
                 std::collections::HashSet::new();
             for log in receipt.inner.logs() {
@@ -147,6 +153,7 @@ async fn main() -> Result<()> {
                 let token = log.address();
                 tx_tokens.insert(token);
                 let amount = U256::from_be_slice(log.data().data.as_ref());
+                if to == sender { had_in = true } else { had_out = true }
                 let raw = amount.to_string().parse::<f64>().unwrap_or(0.0)
                     * if to == sender { 1.0 } else { -1.0 };
                 if !dec_cache.contains_key(&token) {
@@ -186,6 +193,9 @@ async fn main() -> Result<()> {
             if net_usd > 0.0 && tx_tokens.len() >= 3 {
                 agg.atomic_txs += 1;
             }
+            if had_in && had_out {
+                agg.trade_txs += 1;
+            }
             agg.txs += 1;
             agg.gas_usd += gas_usd;
             agg.net_usd += net_usd;
@@ -213,9 +223,9 @@ async fn main() -> Result<()> {
         println!(
             "LEADER_SCAN {addr:#x} net_after_gas={net_after_gas:.4} \
              net_usd={:.4} gas_usd={:.4} txs={} tokens={} best_tx_usd={:.4} \
-             best={best} unpriced={} private_hits={} atomic={}",
+             best={best} unpriced={} private_hits={} atomic={} trades={}",
             s.net_usd, s.gas_usd, s.txs, s.tokens.len(), s.best_tx_usd,
-            s.unpriced_flows, s.private_hits, s.atomic_txs
+            s.unpriced_flows, s.private_hits, s.atomic_txs, s.trade_txs
         );
     }
     Ok(())
