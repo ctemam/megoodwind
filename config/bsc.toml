@@ -54,7 +54,7 @@ flash_tokens = ["USDT", "USDC", "WBNB", "FDUSD"]
 min_profit_bps = 1
 min_initial_bps = 2
 optimization_iterations = 30
-dry_run = true   # allbrightA default: no live submission without Commander approval
+dry_run = false  # Commander-authorized live submission: backruns via ordered builder bundles
 
 [scanner.flash_amounts]
 USDT = 5000000                # 5 USDT (6 dec) — known to find candidates
