@@ -80,7 +80,10 @@ safety_margin_bps = 10
 stable_pool_extra_margin_bps = 5
 
 [submission]
+# Builder venues (ordered bundles: [victim tx, backrun tx])
+puissant_url    = "https://puissant-builder.48.club"
 blockrazor_url  = "https://bsc.blockrazor.xyz"
+jetbldr_url     = "https://rpc.bsc-virginia.jetbldr.xyz"
 nodereal_url    = "https://bsc-mainnet-builder.nodereal.io"
 blink_url       = ""
 # Warp (Chainstack Trader) fires ONLY when projected profit exceeds this threshold.
@@ -97,7 +100,7 @@ pimlico_enabled      = true
 pimlico_bundler_url  = "https://api.pimlico.io/v2/binance/rpc?apikey=${PIMLICO_API_KEY}"
 sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
 # entry_point / account_factory default to canonical v0.6 addresses.
-strict_4337          = true   # spec: route ALL execution through the UserOp assembler
+strict_4337          = false  # backruns need builder venues — a UserOp cannot order after a victim tx
 
 [token_usd_prices]
 USDT = 1.0
