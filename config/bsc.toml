@@ -1340,3 +1340,10 @@ fee_bps = 25
 # wallets = [
 #   { address = "0x...", label = "known arb bot", strategy_hypothesis = "atomic_dex_arb", risk_tier = "observe", max_copied_notional_usd = 0.0, enabled = true },
 # ]
+# Autonomous discovery (no manual wallets needed): scores every pending-tx
+# sender on bot signals (direct pool swap()=5, tracked-pool trade=3,
+# multi-hop=2, single-hop=1) with 5-min half-life; promotes at score>=15
+# after 3+ observations, capped at 50 wallets. Candidates get risk_tier=
+# "candidate" — recorded only, never acted on.
+# [leaders]
+# discover = true

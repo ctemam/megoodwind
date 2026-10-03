@@ -883,14 +883,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // wallets' pending swaps are recorded to data/leaders/<chain>/*.jsonl.
     // Empty/disabled registry = no-op. Nothing is ever copied or submitted.
     let leader_observer = {
-        let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
-        (!registry.is_empty()).then(|| {
+        let enabled = !cfg.leaders.wallets.is_empty() || cfg.leaders.discover;
+        enabled.then(|| {
+            let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
             let obs = arb_leaders::LeaderObserver::new(
                 registry,
                 std::path::PathBuf::from("data/leaders"),
                 cfg.chain.name.clone(),
+                &cfg.leaders,
             );
-            info!(chain = chain_label, wallets = obs.wallet_count(), "leader wallet observation enabled");
+            info!(chain = chain_label, wallets = obs.wallet_count(), discover = cfg.leaders.discover, "leader wallet intelligence enabled");
             obs
         })
     };

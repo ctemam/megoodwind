@@ -15,6 +15,7 @@ use lazy_static::lazy_static;
 use prometheus::{register_counter_vec, register_int_counter_vec, CounterVec, IntCounterVec};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Mutex, RwLock};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -56,6 +57,20 @@ lazy_static! {
         &["chain"]
     )
     .unwrap();
+    /// Wallets auto-promoted into the registry by real-time discovery.
+    pub static ref LEADER_DISCOVERED: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_discovered_total",
+        "Leader wallets auto-discovered from the live pending-swap stream",
+        &["chain"]
+    )
+    .unwrap();
+    /// Candidate wallets evicted when the discovery cap is hit.
+    pub static ref LEADER_EVICTED: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_evicted_total",
+        "Auto-discovered leader wallets evicted by the registry cap",
+        &["chain"]
+    )
+    .unwrap();
 }
 
 /// One row of the `[leaders]` wallet table in a chain TOML.
@@ -87,16 +102,46 @@ fn default_enabled() -> bool {
     true
 }
 
-/// `[leaders]` section of a chain config. Absent or empty = feature off.
+/// `[leaders]` section of a chain config. Absent = feature off.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct LeadersConfig {
+    /// Manually registered wallets (optional — discovery runs without them).
     #[serde(default)]
     pub wallets: Vec<LeaderWallet>,
+    /// Real-time top-wallet discovery: score every sender in the pending
+    /// stream on bot signals and auto-promote leaders. Off by default.
+    #[serde(default)]
+    pub discover: bool,
+    /// Score a sender must reach inside the decay window to be promoted.
+    /// Weights per observation: direct_pool_swap=5, tracked_pool_trade=3,
+    /// multi_hop_router=2, single_hop_router=1, opaque=0. Default 15.
+    #[serde(default = "default_min_score")]
+    pub discover_min_score: f64,
+    /// Minimum scored observations before promotion (anti-flash).
+    #[serde(default = "default_min_obs")]
+    pub discover_min_observations: u32,
+    /// Cap on auto-discovered wallets; lowest-scored candidates evict first.
+    /// Manual entries are never evicted. Default 50.
+    #[serde(default = "default_max_wallets")]
+    pub discover_max_wallets: usize,
+    /// Score decay half-life in seconds. Default 300 — a wallet must keep
+    /// behaving like a bot to stay ahead of the threshold.
+    #[serde(default = "default_halflife")]
+    pub discover_halflife_secs: f64,
 }
 
-/// Parsed, enabled wallets keyed by checksummed-normalized address.
+fn default_min_score() -> f64 { 15.0 }
+fn default_min_obs() -> u32 { 3 }
+fn default_max_wallets() -> usize { 50 }
+fn default_halflife() -> f64 { 300.0 }
+
+/// Parsed, enabled wallets keyed by address. Interior mutability because
+    /// real-time discovery promotes new wallets while the stream is live.
 pub struct LeaderRegistry {
-    wallets: HashMap<Address, LeaderWallet>,
+    wallets: RwLock<HashMap<Address, LeaderWallet>>,
+    /// Addresses auto-discovered (not manually configured) — only these
+    /// may be evicted by the discovery cap.
+    discovered: Mutex<std::collections::HashSet<Address>>,
 }
 
 impl LeaderRegistry {
@@ -113,15 +158,55 @@ impl LeaderRegistry {
                 Err(_) => warn!(address = %w.address, "leader wallet address invalid — skipped"),
             }
         }
-        Self { wallets }
+        Self {
+            wallets: RwLock::new(wallets),
+            discovered: Mutex::new(std::collections::HashSet::new()),
+        }
     }
 
+    /// True when no manual wallets AND nothing discovered yet. Used at
+    /// startup only — discovery can still fill the registry later, so the
+    /// observer must stay installed whenever discovery is enabled.
     pub fn is_empty(&self) -> bool {
-        self.wallets.is_empty()
+        self.wallets.read().unwrap().is_empty()
     }
 
-    pub fn lookup(&self, from: &Address) -> Option<&LeaderWallet> {
-        self.wallets.get(from)
+    pub fn len(&self) -> usize {
+        self.wallets.read().unwrap().len()
+    }
+
+    pub fn contains(&self, from: &Address) -> bool {
+        self.wallets.read().unwrap().contains_key(from)
+    }
+
+    pub fn lookup(&self, from: &Address) -> Option<LeaderWallet> {
+        self.wallets.read().unwrap().get(from).cloned()
+    }
+
+    /// Promote a discovered sender. Returns false if already registered.
+    pub fn insert_discovered(&self, addr: Address, wallet: LeaderWallet) -> bool {
+        let mut map = self.wallets.write().unwrap();
+        if map.contains_key(&addr) {
+            return false;
+        }
+        map.insert(addr, wallet);
+        self.discovered.lock().unwrap().insert(addr);
+        true
+    }
+
+    /// Evict the lowest-priority discovered wallet (caller decides which —
+    /// passed by address). Manual wallets are never candidates for eviction.
+    pub fn evict_discovered(&self, addr: &Address) {
+        self.wallets.write().unwrap().remove(addr);
+        self.discovered.lock().unwrap().remove(addr);
+    }
+
+    pub fn discovered_count(&self) -> usize {
+        self.discovered.lock().unwrap().len()
+    }
+
+    pub fn discovered_addrs(&self) -> Vec<Address> {
+        self.discovered.lock().unwrap().iter().copied().collect()
     }
 }
 
@@ -171,27 +256,51 @@ fn classify(swap: &PendingSwap, touched_tracked_pool: bool) -> &'static str {
     }
 }
 
-/// Writes observations to `data/leaders/<chain>/<wallet>.jsonl`.
+/// Writes observations to `data/leaders/<chain>/<wallet>.jsonl` and —
+    /// when `[leaders] discover = true` — scores every sender in the stream
+    /// to find top wallets autonomously.
 pub struct LeaderObserver {
-    registry: LeaderRegistry,
+    registry: std::sync::Arc<LeaderRegistry>,
+    discoverer: Option<LeaderDiscoverer>,
     dir: PathBuf,
     chain: String,
 }
 
 impl LeaderObserver {
-    pub fn new(registry: LeaderRegistry, data_dir: PathBuf, chain: String) -> Self {
-        Self { registry, dir: data_dir, chain }
+    pub fn new(
+        registry: LeaderRegistry,
+        data_dir: PathBuf,
+        chain: String,
+        discover_cfg: &LeadersConfig,
+    ) -> Self {
+        let registry = std::sync::Arc::new(registry);
+        let discoverer = discover_cfg.discover.then(|| {
+            LeaderDiscoverer::new(
+                std::sync::Arc::clone(&registry),
+                data_dir.clone(),
+                chain.clone(),
+                discover_cfg.discover_min_score,
+                discover_cfg.discover_min_observations,
+                discover_cfg.discover_max_wallets,
+                discover_cfg.discover_halflife_secs,
+            )
+        });
+        Self { registry, discoverer, dir: data_dir, chain }
     }
 
-    /// Returns Some(configured wallet count) when the feature is on.
+    /// Returns configured+discovered wallet count.
     pub fn wallet_count(&self) -> usize {
-        self.registry.wallets.len()
+        self.registry.len()
     }
 
-    /// Hot-path call on every decoded pending swap. O(1) registry lookup;
-    /// returns immediately when `from` is not a registered leader.
+    /// Hot-path call on every decoded pending swap. Feeds the discovery
+    /// scorer first (when enabled), then O(1) registry lookup — returns
+    /// immediately when `from` is not a registered leader.
     pub fn observe(&self, pending: &PendingSwap) {
         let t0 = std::time::Instant::now();
+        if let Some(d) = &self.discoverer {
+            d.track(pending);
+        }
         let Some(wallet) = self.registry.lookup(&pending.from) else {
             return;
         };
@@ -255,6 +364,192 @@ impl LeaderObserver {
     }
 }
 
+/// Per-sender decayed score in the live stream. A wallet promotes into the
+/// registry when its score crosses `min_score` — i.e. when it repeatedly
+/// does things only MEV/trading bots do (call pools directly, run multi-hop
+/// routes through our tracked liquidity, high sustained frequency).
+#[derive(Debug, Default)]
+struct SenderStats {
+    score: f64,
+    observations: u32,
+    last_seen: Option<std::time::Instant>,
+    /// Most common attribution class — recorded as the wallet's initial
+    /// strategy hypothesis until replay measurement refines it.
+    dominant_class: &'static str,
+    dominant_count: u32,
+    class_counts: [u32; 5],
+}
+
+/// Observation-time class ordering must match `classify` weights below.
+const CLASS_WEIGHTS: [(&str, f64); 5] = [
+    ("direct_pool_swap", 5.0),   // humans never call swap() on a pool — pure bot
+    ("tracked_pool_trade", 3.0), // trades our tracked liquidity — likely arb loop
+    ("multi_hop_router", 2.0),   // paths humans rarely compose manually
+    ("single_hop_router", 1.0),  // weakest signal — retail flow too
+    ("opaque", 0.0),
+];
+
+fn class_weight(class: &str) -> f64 {
+    CLASS_WEIGHTS
+        .iter()
+        .find(|(c, _)| *c == class)
+        .map(|(_, w)| *w)
+        .unwrap_or(0.0)
+}
+
+/// Real-time leader discovery. Scores every pending-swap sender with an
+/// exponentially decayed behavior score and auto-registers top wallets.
+/// Discovery is *observation-only*: promoted wallets get `risk_tier =
+/// "candidate"` — they are recorded, never acted on.
+pub struct LeaderDiscoverer {
+    registry: std::sync::Arc<LeaderRegistry>,
+    stats: Mutex<HashMap<Address, SenderStats>>,
+    dir: PathBuf,
+    chain: String,
+    min_score: f64,
+    min_observations: u32,
+    max_wallets: usize,
+    halflife_secs: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscoveryEvent {
+    chain: String,
+    wallet: String,
+    unix_ms: u64,
+    score: f64,
+    observations: u32,
+    dominant_class: String,
+    reason: String,
+}
+
+impl LeaderDiscoverer {
+    fn new(
+        registry: std::sync::Arc<LeaderRegistry>,
+        dir: PathBuf,
+        chain: String,
+        min_score: f64,
+        min_observations: u32,
+        max_wallets: usize,
+        halflife_secs: f64,
+    ) -> Self {
+        Self {
+            registry,
+            stats: Mutex::new(HashMap::new()),
+            dir,
+            chain,
+            min_score,
+            min_observations,
+            max_wallets,
+            halflife_secs,
+        }
+    }
+
+    fn track(&self, pending: &PendingSwap) {
+        let from = pending.from;
+        if self.registry.contains(&from) {
+            return; // already a leader — no re-scoring needed
+        }
+        let class = classify(pending, !pending.decoded.pools_touched.is_empty());
+        let w = class_weight(class);
+        let now = std::time::Instant::now();
+
+        let promote = {
+            let mut map = self.stats.lock().unwrap();
+            let s = map.entry(from).or_default();
+            // Exponential decay since last sighting, then add this obs.
+            if let Some(last) = s.last_seen {
+                let dt = now.duration_since(last).as_secs_f64();
+                s.score *= 0.5f64.powf(dt / self.halflife_secs);
+            }
+            s.last_seen = Some(now);
+            s.score += w;
+            s.observations += 1;
+            let idx = CLASS_WEIGHTS.iter().position(|(c, _)| *c == class).unwrap_or(4);
+            s.class_counts[idx] += 1;
+            if s.class_counts[idx] > s.dominant_count {
+                s.dominant_count = s.class_counts[idx];
+                s.dominant_class = CLASS_WEIGHTS[idx].0;
+            }
+            let (score, obs, dom) = (s.score, s.observations, s.dominant_class);
+            if score >= self.min_score && obs >= self.min_observations {
+                Some((score, obs, dom))
+            } else {
+                // Keep the stats map bounded — drop cold, never-scoring senders.
+                if map.len() > 20_000 {
+                    let cutoff = now - std::time::Duration::from_secs(3600);
+                    map.retain(|_, st| st.last_seen.map(|l| l > cutoff).unwrap_or(false));
+                }
+                None
+            }
+        };
+
+        let Some((score, obs, dom)) = promote else {
+            return;
+        };
+        self.promote(from, score, obs, dom);
+    }
+
+    fn promote(&self, addr: Address, score: f64, observations: u32, dominant: &'static str) {
+        // Evict weakest discovered wallet when at cap — manual entries safe.
+        if self.registry.discovered_count() >= self.max_wallets {
+            if let Some(victim) = self.weakest_discovered() {
+                self.registry.evict_discovered(&victim);
+                LEADER_EVICTED.with_label_values(&[&self.chain]).inc();
+                self.stats.lock().unwrap().remove(&victim);
+            }
+        }
+        let wallet = LeaderWallet {
+            address: format!("{addr:#x}"),
+            label: "auto-discovered".to_string(),
+            strategy_hypothesis: dominant.to_string(),
+            risk_tier: "candidate".to_string(),
+            max_copied_notional_usd: 0.0,
+            enabled: true,
+        };
+        if !self.registry.insert_discovered(addr, wallet) {
+            return;
+        }
+        LEADER_DISCOVERED.with_label_values(&[&self.chain]).inc();
+        let ev = DiscoveryEvent {
+            chain: self.chain.clone(),
+            wallet: format!("{addr:#x}"),
+            unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            score,
+            observations,
+            dominant_class: dominant.to_string(),
+            reason: "bot-signal score crossed threshold in live pending stream".to_string(),
+        };
+        let _ = self.persist_event(&ev);
+    }
+
+    /// Lowest-current-score discovered wallet — eviction candidate.
+    fn weakest_discovered(&self) -> Option<Address> {
+        let map = self.stats.lock().unwrap();
+        self.registry
+            .discovered_addrs()
+            .into_iter()
+            .filter_map(|a| map.get(&a).map(|s| (a, s.score)))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(a, _)| a)
+    }
+
+    fn persist_event(&self, ev: &DiscoveryEvent) -> std::io::Result<()> {
+        let dir = self.dir.join(&self.chain);
+        create_dir_all(&dir)?;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("_discovered.jsonl"))?;
+        let mut line = serde_json::to_vec(ev).unwrap_or_default();
+        line.push(b'\n');
+        f.write_all(&line)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,7 +567,7 @@ mod tests {
     fn registry_filters_and_normalizes() {
         let cfg = cfg_one("0x1111111111111111111111111111111111111111");
         let reg = LeaderRegistry::new(&cfg);
-        assert_eq!(reg.wallets.len(), 1);
+        assert_eq!(reg.len(), 1);
         assert!(reg
             .lookup(&address!("1111111111111111111111111111111111111111"))
             .is_some());
@@ -297,7 +592,7 @@ mod tests {
     fn observation_persists_jsonl() {
         let dir = std::env::temp_dir().join(format!("arb-leaders-test-{}", std::process::id()));
         let cfg = cfg_one("0x4444444444444444444444444444444444444444");
-        let obs = LeaderObserver::new(LeaderRegistry::new(&cfg), dir.clone(), "BSC".into());
+        let obs = LeaderObserver::new(LeaderRegistry::new(&cfg), dir.clone(), "BSC".into(), &LeadersConfig::default());
         let pending = PendingSwap {
             tx_hash: B256::ZERO,
             from: address!("4444444444444444444444444444444444444444"),
@@ -328,6 +623,65 @@ mod tests {
         other.from = address!("7777777777777777777777777777777777777777");
         obs.observe(&other);
         assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn discovery_promotes_bot_like_senders() {
+        use arb_mempool::decoder::{DecodedSwap, DirectSwap};
+        let dir = std::env::temp_dir().join(format!("arb-leaders-disc-{}", std::process::id()));
+        // Discovery on, no manual wallets.
+        let cfg: LeadersConfig = toml::from_str(
+            r#"discover = true
+               discover_min_score = 9.0
+               discover_min_observations = 2
+               discover_max_wallets = 10
+               discover_halflife_secs = 300.0"#,
+        )
+        .unwrap();
+        let reg = LeaderRegistry::new(&cfg);
+        let obs = LeaderObserver::new(reg, dir.clone(), "BSC".into(), &cfg);
+        let bot = address!("8888888888888888888888888888888888888888");
+        let mk = |from: Address, direct: bool| PendingSwap {
+            tx_hash: B256::ZERO,
+            from,
+            to: address!("9999999999999999999999999999999999999999"),
+            value: U256::ZERO,
+            decoded: DecodedSwap {
+                router: "test",
+                token_in: None,
+                token_out: None,
+                amount_in: Some(U256::from(1u64)),
+                path: vec![],
+                first_hop_fee: None,
+                hop_fees: vec![],
+                direct: direct.then_some(DirectSwap::V2 {
+                    pool: address!("9999999999999999999999999999999999999999"),
+                    amount0_out: U256::from(1u64),
+                    amount1_out: U256::ZERO,
+                }),
+                pools_touched: vec![],
+            },
+            raw_input: vec![],
+            raw_tx: vec![],
+            seen_at: std::time::Instant::now(),
+        };
+        // Retail sender: single-hop router swaps (weight 1) — below threshold.
+        let retail = address!("7777777777777777777777777777777777777777");
+        let mut r_tx = mk(retail, false);
+        r_tx.decoded.path = vec![address!("6666666666666666666666666666666666666666")];
+        for _ in 0..5 {
+            obs.observe(&r_tx);
+        }
+        assert!(!obs.registry.contains(&retail));
+        // Bot: direct pool swaps (weight 5) x2 = 10 >= 9 → promoted.
+        obs.observe(&mk(bot, true));
+        obs.observe(&mk(bot, true));
+        assert!(obs.registry.contains(&bot));
+        let disc = dir.join("BSC").join("_discovered.jsonl");
+        assert!(std::fs::read_to_string(&disc)
+            .unwrap()
+            .contains("0x8888888888888888888888888888888888888888"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
