@@ -206,6 +206,23 @@ impl PimlicoClient {
             .map(String::from)
             .context("eth_sendUserOperation returned no userOpHash")
     }
+
+    /// `eth_getUserOperationReceipt` — null until the op is mined. The result
+    /// carries `success`, `actualGasCost`/`actualGasUsed`, and a nested
+    /// `receipt` (transactionHash, logs, gasUsed, ...).
+    pub async fn user_operation_receipt(
+        &self,
+        user_op_hash: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let res = self
+            .rpc("eth_getUserOperationReceipt", json!([user_op_hash]))
+            .await?;
+        if res.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(res))
+        }
+    }
 }
 
 /// Classified sponsorship failure. `reason` is a stable label for metrics;

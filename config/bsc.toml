@@ -454,6 +454,13 @@ BUSD = "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56"
 CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
 FDUSD = "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409"
 
+TK_0x00541ab4c72593734aa09bdd66b29818faff1111 = "0x00541ab4c72593734aa09bdd66b29818faff1111"
+TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc = "0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
+TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb = "0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb"
+TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274 = "0x5dbde81fce337ff4bcaaee4ca3466c00aecae274"
+TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208 = "0x9d2144328e1d618f54cd38540f5ee50671f6a208"
+TK_0xd1852cede98aaa8c11efe8600509e51fe5194132 = "0xd1852cede98aaa8c11efe8600509e51fe5194132"
+TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e = "0xe0a281deff5c9d8d67af09d39340e134ac81b82e"
 [[pools]]
 name = "PCS_USDT_WBNB"
 address = "0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE"
@@ -1681,4 +1688,67 @@ fee_bps = 25
 
 [leaders]
 discover = true
+
+[[pools]]
+name = "AUTO_USDT_TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e_25"
+address = "0xb720ea2a201c03578cca05191e8b4ab859704cfe"
+protocol = "v2"
+token0 = "USDT"
+token1 = "TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274_WBNB_1"
+address = "0xd3cffc6b02a34dfc72f1350339031043a854599f"
+protocol = "v3"
+token0 = "TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274"
+token1 = "WBNB"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x00541ab4c72593734aa09bdd66b29818faff1111_USDT_25"
+address = "0x454dc6c5c5c39105ec4cda28a61061f016f85e0e"
+protocol = "v2"
+token0 = "TK_0x00541ab4c72593734aa09bdd66b29818faff1111"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc_USDT_25"
+address = "0x6f1b3c82f4f96a446df52013f230fb95355de1ae"
+protocol = "v2"
+token0 = "TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xd1852cede98aaa8c11efe8600509e51fe5194132_25"
+address = "0xf6389f23764ee56f0bd5c3494200fe2f79f243aa"
+protocol = "v2"
+token0 = "USDT"
+token1 = "TK_0xd1852cede98aaa8c11efe8600509e51fe5194132"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb_USDT_5"
+address = "0x6701b287c8170d6c290c6f4ef426782bd61ae310"
+protocol = "v3"
+token0 = "TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208_25"
+address = "0x6a2dd37603c5b8c5bdd1d2c75111af9af8bdbcc2"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208"
+fee_bps = 25
+
 

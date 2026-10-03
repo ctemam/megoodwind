@@ -1,6 +1,6 @@
 use prometheus::{
-    register_counter, register_counter_vec, register_gauge, register_histogram,
-    Counter, CounterVec, Gauge, Histogram, Encoder, TextEncoder,
+    register_counter, register_counter_vec, register_gauge, register_gauge_vec, register_histogram,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram, Encoder, TextEncoder,
 };
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -156,6 +156,22 @@ lazy_static::lazy_static! {
     pub static ref BACKRUN_SUBMITTED: Counter = register_counter!(
         "arb_backrun_submitted_total",
         "Backrun bundles submitted"
+    ).unwrap();
+
+    /// Settlement feedback: submissions tracked to an on-chain outcome,
+    /// labeled by realized result (settled/revert/dropped).
+    pub static ref SETTLEMENTS: CounterVec = register_counter_vec!(
+        "arb_settlements_total",
+        "Submissions settled on-chain by outcome",
+        &["chain", "outcome"]
+    ).unwrap();
+
+    /// Cumulative realized P&L after gas, USD. A gauge because realized
+    /// losses decrement it — this is the number the whole engine exists for.
+    pub static ref SETTLED_NET_USD: GaugeVec = register_gauge_vec!(
+        "arb_settled_net_usd",
+        "Cumulative realized net P&L after gas, USD",
+        &["chain"]
     ).unwrap();
 }
 

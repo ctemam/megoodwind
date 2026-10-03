@@ -86,9 +86,32 @@ async fn main() -> Result<()> {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
+    // --merge: write provenance-passed pools + new tokens straight into the
+    // chain config so the next scan/runner covers them (closes the
+    // export -> manual-merge gap that left leader routes untracked).
+    let merge_config = args.iter().any(|a| a == "--merge");
+    // --merge-only: skip scanning entirely and merge the persisted
+    // data/leaders/<chain>/_pools.toml + _tokens.toml exports into the
+    // config. For exports produced by earlier runs (before --merge existed).
+    let merge_only = args.iter().any(|a| a == "--merge-only");
 
     let cfg = config::load_config(&cfg_path)?;
     let chain = cfg.chain.name.clone();
+
+    if merge_only {
+        let data_dir = format!("data/leaders/{chain}");
+        let pools_toml = std::fs::read_to_string(format!("{data_dir}/_pools.toml"))?;
+        let new_tokens: Vec<String> = std::fs::read_to_string(format!("{data_dir}/_tokens.toml"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect();
+        let (p, t) = merge_into_config(&cfg_path, &pools_toml, &new_tokens)?;
+        println!("LEADER_MERGE merged pools={p} tokens={t} -> {cfg_path}");
+        return Ok(());
+    }
 
     let tokens: HashMap<String, Address> = cfg
         .tokens
@@ -799,6 +822,14 @@ async fn main() -> Result<()> {
     println!(
         "LEADER_POOLS exported v2={n_v2} v3={n_v3} thin_or_suspect={n_thin} -> {pools_path}"
     );
+    if merge_config {
+        match merge_into_config(&cfg_path, &pools_toml, &new_tokens) {
+            Ok((p, t)) => println!(
+                "LEADER_MERGE merged pools={p} tokens={t} -> {cfg_path}"
+            ),
+            Err(e) => eprintln!("LEADER_MERGE failed: {e:#}"),
+        }
+    }
 
     let path = format!("{data_dir}/_scanned.jsonl");
     let n_targets = export.lines().count();
@@ -807,4 +838,122 @@ async fn main() -> Result<()> {
     }
     println!("LEADER_SCAN exported {n_targets} targeted wallets -> {path}");
     Ok(())
+}
+
+/// Merge provenance-passed `[[pools]]` blocks and `[tokens]` rows into the
+/// chain config. Textual edit — preserves comments/formatting. Dedupes by
+/// pool address (case-insensitive) and token symbol/address. Returns
+/// (pools_added, tokens_added).
+fn merge_into_config(
+    cfg_path: &str,
+    pools_toml: &str,
+    new_tokens: &[String],
+) -> Result<(usize, usize)> {
+    let mut cfg_text = std::fs::read_to_string(cfg_path)?;
+    let lower = cfg_text.to_lowercase();
+
+    // Insert missing tokens FIRST (at the end of the [tokens] table, i.e.
+    // before the next section header) so appended [[pools]] blocks can't
+    // swallow bare keys. Symbol = text before '='; address = quoted value.
+    let mut n_tokens = 0usize;
+    if !new_tokens.is_empty() {
+        let mut insert_at: Option<usize> = None;
+        let mut in_tokens = false;
+        let mut found_tokens = false;
+        for (i, line) in cfg_text.lines().enumerate() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                if in_tokens {
+                    insert_at = Some(i);
+                    break;
+                }
+                in_tokens = t == "[tokens]";
+                found_tokens |= in_tokens;
+            }
+        }
+        let mut added = String::new();
+        // No [tokens] section at all: a bare key at EOF would land inside the
+        // last [[pools]] element — open a fresh [tokens] table instead.
+        if !found_tokens {
+            added.push_str("[tokens]\n");
+        }
+        for tok in new_tokens {
+            let sym = tok.split('=').next().unwrap_or("").trim().to_string();
+            let addr = tok
+                .split('"')
+                .nth(1)
+                .unwrap_or("")
+                .to_lowercase();
+            if sym.is_empty()
+                || addr.is_empty()
+                || lower.contains(&format!("{sym} ="))
+                || lower.contains(&addr)
+            {
+                continue;
+            }
+            added.push_str(tok);
+            added.push('\n');
+            n_tokens += 1;
+        }
+        if n_tokens > 0 {
+            if found_tokens && insert_at.is_none() {
+                // [tokens] is the last section — append at EOF.
+                if !cfg_text.ends_with('\n') {
+                    cfg_text.push('\n');
+                }
+                cfg_text.push_str(&added);
+            } else {
+                let lines: Vec<&str> = cfg_text.lines().collect();
+                let byte_off: usize = insert_at
+                    .map(|i| lines[..i].iter().map(|l| l.len() + 1).sum())
+                    .unwrap_or(cfg_text.len());
+                cfg_text.insert_str(byte_off, &added);
+            }
+        }
+    }
+
+    // Split pools_toml into [[pools]] blocks; keep only ones whose address is
+    // not already configured.
+    let mut pool_blocks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for line in pools_toml.lines() {
+        if line.trim_start().starts_with("[[pools]]") {
+            if !cur.trim().is_empty() {
+                pool_blocks.push(std::mem::take(&mut cur));
+            }
+        }
+        cur.push_str(line);
+        cur.push('\n');
+    }
+    if !cur.trim().is_empty() {
+        pool_blocks.push(cur);
+    }
+    let mut n_pools = 0usize;
+    for block in &pool_blocks {
+        let Some(addr) = block
+            .lines()
+            .find_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("address")
+                    .and_then(|r| r.split('=').nth(1))
+                    .map(|v| v.trim().trim_matches('"').to_lowercase())
+            })
+        else {
+            continue;
+        };
+        if lower.contains(&addr) {
+            continue;
+        }
+        if !cfg_text.ends_with('\n') {
+            cfg_text.push('\n');
+        }
+        cfg_text.push_str(block);
+        cfg_text.push('\n');
+        n_pools += 1;
+    }
+
+    if n_pools > 0 || n_tokens > 0 {
+        std::fs::write(cfg_path, &cfg_text)?;
+    }
+    Ok((n_pools, n_tokens))
 }

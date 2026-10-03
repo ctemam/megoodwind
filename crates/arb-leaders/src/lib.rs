@@ -931,6 +931,16 @@ pub struct StrategyRecord {
     /// 0 = never deployable. BoundedLive requires this > 0 set by ops.
     #[serde(default)]
     pub max_notional_usd: f64,
+    /// Settlement feedback: cumulative realized P&L of OUR executions of
+    /// this strategy's route, after gas. Distinct from net_pnl_usd, which
+    /// is the leader's measured evidence.
+    #[serde(default)]
+    pub settled_usd: f64,
+    #[serde(default)]
+    pub settle_count: u32,
+    /// Executions that landed with positive realized P&L.
+    #[serde(default)]
+    pub settle_wins: u32,
 }
 
 /// Evidence thresholds promoting a wallet Observe -> Replay.
@@ -1006,6 +1016,9 @@ impl StrategyRegistry {
             last_seen_block: block,
             expires_at_block: block + self.ttl_blocks,
             max_notional_usd: 0.0,
+            settled_usd: 0.0,
+            settle_count: 0,
+            settle_wins: 0,
         });
         r.last_seen_block = block;
         r.expires_at_block = block + self.ttl_blocks;
@@ -1090,6 +1103,35 @@ impl StrategyRegistry {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Settlement feedback: record OUR realized P&L for an execution of
+    /// this strategy's route. Health rule: a BoundedLive strategy that has
+    /// settled >=3 times with negative cumulative realized P&L is demoted
+    /// back to Shadow and must re-verify in simulation before trading —
+    /// live losses override stale sim evidence.
+    pub fn mark_settled(&mut self, strategy_id: &str, realized_usd: f64) -> bool {
+        match self.records.get_mut(strategy_id) {
+            Some(r) => {
+                r.settled_usd += realized_usd;
+                r.settle_count += 1;
+                if realized_usd > 0.0 {
+                    r.settle_wins += 1;
+                }
+                if r.state == StrategyState::BoundedLive
+                    && r.settle_count >= 3
+                    && r.settled_usd < 0.0
+                {
+                    r.state = StrategyState::Shadow;
+                    r.sim_verified = false;
+                    r.max_notional_usd = 0.0;
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
         }
     }
 

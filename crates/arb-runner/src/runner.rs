@@ -358,6 +358,15 @@ impl PathCircuitBreaker {
         s.total_successes += 1;
     }
 
+    /// Historical revert rate for a path (0.0 when never submitted) — used
+    /// as the revert-risk term in route_score ranking.
+    fn revert_rate(&self, path_id: u32) -> f64 {
+        self.stats
+            .get(&path_id)
+            .map(|s| s.total_reverts as f64 / s.total_submits.max(1) as f64)
+            .unwrap_or(0.0)
+    }
+
     fn suppressed_count(&self, current_block: u64) -> usize {
         self.stats.values().filter(|s| current_block < s.suppressed_until_block).count()
     }
@@ -533,6 +542,7 @@ fn is_nonempty(s: &Option<String>) -> Option<&str> {
     s.as_deref().filter(|v| !v.is_empty())
 }
 
+#[derive(Clone, Copy)]
 enum TxOutcome { Success, Revert, Dropped }
 
 /// Track a submitted tx hash — poll for receipt, update metrics.
@@ -574,7 +584,343 @@ async fn track_tx(endpoint: Arc<Endpoint>, tx_hash: B256, deadline_blocks: u64) 
     TxOutcome::Dropped
 }
 
-/// Write status JSON snapshot for monitoring.
+// ===== Settlement feedback loop =====
+// submit -> receipt -> realized P&L -> opportunity record + strategy health.
+// For Pimlico venues the submit handle is a userOpHash — a plain
+// eth_getTransactionReceipt can never resolve it, so UserOps are tracked via
+// eth_getUserOperationReceipt on the bundler, which returns the nested tx
+// receipt with logs. All other venues are tracked on our own tx hash
+// (keccak256 of the signed envelope), independent of venue bundle ids.
+
+const TRANSFER_SIG: B256 = alloy_primitives::b256!(
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+);
+
+#[derive(Clone)]
+struct SettleCtx {
+    endpoint: Arc<Endpoint>,
+    /// Pimlico bundler URL — required to track UserOps.
+    bundler_url: Option<String>,
+    arb_contract: Address,
+    token_usd_prices: HashMap<Address, f64>,
+    token_decimals: HashMap<Address, u32>,
+    native_usd: f64,
+    chain: String,
+}
+
+#[derive(Clone, Copy)]
+struct SettleResult {
+    outcome: TxOutcome,
+    /// Priced token deltas to the executor contract minus gas, USD.
+    realized_usd: f64,
+    gas_usd: f64,
+    unpriced_tokens: usize,
+}
+
+/// (token, from, to, raw_amount) of each ERC-20 Transfer touching the
+/// executor, from a mined receipt's logs.
+fn flows_from_logs(
+    logs: &[alloy::rpc::types::Log],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = log.topics();
+        if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+            continue;
+        }
+        let from = Address::from_word(topics[1]);
+        let to = Address::from_word(topics[2]);
+        if from != target && to != target {
+            continue;
+        }
+        let raw = U256::from_be_slice(log.data().data.as_ref())
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((log.address(), from, to, raw));
+    }
+    out
+}
+
+fn flows_from_json_logs(
+    logs: &[serde_json::Value],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = match log["topics"].as_array() {
+            Some(t) if t.len() == 3 => t,
+            _ => continue,
+        };
+        let sig: B256 = match topics[0].as_str().and_then(|s| s.parse().ok()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if sig != TRANSFER_SIG {
+            continue;
+        }
+        let from: B256 = match topics[1].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let to: B256 = match topics[2].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let (from, to) = (Address::from_word(from), Address::from_word(to));
+        if from != target && to != target {
+            continue;
+        }
+        let token: Address = match log["address"].as_str().and_then(|s| s.parse().ok()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let raw = U256::from_str_radix(
+            log["data"].as_str().unwrap_or("0x0").trim_start_matches("0x"), 16)
+            .unwrap_or_default()
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((token, from, to, raw));
+    }
+    out
+}
+
+/// Price executor token deltas in USD; unpriced tokens are counted, not
+/// guessed — a partially-priced flow is reported as priced-only.
+fn settlement_pnl(
+    flows: &[(Address, Address, Address, f64)],
+    target: Address,
+    prices: &HashMap<Address, f64>,
+    decimals: &HashMap<Address, u32>,
+) -> (f64, usize) {
+    let mut usd = 0.0;
+    let mut unpriced: HashSet<Address> = HashSet::new();
+    for (token, from, to, raw) in flows {
+        let sign = if *to == target {
+            1.0
+        } else if *from == target {
+            -1.0
+        } else {
+            continue;
+        };
+        match prices.get(token) {
+            Some(p) => {
+                let d = decimals.get(token).copied().unwrap_or(18);
+                usd += sign * raw / 10f64.powi(d as i32) * p;
+            }
+            None => {
+                unpriced.insert(*token);
+            }
+        }
+    }
+    (usd, unpriced.len())
+}
+
+/// Poll the bundler for a UserOp receipt, then compute realized P&L from the
+/// nested tx receipt's Transfer logs. gas = actualGasCost (what the Pimlico
+/// account paid — our real cost even when sponsored).
+async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> SettleResult {
+    let dropped = SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    let Some(url) = ctx.bundler_url.clone() else {
+        metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+        return dropped;
+    };
+    let client = arb_submit::pimlico::PimlicoClient::new(&url);
+    let start_block = ctx.endpoint.block_number().await.unwrap_or(0);
+    let max_polls = (deadline_blocks * 4).max(8);
+    for _ in 0..max_polls {
+        match client.user_operation_receipt(op_hash).await {
+            Ok(Some(res)) => {
+                let success = res["success"].as_bool().unwrap_or(false);
+                let gas_native = res["actualGasCost"]
+                    .as_str()
+                    .and_then(|s| U256::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                    .map(|u| u.to_string().parse::<f64>().unwrap_or(0.0) / 1e18)
+                    .unwrap_or(0.0);
+                let gas_usd = gas_native * ctx.native_usd;
+                metrics::GAS_SPENT_WEI.inc_by(gas_native * 1e18);
+                let label = if success { "success" } else { "revert" };
+                metrics::SUBMIT_LANDED.with_label_values(&[label]).inc();
+                let logs = res
+                    .pointer("/receipt/logs")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let (usd, unpriced) = settlement_pnl(
+                    &flows_from_json_logs(&logs, ctx.arb_contract),
+                    ctx.arb_contract,
+                    &ctx.token_usd_prices,
+                    &ctx.token_decimals,
+                );
+                info!(
+                    op = op_hash, tx = %res.pointer("/receipt/transactionHash")
+                        .and_then(|v| v.as_str()).unwrap_or("?"),
+                    status = label, realized_usd = format!("{:.4}", usd - gas_usd),
+                    "UserOp settled"
+                );
+                return SettleResult {
+                    outcome: if success { TxOutcome::Success } else { TxOutcome::Revert },
+                    realized_usd: usd - gas_usd,
+                    gas_usd,
+                    unpriced_tokens: unpriced,
+                };
+            }
+            Ok(None) => {}
+            Err(e) => debug!(op = op_hash, error = %e, "UserOp receipt fetch error"),
+        }
+        if ctx.endpoint.block_number().await.unwrap_or(0) > start_block + deadline_blocks {
+            metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+            return dropped;
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+    metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+    dropped
+}
+
+/// Track a plain tx hash to receipt, then compute realized P&L from logs.
+async fn settle_tx(ctx: &SettleCtx, tx_hash: B256, deadline_blocks: u64) -> SettleResult {
+    let outcome = track_tx(ctx.endpoint.clone(), tx_hash, deadline_blocks).await;
+    if matches!(outcome, TxOutcome::Dropped) {
+        return SettleResult { outcome, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    }
+    let mut gas_usd = 0.0;
+    let mut usd = 0.0;
+    let mut unpriced = 0usize;
+    if let Ok(Some(receipt)) = ctx.endpoint.get_receipt(tx_hash).await {
+        gas_usd = receipt.gas_used as f64 * receipt.effective_gas_price as f64
+            / 1e18 * ctx.native_usd;
+        let (u, n) = settlement_pnl(
+            &flows_from_logs(receipt.inner.logs(), ctx.arb_contract),
+            ctx.arb_contract,
+            &ctx.token_usd_prices,
+            &ctx.token_decimals,
+        );
+        usd = u;
+        unpriced = n;
+    }
+    SettleResult { outcome, realized_usd: usd - gas_usd, gas_usd, unpriced_tokens: unpriced }
+}
+
+/// "<chain>/<wallet>/<class>/<tx>" -> "<wallet>/<class>".
+fn strategy_id_of(opp_id: &str) -> Option<String> {
+    let rest = opp_id.splitn(2, '/').nth(1)?;
+    rest.rsplitn(2, '/').nth(1).map(String::from)
+}
+
+/// Record a settled submission: metrics, audit log, opportunity records,
+/// strategy health. This is the loop's write-back — realized P&L is the only
+/// feedback that proves the pipeline earns.
+fn record_settlement(
+    ctx: &SettleCtx,
+    venue: &str,
+    submit_id: &str,
+    res: &SettleResult,
+    opp_ids: &[String],
+) {
+    let outcome_label = match res.outcome {
+        TxOutcome::Success => "settled",
+        TxOutcome::Revert => "revert",
+        TxOutcome::Dropped => "dropped",
+    };
+    metrics::SETTLEMENTS
+        .with_label_values(&[ctx.chain.as_str(), outcome_label])
+        .inc();
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        metrics::SETTLED_NET_USD
+            .with_label_values(&[ctx.chain.as_str()])
+            .add(res.realized_usd);
+    }
+    let dir = format!("data/leaders/{}", ctx.chain);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let audit = serde_json::json!({
+        "chain": ctx.chain, "venue": venue, "submit_id": submit_id,
+        "outcome": outcome_label, "realized_usd": res.realized_usd,
+        "gas_usd": res.gas_usd, "unpriced_tokens": res.unpriced_tokens,
+        "opportunities": opp_ids, "unix_ms": now_ms,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(format!("{dir}/_settlements.jsonl"))
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{audit}");
+    }
+    if opp_ids.is_empty() {
+        return;
+    }
+    // Opportunity records: submitted -> settled/reverted/dropped.
+    let opps = arb_core::opportunity::load_opportunities(&dir);
+    for id in opp_ids {
+        let Some(o) = opps.iter().find(|o| o.opportunity_id == *id) else {
+            continue;
+        };
+        let mut o = o.clone();
+        o.unix_ms = now_ms;
+        o.settled_net_usd = res.realized_usd;
+        o.execution_status = match res.outcome {
+            TxOutcome::Success => arb_core::opportunity::ExecutionStatus::Settled,
+            TxOutcome::Revert => arb_core::opportunity::ExecutionStatus::Reverted,
+            TxOutcome::Dropped => arb_core::opportunity::ExecutionStatus::Dropped,
+        };
+        let _ = o.append_jsonl(&dir);
+    }
+    // Strategy health: realized losses demote a BoundedLive strategy back to
+    // Shadow (re-verification required) — live results outrank sim evidence.
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        let mut strat = arb_leaders::StrategyRegistry::load(&ctx.chain, 20_000);
+        let mut dirty = false;
+        for id in opp_ids {
+            if let Some(sid) = strategy_id_of(id) {
+                if strat.mark_settled(&sid, res.realized_usd) {
+                    warn!(strategy = sid, realized_usd = res.realized_usd,
+                        "strategy demoted BoundedLive -> Shadow on realized losses");
+                    dirty = true;
+                } else if strat.records.contains_key(&sid) {
+                    dirty = true;
+                }
+            }
+        }
+        if dirty {
+            let _ = strat.save();
+        }
+    }
+}
+
+/// Spawn settlement tracking for one submitted result. Pimlico ops are
+/// resolved via the bundler; every other venue via our own tx hash
+/// (keccak256 of the last signed envelope — venue bundle ids are useless).
+fn spawn_settlement(
+    ctx: SettleCtx,
+    venue: &'static str,
+    submit_hash: Option<String>,
+    our_tx_hash: Option<B256>,
+    opp_ids: Vec<String>,
+    cb: Option<(u32, tokio::sync::mpsc::Sender<(u32, TxOutcome, u64)>, u64)>,
+) {
+    tokio::spawn(async move {
+        let res = if venue == "Pimlico_ERC4337" {
+            match submit_hash.as_deref() {
+                Some(h) => track_userop(&ctx, h, 12).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        } else {
+            match our_tx_hash {
+                Some(h) => settle_tx(&ctx, h, 5).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        };
+        if let Some((pid, sender, blk)) = cb {
+            let _ = sender.send((pid, res.outcome, blk)).await;
+        }
+        record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids);
+    });
+}
 fn write_status_json(
     chain_name: &str,
     started: &chrono::DateTime<chrono::Utc>,
@@ -1146,6 +1492,24 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     });
     let dry_run = dry_run_override;
 
+    // Settlement context — realized-P&L tracking needs the executor address,
+    // token prices/decimals, native price for gas, and the bundler URL for
+    // UserOp receipts.
+    let native_usd = ["WBNB", "WETH", "WPOL", "ETH"]
+        .iter()
+        .find_map(|s| tokens.get(*s))
+        .and_then(|a| token_usd_prices.get(a).copied())
+        .unwrap_or(0.0);
+    let settle_ctx = SettleCtx {
+        endpoint: endpoint.clone(),
+        bundler_url: cfg.submission.pimlico_bundler_url.clone(),
+        arb_contract,
+        token_usd_prices: token_usd_prices.clone(),
+        token_decimals: token_decimals.clone(),
+        native_usd,
+        chain: chain_name.clone(),
+    };
+
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
         paths = paths.len(), dry_run, "Scanner loop starting");
 
@@ -1435,16 +1799,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     metrics::WARP_SPEND_USD.inc_by(0.15);
                                 }
                             }
-                            let mut any_hash = None;
+                            let our_tx_hash = bundle
+                                .signed_txs
+                                .last()
+                                .map(|t| alloy_primitives::keccak256(t));
+                            let mut any_hash: Option<(String, &'static str)> = None;
                             let mut builder_sim_rejected = false;
                             for arb_submit::router::RoutedSubmit { venue, tier, result, .. } in sub_results {
                                 match result {
                                     Ok(r) if r.success => {
                                         info!(venue, tier = ?tier, hash = ?r.bundle_hash, "Submitted");
                                         if any_hash.is_none() {
-                                            if let Some(h) = &r.bundle_hash {
-                                                any_hash = h.parse::<B256>().ok();
-                                            }
+                                            any_hash = r.bundle_hash.clone().map(|h| (h, venue));
                                         }
                                     }
                                     Ok(r) => {
@@ -1518,16 +1884,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                             }
 
-                            // Track receipt — sync in smoke test, async otherwise
-                            if let Some(hash) = any_hash {
+                            // Track receipt + settle — sync in smoke test,
+                            // async otherwise. UserOps resolve through the
+                            // bundler; plain venues via our own tx hash.
+                            if let Some((hash, hash_venue)) = any_hash {
                                 if smoke_test {
                                     info!("Waiting for receipt...");
-                                    let outcome = track_tx(endpoint.clone(), hash, 10).await;
-                                    match outcome {
+                                    let res = if hash_venue == "Pimlico_ERC4337" {
+                                        track_userop(&settle_ctx, &hash, 10).await
+                                    } else {
+                                        match our_tx_hash {
+                                            Some(h) => settle_tx(&settle_ctx, h, 10).await,
+                                            None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+                                        }
+                                    };
+                                    match res.outcome {
                                         TxOutcome::Success => circuit_breaker.record_success(best.path_id),
                                         TxOutcome::Revert => circuit_breaker.record_revert(best.path_id, block_number),
                                         TxOutcome::Dropped => {}
                                     }
+                                    record_settlement(&settle_ctx, hash_venue, &hash, &res, &[]);
                                     let landed_ok = metrics::SUBMIT_LANDED.with_label_values(&["success"]).get() as u64;
                                     let landed_revert = metrics::SUBMIT_LANDED.with_label_values(&["revert"]).get() as u64;
                                     let status = if landed_ok > 0 { "SUCCESS" } else if landed_revert > 0 { "REVERT" } else { "DROPPED" };
@@ -1545,18 +1921,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     println!("effective_usd:    ${:.4}", effective_usd);
                                     println!("tx_hash:          {hash}");
                                     println!("on_chain_status:  {status}");
+                                    println!("realized_usd:     ${:.4}", res.realized_usd);
                                     println!("gas_spent_wei:    {:.0}", metrics::GAS_SPENT_WEI.get());
                                     println!("=================================\n");
                                     return Ok(());
                                 } else {
-                                    let ep = endpoint.clone();
-                                    let cb_sender = cb_tx.clone();
-                                    let pid = best.path_id;
-                                    let blk = block_number;
-                                    tokio::spawn(async move {
-                                        let outcome = track_tx(ep, hash, 5).await;
-                                        let _ = cb_sender.send((pid, outcome, blk)).await;
-                                    });
+                                    spawn_settlement(
+                                        settle_ctx.clone(), hash_venue, Some(hash),
+                                        our_tx_hash, Vec::new(),
+                                        Some((best.path_id, cb_tx.clone(), block_number)),
+                                    );
                                 }
                             }
                         }
@@ -1690,6 +2064,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         "OPPORTUNITY_MATCH victim touches verified leader route"
                     );
                 }
+                // Evaluate all screened candidates first — gate-passers are
+                // ranked by route_score (leader-template overlap, freshness
+                // decay, breaker revert history) before we spend the
+                // re-verify RPC call and a submission on any of them.
+                let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
                 for &(pidx, _) in screened.iter().take(20) {
                     let path = &paths[pidx];
                     if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
@@ -1747,6 +2126,47 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             }
                         }
                         if decision.accept && !dry_run {
+                            // reproduction_precision: share of OUR hops that
+                            // sit inside a matched leader route's pool set —
+                            // 1.0 when no template matched (nothing to
+                            // reproduce against).
+                            let overlap = path.hops.iter()
+                                .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                                .count();
+                            let repro = if matched.is_empty() { 1.0 } else {
+                                overlap as f64 / path.hops.len().max(1) as f64
+                            };
+                            // route_confidence: leader-verified geometry is
+                            // stronger evidence than generic enumeration.
+                            let confidence = if matched.is_empty() { 0.7 }
+                                else if overlap > 0 { 1.0 } else { 0.5 };
+                            // No gas model yet — gas_risk 0 (constant term
+                            // would not change the ordering anyway).
+                            // revert_risk: this path's realized revert rate
+                            // applied to the stake at risk.
+                            let score = arb_core::opportunity::route_score(
+                                decision.effective_profit_usd, repro, 1.0,
+                                pending.seen_at.elapsed().as_millis() as u64,
+                                confidence, 0.0,
+                                circuit_breaker.revert_rate(path.id)
+                                    * decision.effective_profit_usd,
+                            );
+                            scored.push((pidx, opt_amount, sim,
+                                decision.effective_profit_usd, score));
+                        }
+                    }
+                }
+                // Highest route_score first; stale-victim and revert-prone
+                // candidates sink automatically.
+                scored.sort_by(|a, b| {
+                    b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Re-verify + submit in score order; a stale edge falls
+                // through to the next-best candidate (same as before).
+                for (pidx, opt_amount, sim, _effective_usd, _score) in scored {
+                    let path = &paths[pidx];
+                    {
                             // The projected state is approximate — before
                             // spending a submission, re-read the pools the
                             // pending tx touches, re-project, and re-verify
@@ -1781,7 +2201,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             }
 
                             info!(
-                                path_id = path.id, profit_bps,
+                                path_id = path.id, profit_bps = sim.profit_bps,
+                                route_score = _score,
                                 pending_router = pending.decoded.router,
                                 pending_tx = %pending.tx_hash,
                                 victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
@@ -1805,14 +2226,38 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     bundle.backrun_tx = Some(pending.tx_hash);
                                 }
                                 endpoint.bump_nonce();
+                                let matched_opp_ids: Vec<String> = matched
+                                    .iter()
+                                    .map(|(id, _)| id.clone())
+                                    .collect();
                                 if !matched.is_empty() {
                                     // A verified leader route matched this
                                     // victim and survived gate+probe to a
-                                    // real submission — count the capture.
+                                    // real submission — count the capture
+                                    // and mark the records submitted so the
+                                    // settlement loop has something to close.
                                     arb_leaders::OPPORTUNITY_TOTAL
                                         .with_label_values(&[chain_label, "submitted"])
                                         .inc();
+                                    let dir = format!("data/leaders/{chain_label}");
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    for o in arb_core::opportunity::load_opportunities(&dir) {
+                                        if matched_opp_ids.contains(&o.opportunity_id) {
+                                            let mut o = o;
+                                            o.unix_ms = now_ms;
+                                            o.execution_status =
+                                                arb_core::opportunity::ExecutionStatus::Submitted;
+                                            let _ = o.append_jsonl(&dir);
+                                        }
+                                    }
                                 }
+                                let our_tx_hash = bundle
+                                    .signed_txs
+                                    .last()
+                                    .map(|t| alloy_primitives::keccak256(t));
                                 let sub_results = router
                                     .submit_all(&bundle, false, scan_start.elapsed())
                                     .await;
@@ -1828,7 +2273,19 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                                 for r in sub_results {
                                     match r.result {
-                                        Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
+                                        Ok(res) if res.success => {
+                                            debug!(venue = r.venue, "Backrun submitted");
+                                            // Settlement: realized P&L feeds
+                                            // the opportunity record +
+                                            // strategy health. Backrun txs
+                                            // also feed the circuit breaker.
+                                            spawn_settlement(
+                                                settle_ctx.clone(), r.venue,
+                                                res.bundle_hash.clone(), our_tx_hash,
+                                                matched_opp_ids.clone(),
+                                                Some((path.id, cb_tx.clone(), block_number)),
+                                            );
+                                        }
                                         Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
                                         Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
                                     }
@@ -1836,7 +2293,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             }
                             break;
                         }
-                    }
                 }
             }
         }
