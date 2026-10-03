@@ -49,6 +49,11 @@ struct SenderAgg {
     /// only flows are inflows are receivers (payments/CEX withdrawals),
     /// not traders; they must not top a profit leaderboard.
     trade_txs: u32,
+    /// Strategy deconstruction: per-tx nets (capped), contracts called,
+    /// and winning-tx count — everything needed to score forge targets.
+    tx_nets: Vec<f64>,
+    contracts: HashMap<Address, u32>,
+    wins: u32,
 }
 
 #[tokio::main]
@@ -201,6 +206,15 @@ async fn main() -> Result<()> {
             let gas_usd =
                 receipt.gas_used as f64 * receipt.effective_gas_price as f64 / 1e18 * native_usd;
             let agg = senders.entry(sender).or_default();
+            if agg.tx_nets.len() < 10_000 {
+                agg.tx_nets.push(net_usd);
+            }
+            if let Some(to) = receipt.to {
+                *agg.contracts.entry(to).or_default() += 1;
+            }
+            if net_usd > 0.0 {
+                agg.wins += 1;
+            }
             if private_hit {
                 agg.private_hits += 1;
             }
@@ -276,6 +290,71 @@ async fn main() -> Result<()> {
             s.unpriced_flows, s.private_hits, s.atomic_txs, s.trade_txs
         );
     }
+    // ---- Deconstruction + composite score ----
+    // score = ln(1+net) * (0.5 + 0.3*win_rate + 0.2*freq) * forge_weight
+    // forge_weight: bundle_backrunner 1.0 (our mechanism exists),
+    // atomic_arb 0.8 (needs path coverage), trader 0.4 (unverified).
+    let mut scored: Vec<(Address, f64, f64, f64, f64, &'static str, String)> = Vec::new();
+    for (addr, net_after_gas, s) in &ranked {
+        if *net_after_gas <= 0.0 || s.trade_txs == 0 {
+            continue;
+        }
+        let class = if s.atomic_txs > 0 {
+            "atomic_arb"
+        } else if s.private_hits > 0 {
+            "bundle_backrunner"
+        } else {
+            "trader"
+        };
+        let forge_w = match class {
+            "bundle_backrunner" => 1.0,
+            "atomic_arb" => 0.8,
+            _ => 0.4,
+        };
+        let wins_pos: Vec<f64> = s
+            .tx_nets
+            .iter()
+            .copied()
+            .filter(|&n| n > 0.0)
+            .collect();
+        let median_win = {
+            let mut w = wins_pos.clone();
+            w.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if w.is_empty() { 0.0 } else { w[w.len() / 2] }
+        };
+        let win_rate = if s.trade_txs > 0 {
+            s.wins as f64 / s.txs as f64
+        } else {
+            0.0
+        };
+        let freq = (s.trade_txs as f64 / 20.0).min(1.0);
+        let score =
+            (1.0 + net_after_gas).ln() * (0.5 + 0.3 * win_rate + 0.2 * freq) * forge_w;
+        let top_contracts = {
+            let mut cs: Vec<_> = s.contracts.iter().collect();
+            cs.sort_by(|a, b| b.1.cmp(a.1));
+            cs.iter()
+                .take(3)
+                .map(|(a, n)| format!("{a:#x}x{n}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "LEADER_STRAT {addr:#x} class={class} win_rate={win_rate:.2} \
+             median_win={median_win:.2} trades={} contracts={top_contracts}",
+            s.trade_txs
+        );
+        scored.push((*addr, score, *net_after_gas, win_rate, median_win, class, top_contracts));
+    }
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, (addr, score, net, wr, mw, class, contracts)) in scored.iter().take(top_k).enumerate() {
+        println!(
+            "LEADER_RANK #{} {addr:#x} score={score:.2} net={net:.2} \
+             win_rate={wr:.2} median_win={mw:.2} class={class} via={contracts}",
+            i + 1
+        );
+    }
+
     let path = format!("{data_dir}/_scanned.jsonl");
     let n_targets = export.lines().count();
     if n_targets > 0 {
