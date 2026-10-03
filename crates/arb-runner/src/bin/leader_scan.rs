@@ -404,10 +404,17 @@ async fn main() -> Result<()> {
 
     // ---- Route reconstruction: ordered Transfer legs of each top wallet's
     // best tx reveal the actual swap path (pools = counterparties that are
-    // neither the wallet nor other EOAs' wallet legs).
+    // neither the wallet nor other EOAs' wallet legs). Phase-3 shadow: each
+    // leg's counterparty is checked against our tracked pool registry —
+    // covered vs uncovered directly measures the coverage gap.
+    let tracked: std::collections::HashSet<Address> = cfg
+        .pools
+        .iter()
+        .filter_map(|p| p.address.parse::<Address>().ok())
+        .collect();
+    let mut sh_pools_total = 0usize;
+    let mut sh_pools_tracked = 0usize;
     for (addr, _score, _net, _wr, _mw, class, _c) in scored.iter().take(5) {
-        let s = &senders_unused;
-        let _ = s;
         let Some(wallet) = ranked.iter().find(|(a, _, _)| a == addr) else {
             continue;
         };
@@ -416,6 +423,8 @@ async fn main() -> Result<()> {
             continue;
         };
         let mut hop = 0u32;
+        let mut route_pools: std::collections::HashSet<Address> =
+            std::collections::HashSet::new();
         for log in receipt.inner.logs() {
             let topics = log.topics();
             if topics.len() != 3 || topics[0] != TRANSFER_SIG {
@@ -435,6 +444,11 @@ async fn main() -> Result<()> {
                     format!("pool:{a:#x}")
                 }
             };
+            for a in [from, to] {
+                if a != *addr && !s_contracts.contains(&a) && a != token {
+                    route_pools.insert(a);
+                }
+            }
             println!(
                 "LEADER_ROUTE {addr:#x} class={class} tx={best_tx:#x} \
                  hop={hop} token={token:#x} {} -> {} amt={amount}",
@@ -442,6 +456,35 @@ async fn main() -> Result<()> {
                 label(to)
             );
         }
+        let covered = route_pools.iter().filter(|p| tracked.contains(*p)).count();
+        let missing: Vec<String> = route_pools
+            .iter()
+            .filter(|p| !tracked.contains(*p))
+            .map(|p| format!("{p:#x}"))
+            .collect();
+        // Close the loop: shadow-missing counterparties go straight into the
+        // probe set even when their raw hit count ranks below the top-80 cut.
+        for p in &route_pools {
+            if !tracked.contains(p) {
+                pool_candidates.entry(*p).or_insert(1);
+            }
+        }
+        sh_pools_total += route_pools.len();
+        sh_pools_tracked += covered;
+        println!(
+            "SHADOW {addr:#x} class={class} route_pools={} covered={covered} \
+             missing=[{}]",
+            route_pools.len(),
+            missing.join(",")
+        );
+    }
+    if sh_pools_total > 0 {
+        println!(
+            "SHADOW_COVERAGE tracked={}% ({}/{}) — leader route pools inside our registry",
+            sh_pools_tracked * 100 / sh_pools_total,
+            sh_pools_tracked,
+            sh_pools_total
+        );
     }
 
     // ---- Pool auto-import: probe the most-hit counterparties on-chain to
