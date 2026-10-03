@@ -5,15 +5,7 @@ rpc_https = ""
 rpc_https_pool = [
     "https://ethereum-rpc.publicnode.com",
     "https://eth.drpc.org",
-    "https://ethereum.publicnode.com",
-    "https://eth.llamarpc.com",
-    "https://1rpc.io/eth",
-    "https://rpc.ankr.com/eth",
-    "https://ethereum.blockpi.network/v1/rpc/public",
-    "https://eth.merkle.io",
-    "https://cloudflare-eth.com",
     "https://rpc.mevblocker.io",
-    "https://endpoints.omniatech.io/v1/eth/mainnet/public",
 ]
 rpc_wss = "wss://eth.drpc.org"
 rpc_wss_pool = [
@@ -22,8 +14,7 @@ rpc_wss_pool = [
 ]
 trader_rpc = ""
 # No executor/reader deployed on Ethereum — scan/measure mode.
-# dry_run MUST stay true until a contract is deployed.
-arb_contract = ""
+arb_contract = "0x70DD16A8dA1639fc734d3AA0765436D8dBaeccC3"
 state_reader = "0x0000000000000000000000000000000000000000"
 block_time_ms = 12000
 scan_budget_ms = 2500
@@ -36,7 +27,7 @@ flash_tokens = ["USDC", "USDT", "WETH", "DAI"]
 min_profit_bps = 1
 min_initial_bps = 2
 optimization_iterations = 30
-dry_run = true   # scan/measure only — no executor on this chain
+dry_run = false  # executor deployed + pimlico strict_4337 armed
 [scanner.flash_amounts]
 USDC = 10000000
 USDT = 10000000
@@ -61,11 +52,12 @@ safety_margin_bps = 10
 stable_pool_extra_margin_bps = 5
 
 [submission]
-# Ethereum backruns need a bundle venue (Flashbots-style eth_sendBundle) —
-# not yet implemented; this chain measures detection only.
+# Execution via sponsored ERC-4337 UserOps (Pimlico) — same venue as BSC.
 direct_fallback = false
-pimlico_enabled = false
-strict_4337 = false
+pimlico_enabled = true
+pimlico_bundler_url  = "https://api.pimlico.io/v2/ethereum/rpc?apikey=${PIMLICO_API_KEY}"
+sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
+strict_4337 = true  # executor OWNER is the Pimlico smart account — all execution via sponsored UserOps
 
 [token_usd_prices]
 USDC = 1.0
