@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use arb_discovery::store::DiscoveryStore;
 use arb_mempool::MempoolWatcher;
+use arb_core::types::Protocol;
 use arb_paths::enumerate::{PathEnumerator, PoolInfo};
 use arb_paths::PathTemplate;
 use arb_rpc::Endpoint;
@@ -462,6 +463,45 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
         if merged > 0 {
             info!(merged, total = pool_infos.len(), "Merged discovered pools");
+        }
+    }
+
+    // Token-order normalization: on every Uniswap-family pool (V2, V3,
+    // Algebra, Slipstream) the contract sorts token0 < token1 by address.
+    // A config that declares them flipped maps reserves onto the wrong
+    // tokens and fabricates inverted prices — phantom arbs. Sort here so
+    // a bad TOML/draft entry can't reach the graph.
+    {
+        let mut normalized = 0u32;
+        for pi in pool_infos.iter_mut() {
+            let uni_family = matches!(
+                pi.protocol,
+                Protocol::UniswapV2
+                    | Protocol::UniswapV3
+                    | Protocol::UniswapV4
+                    | Protocol::Algebra
+                    | Protocol::AerodromeV2
+                    | Protocol::AerodromeSlipstream
+            );
+            if uni_family && pi.token0 > pi.token1 {
+                warn!(
+                    pool = %pi.address,
+                    "pool token order flipped vs config — normalized to on-chain ordering"
+                );
+                std::mem::swap(&mut pi.token0, &mut pi.token1);
+                normalized += 1;
+            }
+        }
+        for pc in pool_configs.iter_mut() {
+            if let (Some(t0), Some(t1)) = (pc.token0, pc.token1) {
+                if t0 > t1 {
+                    pc.token0 = Some(t1);
+                    pc.token1 = Some(t0);
+                }
+            }
+        }
+        if normalized > 0 {
+            warn!(normalized, "Pool token order normalized — fix the declared token0/token1 order in config");
         }
     }
 

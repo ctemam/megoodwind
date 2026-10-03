@@ -54,7 +54,7 @@ flash_tokens = ["USDT", "USDC", "WBNB"]
 min_profit_bps = 3
 min_initial_bps = 2
 optimization_iterations = 30
-dry_run = true   # allbrightA default: no live submission without Commander approval
+dry_run = true    # allbrightA default: no live submission without Commander approval
 
 [scanner.flash_amounts]
 USDT = 5000000                # 5 USDT (6 dec) — known to find candidates
@@ -129,8 +129,8 @@ fee_bps = 25
 name = "PCS_USDC_USDT"
 address = "0xEc6557348085Aa57C72514D67070dC863C0a5A8c"
 protocol = "v2"
-token0 = "USDC"
-token1 = "USDT"
+token0 = "USDT"
+token1 = "USDC"
 fee_bps = 25
 
 [[pools]]
@@ -145,8 +145,8 @@ fee_bps = 25
 name = "PCS_BTCB_USDT"
 address = "0x3F803EC2b816Ea7F06EC76aA2B6f2532F9892d62"
 protocol = "v2"
-token0 = "BTCB"
-token1 = "USDT"
+token0 = "USDT"
+token1 = "BTCB"
 fee_bps = 25
 
 [[pools]]
@@ -169,8 +169,8 @@ fee_bps = 10
 name = "BS_USDC_USDT"
 address = "0x1483767E665B3591677Fd49F724bf7430C18Bf83"
 protocol = "v2"
-token0 = "USDC"
-token1 = "USDT"
+token0 = "USDT"
+token1 = "USDC"
 fee_bps = 10
 
 [[pools]]
@@ -195,8 +195,8 @@ fee_bps = 5
 name = "U_USDC_USDT_100"
 address = "0x2C3c320D49019D4f9A92352e947c7e5AcFE47D68"
 protocol = "v3"
-token0 = "USDC"
-token1 = "USDT"
+token0 = "USDT"
+token1 = "USDC"
 fee_bps = 1
 
 [[pools]]
@@ -227,8 +227,8 @@ fee_bps = 5
 name = "P_USDC_USDT_100"
 address = "0x92b7807bF19b7DDdf89b706143896d05228f3121"
 protocol = "v3"
-token0 = "USDC"
-token1 = "USDT"
+token0 = "USDT"
+token1 = "USDC"
 fee_bps = 1
 
 [[pools]]
@@ -318,27 +318,27 @@ token_batch_min = 25
 token_batch_max = 50
 
 [[pools]]
-name = "V3_USDT_CAKE"
+name = "V3_CAKE_USDT"
 address = "0xE04D921D6AB7C3eF2Eee14dd7a95Be5706A1EA93"
 protocol = "v3"
-token0 = "USDT"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDT"
 fee_bps = 1
 
 [[pools]]
-name = "V3_USDT_CAKE"
+name = "V3_CAKE_USDT"
 address = "0x8ec186cD1Ad51c380Bd23fDe29f852226647616c"
 protocol = "v3"
-token0 = "USDT"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDT"
 fee_bps = 5
 
 [[pools]]
-name = "V3_USDT_CAKE"
+name = "V3_CAKE_USDT"
 address = "0x7f51c8AaA6B0599aBd16674e2b17FEc7a9f674A1"
 protocol = "v3"
-token0 = "USDT"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDT"
 fee_bps = 25
 
 [[pools]]
@@ -350,41 +350,41 @@ token1 = "WBNB"
 fee_bps = 25
 
 [[pools]]
-name = "V3_WBNB_CAKE"
+name = "V3_CAKE_WBNB"
 address = "0xAfB2Da14056725E3BA3a30dD846B6BBbd7886c56"
 protocol = "v3"
-token0 = "WBNB"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "WBNB"
 fee_bps = 5
 
 [[pools]]
-name = "V3_USDC_CAKE"
+name = "V3_CAKE_USDC"
 address = "0xBa3363669fb975b6C4F7014910ACAcf9Ee77c9D4"
 protocol = "v3"
-token0 = "USDC"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDC"
 fee_bps = 5
 
 [[pools]]
-name = "V2_USDT_CAKE"
+name = "V2_CAKE_USDT"
 address = "0xA39Af17CE4a8eb807E076805Da1e2B8EA7D0755b"
 protocol = "v2"
-token0 = "USDT"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDT"
 fee_bps = 25
 
 [[pools]]
-name = "V2_WBNB_CAKE"
+name = "V2_CAKE_WBNB"
 address = "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0"
 protocol = "v2"
-token0 = "WBNB"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "WBNB"
 fee_bps = 25
 
 [[pools]]
-name = "V2_USDC_CAKE"
+name = "V2_CAKE_USDC"
 address = "0x177d955dCA80443A09E7a7F5946cA16b8E0dcA1C"
 protocol = "v2"
-token0 = "USDC"
-token1 = "CAKE"
+token0 = "CAKE"
+token1 = "USDC"
 fee_bps = 25

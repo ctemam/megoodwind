@@ -363,13 +363,56 @@ impl StateRefresher {
         })
     }
 
+    fn pool_tokens(&self, pool: &Address) -> Option<(Address, Address)> {
+        self.pool_configs
+            .iter()
+            .find(|pc| pc.address == *pool)
+            .and_then(|pc| pc.token0.zip(pc.token1))
+    }
+
     /// Multicall3 read for V2 pools: reserves + token addresses in ONE
     /// aggregate3 (single network round-trip), allowFailure per call so a
     /// dead pool can't sink the batch — unlike the all-or-nothing
-    /// IStateReader chunk reads.
+    /// IStateReader chunk reads. Pools whose token pair is already in config
+    /// skip the token0/token1 calls — only getReserves is dynamic.
     async fn multicall_v2(&self, pools: &[Address]) -> Vec<(Address, U256, U256, Address, Address)> {
         use alloy_sol_types::SolCall;
-        let calls: Vec<IMulticall3::Call3> = pools
+        let mut out = Vec::with_capacity(pools.len());
+
+        let (slim, full): (Vec<Address>, Vec<Address>) =
+            pools.iter().copied().partition(|p| self.pool_tokens(p).is_some());
+
+        if !slim.is_empty() {
+            let calls: Vec<IMulticall3::Call3> = slim
+                .iter()
+                .map(|&p| IMulticall3::Call3 {
+                    target: p,
+                    allowFailure: true,
+                    callData: IV2Pool::getReservesCall::new(()).abi_encode().into(),
+                })
+                .collect();
+            let results = self.multicall_aggregate3(calls).await;
+            if results.len() == slim.len() {
+                for (i, res) in results.iter().enumerate() {
+                    let p = slim[i];
+                    if !res.success {
+                        continue;
+                    }
+                    let Some((t0, t1)) = self.pool_tokens(&p) else { continue };
+                    let Ok(reserves) =
+                        IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..])
+                    else {
+                        continue;
+                    };
+                    out.push((p, U256::from(reserves.reserve0), U256::from(reserves.reserve1), t0, t1));
+                }
+            }
+        }
+
+        if full.is_empty() {
+            return out;
+        }
+        let calls: Vec<IMulticall3::Call3> = full
             .iter()
             .flat_map(|&p| {
                 [
@@ -381,39 +424,101 @@ impl StateRefresher {
             })
             .collect();
         let results = self.multicall_aggregate3(calls).await;
-        if results.len() != pools.len() * 3 {
-            return Vec::new();
+        if results.len() != full.len() * 3 {
+            return out;
         }
-        pools
+        out.extend(full.iter().enumerate().filter_map(|(i, &p)| {
+            let base = i * 3;
+            let res = &results[base];
+            let t0 = &results[base + 1];
+            let t1 = &results[base + 2];
+            if !(res.success && t0.success && t1.success) {
+                return None;
+            }
+            let reserves = IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
+            let token0 = IV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
+            let token1 = IV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+            Some((
+                p,
+                U256::from(reserves.reserve0),
+                U256::from(reserves.reserve1),
+                token0,
+                token1,
+            ))
+        }));
+        out
+    }
+
+    /// Config fee (bps) for a pool, when declared — V3 pools keep their fee
+    /// in raw hundredths-of-a-bip units (config bps × 100).
+    fn pool_config_fee_raw(&self, pool: &Address) -> Option<u32> {
+        self.pool_configs
             .iter()
-            .enumerate()
-            .filter_map(|(i, &p)| {
-                let base = i * 3;
-                let res = &results[base];
-                let t0 = &results[base + 1];
-                let t1 = &results[base + 2];
-                if !(res.success && t0.success && t1.success) {
-                    return None;
-                }
-                let reserves = IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
-                let token0 = IV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
-                let token1 = IV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
-                Some((
-                    p,
-                    U256::from(reserves.reserve0),
-                    U256::from(reserves.reserve1),
-                    token0,
-                    token1,
-                ))
-            })
-            .collect()
+            .find(|pc| pc.address == *pool)
+            .map(|pc| pc.fee_bps)
+            .filter(|&bps| bps > 0)
+            .map(|bps| bps.saturating_mul(100))
     }
 
     /// Multicall3 read for V3 pools: slot0 + liquidity + fee + tokens in
-    /// ONE aggregate3 round-trip, allowFailure per call.
+    /// ONE aggregate3 round-trip, allowFailure per call. Pools with config
+    /// tokens + declared fee only need the dynamic slot0/liquidity reads.
     async fn multicall_v3(&self, pools: &[Address]) -> Vec<(Address, U256, i32, u128, u32, Address, Address)> {
         use alloy_sol_types::SolCall;
-        let calls: Vec<IMulticall3::Call3> = pools
+        let mut out = Vec::with_capacity(pools.len());
+
+        let (slim, full): (Vec<Address>, Vec<Address>) = pools
+            .iter()
+            .copied()
+            .partition(|p| self.pool_tokens(p).is_some() && self.pool_config_fee_raw(p).is_some());
+
+        if !slim.is_empty() {
+            let calls: Vec<IMulticall3::Call3> = slim
+                .iter()
+                .flat_map(|&p| {
+                    [
+                        IV3Pool::slot0Call::new(()).abi_encode().into(),
+                        IV3Pool::liquidityCall::new(()).abi_encode().into(),
+                    ]
+                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                })
+                .collect();
+            let results = self.multicall_aggregate3(calls).await;
+            if results.len() == slim.len() * 2 {
+                for (i, &p) in slim.iter().enumerate() {
+                    let s = &results[i * 2];
+                    let l = &results[i * 2 + 1];
+                    if !(s.success && l.success) {
+                        continue;
+                    }
+                    let (Some((t0, t1)), Some(fee)) =
+                        (self.pool_tokens(&p), self.pool_config_fee_raw(&p))
+                    else {
+                        continue;
+                    };
+                    let (Ok(slot0), Ok(liq)) = (
+                        IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]),
+                        IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]),
+                    ) else {
+                        continue;
+                    };
+                    out.push((
+                        p,
+                        U256::from(slot0.sqrtPriceX96),
+                        slot0.tick.as_i32(),
+                        liq,
+                        fee,
+                        t0,
+                        t1,
+                    ));
+                }
+            }
+        }
+
+        if full.is_empty() {
+            return out;
+        }
+        let calls: Vec<IMulticall3::Call3> = full
             .iter()
             .flat_map(|&p| {
                 [
@@ -427,38 +532,35 @@ impl StateRefresher {
             })
             .collect();
         let results = self.multicall_aggregate3(calls).await;
-        if results.len() != pools.len() * 5 {
-            return Vec::new();
+        if results.len() != full.len() * 5 {
+            return out;
         }
-        pools
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &p)| {
-                let base = i * 5;
-                let s = results.get(base)?;
-                let l = results.get(base + 1)?;
-                let f = results.get(base + 2)?;
-                let t0 = results.get(base + 3)?;
-                let t1 = results.get(base + 4)?;
-                if !(s.success && l.success && f.success && t0.success && t1.success) {
-                    return None;
-                }
-                let slot0 = IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]).ok()?;
-                let liq = IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
-                let fee = IV3Pool::feeCall::abi_decode_returns(&f.returnData[..]).ok()?;
-                let token0 = IV3Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
-                let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
-                Some((
-                    p,
-                    U256::from(slot0.sqrtPriceX96),
-                    slot0.tick.as_i32(),
-                    liq,
-                    fee.to::<u32>(),
-                    token0,
-                    token1,
-                ))
-            })
-            .collect()
+        out.extend(full.iter().enumerate().filter_map(|(i, &p)| {
+            let base = i * 5;
+            let s = results.get(base)?;
+            let l = results.get(base + 1)?;
+            let f = results.get(base + 2)?;
+            let t0 = results.get(base + 3)?;
+            let t1 = results.get(base + 4)?;
+            if !(s.success && l.success && f.success && t0.success && t1.success) {
+                return None;
+            }
+            let slot0 = IV3Pool::slot0Call::abi_decode_returns(&s.returnData[..]).ok()?;
+            let liq = IV3Pool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
+            let fee = IV3Pool::feeCall::abi_decode_returns(&f.returnData[..]).ok()?;
+            let token0 = IV3Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
+            let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+            Some((
+                p,
+                U256::from(slot0.sqrtPriceX96),
+                slot0.tick.as_i32(),
+                liq,
+                fee.to::<u32>(),
+                token0,
+                token1,
+            ))
+        }));
+        out
     }
 
     pub async fn refresh(&self, store: &PoolStore) -> Result<(usize, std::time::Duration)> {

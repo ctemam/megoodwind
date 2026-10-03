@@ -23,6 +23,19 @@ use arb_rpc::Endpoint;
 use crate::userop::{PackedUserOp, UserOpAssembler, UserOpGas, ENTRY_POINT_V06, SIMPLE_ACCOUNT_FACTORY};
 use crate::{Bundle, SubmitResult, SubmitTier, Submitter};
 
+/// Canonical 65-byte dummy signature (permissionless.js) — satisfies
+/// ECDSA signature-length checks when Pimlico simulates the op during
+/// pm_sponsorUserOperation, before the real signature exists.
+fn dummy_signature() -> Bytes {
+    Bytes::from(
+        hex::decode(
+            "fffffffffffffffffffffffffffffff0000000000000000000000000000000007\
+             aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c",
+        )
+        .expect("dummy signature is valid hex"),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct PimlicoConfig {
     pub bundler_url: String,
@@ -274,10 +287,15 @@ impl PimlicoSubmitter {
         let mut gas = self.client.gas_price().await?;
 
         // First pass: unsigned, unsponsored — needed for pm_sponsorUserOperation.
-        let unsigned = self
+        // The sponsor call simulates validateUserOp, so the op must carry a
+        // well-formed 65-byte dummy signature (canonical permissionless.js
+        // dummy); the real signature is applied after sponsorship rewrites
+        // paymasterAndData and gas.
+        let mut unsigned = self
             .assembler
             .assemble_unsigned(&self.endpoint, call.to, call.data.clone(), gas, Bytes::new())
             .await?;
+        unsigned.signature = dummy_signature();
 
         let mut paymaster_and_data = Bytes::new();
         // Sponsorship is always attempted — with a policy when set, or

@@ -40,7 +40,7 @@ flash_tokens = ["USDC", "WETH"]
 min_profit_bps = 0
 min_initial_bps = 0
 optimization_iterations = 30
-dry_run = true   # allbrightA default: no live submission without Commander approval
+dry_run = true    # allbrightA default: no live submission without Commander approval
 
 [scanner.flash_amounts]
 USDC = 5000000                # 5 USDC (6 dec) — known to find candidates

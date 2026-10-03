@@ -43,6 +43,18 @@ impl ProfitGate {
     }
 
     pub fn should_submit(&self, result: &SimResult, path: &PathTemplate) -> Decision {
+        // Data-corruption guard: no legitimate cross-pool arb shows
+        // 1,000%+ — beyond this the pool state is corrupt (e.g. swapped
+        // token order, dead pool), and submitting would burn a sponsor call.
+        const MAX_PLAUSIBLE_BPS: u32 = 100_000;
+        if result.profit_bps > MAX_PLAUSIBLE_BPS {
+            return Decision {
+                accept: false,
+                effective_profit_usd: 0.0,
+                reject_reason: Some("implausible"),
+            };
+        }
+
         if result.profit_bps < self.min_profit_bps {
             return Decision {
                 accept: false,
