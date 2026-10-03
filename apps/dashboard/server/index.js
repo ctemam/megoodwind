@@ -10,6 +10,9 @@ import url from 'node:url'
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url))
 const REPO = path.resolve(__dirname, '../../..')
 const PORT = process.env.DASHBOARD_PORT || 9200
+// 127.0.0.1 default: the dashboard carries go-live + withdrawal controls with
+// no auth — set DASHBOARD_HOST=0.0.0.0 only when LAN access is required.
+const HOST = process.env.DASHBOARD_HOST || '127.0.0.1'
 
 const CHAINS = {
   bsc: { metrics: 'http://localhost:9100/metrics', rpc: 'https://bsc-rpc.publicnode.com', chainId: 56, label: 'BSC' },
@@ -547,4 +550,4 @@ app.post('/api/withdraw', async (req, res) => {
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))
 
-app.listen(PORT, () => console.log(`dashboard proxy on :${PORT} (live=${isLive()})`))
+app.listen(PORT, HOST, () => console.log(`dashboard proxy on ${HOST}:${PORT} (live=${isLive()})`))

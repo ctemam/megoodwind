@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Allbright Dashboard
+Comment=Open Allbright Arbitrage Intelligence
+Exec=xdg-open http://localhost:9200
+Icon=/home/ubuntu/repos/allbrightA/apps/dashboard/public/logo.png
+Terminal=false
+Categories=Development;Finance;
+StartupNotify=true
