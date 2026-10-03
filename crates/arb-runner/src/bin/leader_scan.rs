@@ -141,6 +141,9 @@ async fn main() -> Result<()> {
     // route counterparties (router vs pool/other).
     let mut s_contracts: std::collections::HashSet<Address> =
         std::collections::HashSet::new();
+    // Counterparty addresses seen inside profitable txs, with hit counts —
+    // candidate pools for auto-import.
+    let mut pool_candidates: HashMap<Address, u32> = HashMap::new();
     let _ = &mut s_contracts;
     let senders_unused = ();
     let mut dec_cache: HashMap<Address, u32> = HashMap::new();
@@ -163,6 +166,8 @@ async fn main() -> Result<()> {
                 s_contracts.insert(to);
             }
             let mut net_usd = 0.0f64;
+            let mut counterparties: std::collections::HashSet<Address> =
+                std::collections::HashSet::new();
             let mut unpriced = 0u32;
             let mut had_in = false;
             let mut had_out = false;
@@ -175,6 +180,12 @@ async fn main() -> Result<()> {
                 }
                 let from = Address::from_word(topics[1]);
                 let to = Address::from_word(topics[2]);
+                if from != sender {
+                    counterparties.insert(from);
+                }
+                if to != sender {
+                    counterparties.insert(to);
+                }
                 if from != sender && to != sender {
                     continue;
                 }
@@ -203,6 +214,13 @@ async fn main() -> Result<()> {
             }
             // Bundle fingerprint: this tx profited while sharing tokens with
             // the immediately preceding tx from a different sender.
+            if net_usd > 0.0 {
+                for c in &counterparties {
+                    if *c != sender {
+                        *pool_candidates.entry(*c).or_default() += 1;
+                    }
+                }
+            }
             let mut private_hit = false;
             if net_usd > 0.0 {
                 if let Some((ps, ptoks)) = &prev {
@@ -405,6 +423,109 @@ async fn main() -> Result<()> {
             );
         }
     }
+
+    // ---- Pool auto-import: probe the most-hit counterparties on-chain to
+    // classify V2 (getReserves 0x0902f1ac) vs V3 (slot0 0x3850c7bd) and emit
+    // ready-to-merge [[pools]] entries growing our coverage toward the
+    // leaders' route set.
+    let mut cand: Vec<_> = pool_candidates
+        .iter()
+        .filter(|(a, _)| !s_contracts.contains(*a) && !tokens.values().any(|t| t == *a))
+        .map(|(a, n)| (*a, *n))
+        .collect();
+    cand.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut pools_toml = String::from(
+        "# auto-discovered pools from leader routes — merge into config [[pools]]\n",
+    );
+    let mut n_v2 = 0u32;
+    let mut n_v3 = 0u32;
+    let addr_of = |sel: [u8; 4]| alloy_primitives::Bytes::from(sel.to_vec());
+    let mut new_tokens: Vec<String> = Vec::new();
+    for (addr, hits) in cand.iter().take(80) {
+        let v3 = endpoint
+            .eth_call_timed(*addr, addr_of([0x38, 0x50, 0xc7, 0xbd]))
+            .await
+            .map(|(o, _)| o.len() >= 32 * 7)
+            .unwrap_or(false);
+        let v2 = !v3
+            && endpoint
+                .eth_call_timed(*addr, addr_of([0x09, 0x02, 0xf1, 0xac]))
+                .await
+                .map(|(o, _)| o.len() >= 32 * 3)
+                .unwrap_or(false);
+        if !v2 && !v3 {
+            continue;
+        }
+        let kind = if v3 { "v3" } else { "v2" };
+        if v3 { n_v3 += 1 } else { n_v2 += 1 }
+        // token0()/token1() + v3 fee() resolved on-chain — merge-ready rows.
+        let t0 = endpoint
+            .eth_call_timed(*addr, addr_of([0x0d, 0xfe, 0x16, 0x81]))
+            .await
+            .ok()
+            .and_then(|(o, _)| o.get(12..32).map(|b| Address::from_slice(b)));
+        let t1 = endpoint
+            .eth_call_timed(*addr, addr_of([0xd2, 0x12, 0x20, 0xa7]))
+            .await
+            .ok()
+            .and_then(|(o, _)| o.get(12..32).map(|b| Address::from_slice(b)));
+        let fee_bps = if v3 {
+            endpoint
+                .eth_call_timed(*addr, addr_of([0xdd, 0xca, 0x3f, 0x43]))
+                .await
+                .ok()
+                .and_then(|(o, _)| {
+                    o.get(..32).map(|b| U256::from_be_slice(b).to::<u32>() / 100)
+                })
+                .unwrap_or(30)
+        } else {
+            25
+        };
+        let mut sym = |a: Option<Address>| -> String {
+            match a {
+                Some(a) => {
+                    if let Some((sym, _)) =
+                        tokens.iter().find(|(_, t)| **t == a)
+                    {
+                        sym.clone()
+                    } else {
+                        let s = format!("TK_{:#x}", a);
+                        new_tokens.push(format!("{s} = \"{a:#x}\""));
+                        s
+                    }
+                }
+                None => "UNK".into(),
+            }
+        };
+        let s0 = sym(t0);
+        let s1 = sym(t1);
+        println!(
+            "LEADER_POOL {addr:#x} protocol={kind} hits={hits} {s0}/{s1} fee_bps={fee_bps}"
+        );
+        pools_toml.push_str(&format!(
+            "[[pools]]\nname = \"AUTO_{s0}_{s1}_{fee_bps}\"\n\
+             address = \"{addr:#x}\"\nprotocol = \"{kind}\"\n\
+             token0 = \"{s0}\"\ntoken1 = \"{s1}\"\nfee_bps = {fee_bps}\n\n"
+        ));
+    }
+    if !new_tokens.is_empty() {
+        new_tokens.sort();
+        new_tokens.dedup();
+        let tokens_path = format!("{data_dir}/_tokens.toml");
+        std::fs::write(
+            &tokens_path,
+            format!(
+                "# merge under [tokens]\n{}\n",
+                new_tokens.join("\n")
+            ),
+        )?;
+        println!("LEADER_TOKENS exported {} -> {tokens_path}", new_tokens.len());
+    }
+    let pools_path = format!("{data_dir}/_pools.toml");
+    std::fs::write(&pools_path, &pools_toml)?;
+    println!(
+        "LEADER_POOLS exported v2={n_v2} v3={n_v3} -> {pools_path}"
+    );
 
     let path = format!("{data_dir}/_scanned.jsonl");
     let n_targets = export.lines().count();
