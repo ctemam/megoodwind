@@ -137,6 +137,12 @@ async fn main() -> Result<()> {
     );
 
     let mut senders: HashMap<Address, SenderAgg> = HashMap::new();
+    // Contracts observed as tx targets across the scan — used to label
+    // route counterparties (router vs pool/other).
+    let mut s_contracts: std::collections::HashSet<Address> =
+        std::collections::HashSet::new();
+    let _ = &mut s_contracts;
+    let senders_unused = ();
     let mut dec_cache: HashMap<Address, u32> = HashMap::new();
     let mut n_receipts = 0u64;
 
@@ -153,6 +159,9 @@ async fn main() -> Result<()> {
                 continue;
             }
             let sender = receipt.from;
+            if let Some(to) = receipt.to {
+                s_contracts.insert(to);
+            }
             let mut net_usd = 0.0f64;
             let mut unpriced = 0u32;
             let mut had_in = false;
@@ -353,6 +362,48 @@ async fn main() -> Result<()> {
              win_rate={wr:.2} median_win={mw:.2} class={class} via={contracts}",
             i + 1
         );
+    }
+
+    // ---- Route reconstruction: ordered Transfer legs of each top wallet's
+    // best tx reveal the actual swap path (pools = counterparties that are
+    // neither the wallet nor other EOAs' wallet legs).
+    for (addr, _score, _net, _wr, _mw, class, _c) in scored.iter().take(5) {
+        let s = &senders_unused;
+        let _ = s;
+        let Some(wallet) = ranked.iter().find(|(a, _, _)| a == addr) else {
+            continue;
+        };
+        let Some(best_tx) = wallet.2.best_tx else { continue };
+        let Ok(Some(receipt)) = endpoint.get_receipt(best_tx).await else {
+            continue;
+        };
+        let mut hop = 0u32;
+        for log in receipt.inner.logs() {
+            let topics = log.topics();
+            if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+                continue;
+            }
+            hop += 1;
+            let token = log.address();
+            let from = Address::from_word(topics[1]);
+            let to = Address::from_word(topics[2]);
+            let amount = U256::from_be_slice(log.data().data.as_ref());
+            let label = |a: Address| -> String {
+                if a == *addr {
+                    "WALLET".into()
+                } else if s_contracts.contains(&a) {
+                    format!("router:{a:#x}")
+                } else {
+                    format!("pool:{a:#x}")
+                }
+            };
+            println!(
+                "LEADER_ROUTE {addr:#x} class={class} tx={best_tx:#x} \
+                 hop={hop} token={token:#x} {} -> {} amt={amount}",
+                label(from),
+                label(to)
+            );
+        }
     }
 
     let path = format!("{data_dir}/_scanned.jsonl");
