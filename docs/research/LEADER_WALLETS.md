@@ -67,3 +67,27 @@ copiers. Every published copy-trading design therefore enforces:
   submissions, sizing, or config in this phase.
 - Raw tx bytes are stored solely for offline replay — they carry the
   leader's nonce+signature and are structurally unsubmitable by us.
+
+## Phase 2 implemented — `leader_profile` replay binary
+
+`leader_profile <config> <wallet|"all"> [--limit N]` replays captured
+observations against on-chain receipts: per tx it computes net ERC-20
+Transfer deltas for the wallet (Transfer topic0 = 0xddf252ad…523b3ef —
+verified on-chain), values priced tokens from `[token_usd_prices]` with
+**on-chain-fetched decimals** (BSC stables are 18 dec — hardcoding 6 broke
+the first replay), measures gas spend in USD, attributes the beneficiary
+address of the bought token, and reports per-token net + win/loss/gas
+aggregates. Rows: `LEADER_PROFILE`, `LEADER_TX`, `LEADER_TOKEN`,
+`LEADER_BENEFICIARY`.
+
+## First measured wallet (auto-discovered, BSC)
+
+`0x6bee313213f5266109924702894f71d3ee1dc631` — 108 captured txs replayed:
+87 mined / 16 reverted / 5 dropped. All `UniV3_exactInputSingle` buys of
+**AIN** (0x9558a925…) with USDT through router 0x13f4ea83…
+- USDT out: ~$2,923 (avg ~$34/tx)
+- AIN in: ~87,363 — pool-implied mark ~$3.6k+ at $0.0417 vs ~$0.034 buy avg
+- Gas: $0.44 total → unrealized edge ~+$700 on ~$2.9k notional
+- Profile: disciplined accumulator/DCA bot — same-size clips, ~13 tx/min,
+  15% revert rate (fires aggressively, tolerates failed attempts)
+- Not an arb pattern — value is in direction/accumulation, not per-tx arb
