@@ -27,6 +27,26 @@ type HttpProvider = alloy::providers::fillers::FillProvider<
 /// Seconds an endpoint is benched after a transport failure (429/timeout/conn).
 const BLACKLIST_SECS: u64 = 60;
 
+/// Per-endpoint retry: alloy's standard `RetryBackoffLayer` retries rate-limit
+/// (429) and transient transport errors with exponential backoff + jitter
+/// before a failure ever reaches the pool-level failover. `RetryBackoffLayer::new`
+/// takes (max retries, initial backoff ms, compute units/sec).
+const RETRY_MAX: u32 = 2;
+const RETRY_INITIAL_BACKOFF_MS: u64 = 50;
+const RETRY_COMPUTE_UNITS_PER_SEC: u64 = 50;
+
+/// HTTP provider with the standard retry/backoff transport layer applied.
+fn retry_http_provider(url: url::Url) -> HttpProvider {
+    let client = alloy::rpc::client::ClientBuilder::default()
+        .layer(alloy::transports::layers::RetryBackoffLayer::new(
+            RETRY_MAX,
+            RETRY_INITIAL_BACKOFF_MS,
+            RETRY_COMPUTE_UNITS_PER_SEC,
+        ))
+        .http(url);
+    ProviderBuilder::new().connect_client(client)
+}
+
 struct PoolState {
     /// Per-endpoint: instant until which it is blacklisted.
     blacklist_until: Vec<Option<Instant>>,
@@ -126,7 +146,7 @@ impl Endpoint {
                 async move {
                     match url.parse() {
                         Ok(parsed) => {
-                            let provider = ProviderBuilder::new().connect_http(parsed);
+                            let provider = retry_http_provider(parsed);
                             let result = tokio::time::timeout(
                                 Duration::from_secs(5),
                                 provider.get_chain_id(),
@@ -161,8 +181,7 @@ impl Endpoint {
                 info!("No trader endpoint configured, will use read endpoint for tx submission");
                 None
             } else {
-                let tp = ProviderBuilder::new()
-                    .connect_http(turl.parse()?);
+                let tp = retry_http_provider(turl.parse()?);
                 let trader_chain = tp.get_chain_id().await?;
                 if trader_chain != chain_id {
                     anyhow::bail!(
