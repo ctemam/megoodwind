@@ -31,6 +31,15 @@ copiers. Every published copy-trading design therefore enforces:
 - `crates/arb-leaders` — registry (`[leaders]` TOML table: address, label,
   strategy_hypothesis, risk_tier, max_copied_notional_usd, enabled),
   observer hooked into the pending-swap stream keyed on `PendingSwap.from`.
+- **Real-time discovery** (`[leaders] discover = true`): every pending-tx
+  sender is scored on bot signals — direct pool `swap()` calls (+5, humans
+  don't call pools), trades hitting our tracked pools (+3), multi-hop
+  routes (+2), single-hop router (+1) — exponentially decayed at a 5-minute
+  half-life. Senders crossing the threshold after 3+ observations are
+  auto-promoted as `risk_tier = "candidate"` wallets; the registry is
+  capped at 50 discovered wallets with weakest-score eviction (manual
+  entries are never evicted). Discovery events land in
+  `data/leaders/<chain>/_discovered.jsonl`.
 - Persistence: `data/leaders/<chain>/<wallet>.jsonl` — one observation per
   line: tx hash, wall-clock seen time, callee, value, router tag, decoded
   path/fees/amount, pools touched, coarse class, raw signed tx bytes
