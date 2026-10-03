@@ -1300,8 +1300,22 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 if let (Some(account), Some(call)) =
                                     (smart_account, bundle.call.as_ref())
                                 {
+                                    // The tx sender depends on venue mix:
+                                    // EOA-signed builder bundles are sent
+                                    // FROM submit_signer (onlyOwner on the
+                                    // executor contract), UserOps execute
+                                    // as the smart account. Probe the
+                                    // identity that will actually send —
+                                    // probing the wrong sender always
+                                    // reverts onlyOwner and suppresses
+                                    // every candidate.
+                                    let probe_from = if cfg.submission.strict_4337 {
+                                        account
+                                    } else {
+                                        submit_signer.address()
+                                    };
                                     let probe = alloy::rpc::types::TransactionRequest::default()
-                                        .from(account)
+                                        .from(probe_from)
                                         .to(call.to)
                                         .input(call.data.clone().into());
                                     match endpoint.provider().call(probe).await {
