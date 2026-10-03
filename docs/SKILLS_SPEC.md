@@ -169,6 +169,32 @@ are registered as the replay/reorg/finality emit points land.
 9. Chain-specific kill switch and rollback tested.
 10. Chain stays discovery-only until all evidence is recorded.
 
+## Deployment Governance Report (both modes)
+
+The master wallet-intelligence report is a **required deployment gate** for
+conventional arbitrage and wallet-intelligence modes alike. No chain, executor,
+or strategy enters or stays live without a current report.
+
+Report contents (per chain):
+- Master wallet-intelligence table: pools, paths, wallets tracked, strategy
+  lifecycle counts (observe/replay/shadow/bounded_live/expired), route
+  coverage, leader net P&L in the scan window (measured, after gas).
+- Sim-vs-live funnel: paths evaluated, profitable found, gross EV, gate pass,
+  submits, landed, realized net P&L — simulation metrics beside live metrics.
+- Profit projection: leader ceiling/day [projected] vs engine gross and net
+  /day [projected], with the dominant capture gap named.
+
+Gate rules:
+1. Sim-mandatory — a strategy/chain must show positive simulated profit through
+   the production simulator on live state before execution; no code path may
+   skip it.
+2. Wallet-intelligence promotion additionally requires 100% route-pool
+   coverage (replay → shadow) before bounded_live under the ≤$25 cap.
+3. The report is regenerated at every deployment review; Commander compares
+   sim projection vs realized live P&L. Persistent divergence (sim verifies,
+   live earns nothing) triggers a review of coverage, latency, and gas floor
+   assumptions — not a lowering of the gates.
+
 ## Continuous Research and Skill Maintenance
 
 Every agent task keeps skills at industry cutting edge: before executing a
