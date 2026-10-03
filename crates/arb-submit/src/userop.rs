@@ -52,6 +52,7 @@ impl PackedUserOp {
     /// v0.6 inner hash: keccak over abi.encodePacked of all fields.
     fn pack_hash(&self) -> B256 {
         let mut buf = Vec::with_capacity(416);
+        buf.extend_from_slice(&[0u8; 12]);
         buf.extend_from_slice(self.sender.as_slice());
         buf.extend_from_slice(&self.nonce.to_be_bytes::<32>());
         buf.extend_from_slice(keccak256(&self.init_code).as_slice());

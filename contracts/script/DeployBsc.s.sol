@@ -30,6 +30,7 @@ contract DeployBsc is Script {
         tokens[4] = ETH;
 
         BscFlashArb arb = new BscFlashArb(
+            vm.envOr("OWNER_ADDRESS", vm.addr(deployerKey)),
             poolManager,
             5 gwei,     // maxGasPrice — BSC blocks are cheap
             0,          // minProfitBps — accept any profit initially

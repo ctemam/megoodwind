@@ -18,6 +18,7 @@ contract DeployBase is Script {
 
     function run() external {
         uint256 deployerKey = vm.envUint("DEPLOYER_KEY");
+        address deployer = vm.addr(deployerKey);
         vm.startBroadcast(deployerKey);
 
         address[] memory tokens = new address[](5);
@@ -28,6 +29,7 @@ contract DeployBase is Script {
         tokens[4] = cbETH;
 
         BaseFlashArb arb = new BaseFlashArb(
+            vm.envOr("OWNER_ADDRESS", deployer),
             POOL_MANAGER,
             50 gwei,    // maxGasPrice — Base L2 gas is cheap
             0,          // minProfitBps — accept any profit initially

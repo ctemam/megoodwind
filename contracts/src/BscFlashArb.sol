@@ -255,6 +255,7 @@ contract BscFlashArb is
     // ============ Constructor ============
 
     constructor(
+        address _owner,
         address _poolManager,
         uint256 _maxGasPrice,
         uint256 _minProfitBps,
@@ -262,7 +263,7 @@ contract BscFlashArb is
     ) {
         require(_maxGasPrice > 0, "Invalid max gas price");
 
-        OWNER = msg.sender;
+        OWNER = _owner == address(0) ? msg.sender : _owner;
         POOL_MANAGER = _poolManager;
         CHAIN_ID = block.chainid;
 

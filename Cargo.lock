@@ -918,6 +918,7 @@ dependencies = [
  "dashmap",
  "dotenvy",
  "futures",
+ "hex",
  "lazy_static",
  "prometheus",
  "reqwest 0.12.28",

@@ -767,9 +767,12 @@ async function goPlusRisk(chainId, address) {
       if (d.cannot_sell_all === '1') flags.push('cannot_sell_all')
       const tax = Math.max(parseFloat(d.buy_tax || 0), parseFloat(d.sell_tax || 0))
       if (tax > 0.1) flags.push(`tax>${(tax * 100).toFixed(0)}%`)
-      if (d.is_proxy === '1') flags.push('proxy')
-      if (d.hidden_owner === '1') flags.push('hidden_owner')
-      v = { flags, open_source: d.is_open_source === '1', holder_count: d.holder_count }
+      // Advisory-only: proxy/hidden_owner describe most major tokens
+      // (USDT, USDC, FDUSD are all proxies) — reported, not blocking.
+      const advisory = []
+      if (d.is_proxy === '1') advisory.push('proxy')
+      if (d.hidden_owner === '1') advisory.push('hidden_owner')
+      v = { flags, advisory, open_source: d.is_open_source === '1', holder_count: d.holder_count }
     }
   } catch {}
   goPlusCache.set(key, { t: Date.now(), v })
@@ -1313,7 +1316,10 @@ async function validateDraft(d) {
     add('not duplicate', !Object.values(cfg.tokens).some(a => a.toLowerCase() === addr.toLowerCase()),
       Object.values(cfg.tokens).some(a => a.toLowerCase() === addr.toLowerCase()) ? 'already registered' : 'new')
     const risk = await goPlusRisk(cfg.chain_id, addr)
-    if (risk) add('GoPlus clean', risk.flags.length === 0, risk.flags.join(', ') || 'no flags')
+    if (risk) {
+      add('GoPlus clean', risk.flags.length === 0, risk.flags.join(', ') || 'no flags')
+      if (risk.advisory?.length) add('GoPlus advisory', true, risk.advisory.join(', '))
+    }
     else add('GoPlus lookup', true, 'unreachable — advisory only')
   }
   if (d.type === 'pool') {

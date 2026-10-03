@@ -101,6 +101,15 @@ impl PimlicoClient {
         U256::from_str(s).map_err(|e| anyhow::anyhow!("bad U256 '{s}': {e}"))
     }
 
+    /// Same as `parse_u256` but `null`/absent fields come back `None`
+    /// instead of failing — Pimlico omits gas fields it doesn't adjust.
+    fn parse_u256_opt(v: &serde_json::Value) -> Result<Option<U256>> {
+        match v {
+            serde_json::Value::Null => Ok(None),
+            _ => Self::parse_u256(v).map(Some),
+        }
+    }
+
     /// `pimlico_getUserOperationGasPrice` → the "fast" tier fees.
     pub async fn gas_price(&self) -> Result<UserOpGas> {
         let res = self.rpc("pimlico_getUserOperationGasPrice", json!([])).await?;
@@ -151,22 +160,34 @@ impl PimlicoClient {
         if let Some(err) = body.get("error") {
             return Err(SponsorReject::classify(err.to_string()));
         }
+        debug!(response = %body, "pm_sponsorUserOperation result");
         let res = body.get("result").cloned().unwrap_or(serde_json::Value::Null);
-        let res = (|| -> Result<serde_json::Value> { Ok(res) })()
-            .map_err(|e: anyhow::Error| SponsorReject::permanent("bad_response", format!("{e}")))?;
         let pmd_hex = res["paymasterAndData"].as_str().unwrap_or("0x").to_string();
         let parse = || -> Result<(Bytes, UserOpGas)> {
             let paymaster_and_data = Bytes::from_str(&pmd_hex).context("bad paymasterAndData")?;
+            // Pimlico returns only the fields it adjusts. Fields it omits must
+            // keep the values the op was submitted with — the paymaster
+            // signature inside paymasterAndData covers exactly those values,
+            // so substituting anything else fails bundler signature checks
+            // (-32507).
             let gas = UserOpGas {
-                call_gas_limit: Self::parse_u256(&res["callGasLimit"])?,
-                verification_gas_limit: Self::parse_u256(&res["verificationGasLimit"])?,
-                pre_verification_gas: Self::parse_u256(&res["preVerificationGas"])?,
-                max_fee_per_gas: Self::parse_u256(&res["maxFeePerGas"])?,
-                max_priority_fee_per_gas: Self::parse_u256(&res["maxPriorityFeePerGas"])?,
+                call_gas_limit: Self::parse_u256_opt(&res["callGasLimit"])?
+                    .unwrap_or(Self::parse_u256(&op_json["callGasLimit"])?),
+                verification_gas_limit: Self::parse_u256_opt(&res["verificationGasLimit"])?
+                    .unwrap_or(Self::parse_u256(&op_json["verificationGasLimit"])?),
+                pre_verification_gas: Self::parse_u256_opt(&res["preVerificationGas"])?
+                    .unwrap_or(Self::parse_u256(&op_json["preVerificationGas"])?),
+                max_fee_per_gas: Self::parse_u256_opt(&res["maxFeePerGas"])?
+                    .unwrap_or(Self::parse_u256(&op_json["maxFeePerGas"])?),
+                max_priority_fee_per_gas: Self::parse_u256_opt(&res["maxPriorityFeePerGas"])?
+                    .unwrap_or(Self::parse_u256(&op_json["maxPriorityFeePerGas"])?),
             };
             Ok((paymaster_and_data, gas))
         };
-        parse().map_err(|e: anyhow::Error| SponsorReject::permanent("bad_response", format!("{e}")))
+        parse().map_err(|e: anyhow::Error| {
+            warn!(body = %body, "unexpected pm_sponsorUserOperation response");
+            SponsorReject::permanent("bad_response", format!("{e}"))
+        })
     }
 
     /// `eth_sendUserOperation` → userOpHash.
@@ -206,7 +227,14 @@ impl SponsorReject {
     /// Map a paymaster JSON-RPC error body to a stable reason label.
     fn classify(err: String) -> Self {
         let s = err.to_lowercase();
-        let (reason, transient) = if s.contains("quota") || s.contains("spend")
+        let (reason, transient) = if s.contains("reverted during simulation")
+            || s.contains("-32521") || s.contains("execution reverted")
+        {
+            // The bundler simulated the op and our call reverted — deterministic:
+            // resubmitting the same op will fail the same way (e.g. an executor
+            // whose OWNER check rejects the smart account). Non-transient.
+            ("exec_revert", false)
+        } else if s.contains("quota") || s.contains("spend")
             || s.contains("limit") || s.contains("exceeded") || s.contains("cap")
         {
             ("quota_exhausted", false)
@@ -276,6 +304,13 @@ impl PimlicoSubmitter {
         }
     }
 
+    /// The UserOperation sender — the counterfactual smart account whose
+    /// address the executor's OWNER check expects as msg.sender.
+    /// RPC-backed (factory.getAddress); callers should cache the result.
+    pub async fn account(&self) -> Result<Address> {
+        self.assembler.sender(&self.endpoint).await
+    }
+
     /// Assemble a full UserOperation for `bundle.call`, applying sponsorship
     /// when a policy is configured. `dry_run` stops before signing+send.
     async fn build_userop(&self, bundle: &Bundle) -> Result<PackedUserOp> {
@@ -333,10 +368,15 @@ impl PimlicoSubmitter {
                     &self.endpoint,
                     call.to,
                     call.data.clone(),
-                    gas,
+                    gas.clone(),
                     paymaster_and_data,
                 )
                 .await?;
+            // assemble_unsigned re-derives gas (e.g. +400k verification for
+            // initCode deployment). The paymaster signature covers the sponsor
+            // response's gas fields verbatim — any mutation fails the bundler
+            // signature check (-32507). Restore them exactly.
+            op.gas = gas;
         }
 
         self.assembler.sign(&op).await
@@ -378,6 +418,12 @@ impl Submitter for PimlicoSubmitter {
     async fn submit(&self, bundle: &Bundle) -> Result<SubmitResult> {
         let op = self.build_userop(bundle).await?;
         let op_json = op.to_json();
+        debug!(
+            sig_v = ?op.signature.last(),
+            pmd_len = op.paymaster_and_data.len(),
+            op = %op_json,
+            "sending UserOperation"
+        );
         match self
             .client
             .send_user_operation(&op_json, self.cfg.entry_point)

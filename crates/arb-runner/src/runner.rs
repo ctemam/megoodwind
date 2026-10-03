@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy::signers::local::PrivateKeySigner;
+use alloy::sol_types::SolCall;
 use alloy_primitives::{Address, B256, U256};
 use anyhow::Result;
 use futures::StreamExt;
@@ -38,6 +39,255 @@ use crate::metrics;
 const CIRCUIT_BREAKER_MAX_REVERTS: u32 = 3;
 const CIRCUIT_BREAKER_SUPPRESS_BLOCKS: u64 = 30;
 const CIRCUIT_BREAKER_DECAY_BLOCKS: u64 = 100;
+
+mod quote_uni {
+    alloy::sol! {
+        function quoteExactInputSingle((address,address,uint256,uint24,uint160) calldata) external returns (uint256,uint160,uint32,uint256);
+    }
+}
+mod quote_slip {
+    alloy::sol! {
+        function quoteExactInputSingle((address,address,uint256,int24,uint160) calldata) external returns (uint256,uint160,uint32,uint256);
+    }
+}
+
+alloy::sol! {
+    struct ProbeCall3 { address target; bool allowFailure; bytes callData; }
+    struct ProbeResult3 { bool success; bytes returnData; }
+    function aggregate3(ProbeCall3[] calldata calls) external payable returns (ProbeResult3[] memory);
+    function tickSpacing() external view returns (int24);
+}
+
+/// Quoter deployments verified on-chain (quoter.factory() matches the
+/// pool factory): PancakeSwap V3 QuoterV2 on BSC, Uniswap V3 QuoterV2 and
+/// Aerodrome Slipstream QuoterV2 on Base.
+const UNI_QUOTER_BSC: Address = alloy_primitives::address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997");
+const UNI_QUOTER_BASE: Address = alloy_primitives::address!("3d4e44Eb1374240CE5F1B871ab261CD16335B76a");
+const SLIP_QUOTER_BASE: Address = alloy_primitives::address!("254cF9E1E6e233aa1AC962CB9B05b2cfeAae15b0");
+
+/// A concentrated-liquidity pool can report `liquidity() > 0` while its
+/// stored price is abandoned — the active tick holds little or nothing on
+/// one side, so the sim sees a fake spread vs healthy pools but on-chain
+/// the swap yields dust (e.g. BSC pool 0x62Cf0052..c16770: 489 wei out on
+/// a 0.001-token input). Probe each V3-family pool once at boot through
+/// the real QuoterV2 in both directions and quarantine pools whose
+/// executable output diverges from the slot0-implied price by >2x.
+/// V2 reserves are always executable (x*y=k), so they never need this.
+async fn probe_dead_v3_pools(
+    endpoint: &Endpoint,
+    store: &PoolStore,
+    pools: &[PoolInfo],
+    decimals: &HashMap<Address, u32>,
+    chain_id: u64,
+) -> HashSet<Address> {
+    struct Probe {
+        pool: Address,
+        quoter: Address,
+        zfo: bool,
+        token_in: Address,
+        token_out: Address,
+        amount_in: U256,
+        /// fee for UniV3-style quoters, tickSpacing for Slipstream.
+        key_param: u32,
+    }
+
+    // Slipstream quoter keys pools by tickSpacing, not fee — fetch those first.
+    let mut slip_ts: HashMap<Address, i32> = HashMap::new();
+    let slip_pools: Vec<Address> = pools
+        .iter()
+        .filter(|p| p.protocol == Protocol::AerodromeSlipstream)
+        .map(|p| p.address)
+        .collect();
+    if !slip_pools.is_empty() && chain_id == spec::BASE_CHAIN_ID {
+        let calls: Vec<ProbeCall3> = slip_pools
+            .iter()
+            .map(|&p| ProbeCall3 {
+                target: p,
+                allowFailure: true,
+                callData: tickSpacingCall::new(()).abi_encode().into(),
+            })
+            .collect();
+        let cd = aggregate3Call { calls }.abi_encode().into();
+        if let Ok((ret, _)) = endpoint
+            .eth_call_timed(arb_state::refresher::MULTICALL3_ADDR, cd)
+            .await
+        {
+            if let Ok(results) = aggregate3Call::abi_decode_returns(&ret) {
+                for (p, r) in slip_pools.iter().zip(results.iter()) {
+                    if r.success {
+                        if let Ok(ts) = tickSpacingCall::abi_decode_returns(&r.returnData[..]) {
+                            slip_ts.insert(*p, ts.as_i32());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut probes: Vec<Probe> = Vec::new();
+    let mut amount_for = |token: Address| -> U256 {
+        let dec = decimals.get(&token).copied().unwrap_or(18).min(30);
+        U256::from(10u128).pow(U256::from(dec.saturating_sub(2)))
+    };
+    for pi in pools {
+        let Some(arb_core::types::PoolState::V3(v3)) = store.get(&pi.address) else {
+            continue;
+        };
+        let (quoter, key_param) = match pi.protocol {
+            Protocol::UniswapV3 => {
+                let q = if chain_id == spec::BSC_CHAIN_ID {
+                    UNI_QUOTER_BSC
+                } else if chain_id == spec::BASE_CHAIN_ID {
+                    UNI_QUOTER_BASE
+                } else {
+                    continue;
+                };
+                (q, v3.fee)
+            }
+            Protocol::AerodromeSlipstream if chain_id == spec::BASE_CHAIN_ID => {
+                let Some(&ts) = slip_ts.get(&pi.address) else { continue };
+                (SLIP_QUOTER_BASE, ts as u32)
+            }
+            // Algebra and other CL families: no verified quoter — fail-open,
+            // the per-submission exec probe still protects the pipeline.
+            _ => continue,
+        };
+        let zfo_amt = amount_for(pi.token0);
+        let ofz_amt = amount_for(pi.token1);
+        probes.push(Probe {
+            pool: pi.address, quoter, zfo: true,
+            token_in: pi.token0, token_out: pi.token1,
+            amount_in: zfo_amt, key_param,
+        });
+        probes.push(Probe {
+            pool: pi.address, quoter, zfo: false,
+            token_in: pi.token1, token_out: pi.token0,
+            amount_in: ofz_amt, key_param,
+        });
+    }
+    if probes.is_empty() {
+        return HashSet::new();
+    }
+
+    let calls: Vec<ProbeCall3> = probes
+        .iter()
+        .map(|pr| {
+            let data: alloy_primitives::Bytes = if pr.quoter == SLIP_QUOTER_BASE {
+                quote_slip::quoteExactInputSingleCall::new((
+                    (
+                        pr.token_in,
+                        pr.token_out,
+                        pr.amount_in,
+                        alloy_primitives::Signed::<24, 1>::try_from(pr.key_param as i32)
+                            .unwrap_or_default(),
+                        alloy_primitives::Uint::<160, 3>::ZERO,
+                    ),
+                ))
+                .abi_encode()
+                .into()
+            } else {
+                quote_uni::quoteExactInputSingleCall::new((
+                    (
+                        pr.token_in,
+                        pr.token_out,
+                        pr.amount_in,
+                        alloy_primitives::Uint::<24, 1>::from(pr.key_param),
+                        alloy_primitives::Uint::<160, 3>::ZERO,
+                    ),
+                ))
+                .abi_encode()
+                .into()
+            };
+            ProbeCall3 { target: pr.quoter, allowFailure: true, callData: data }
+        })
+        .collect();
+
+    let cd = aggregate3Call { calls }.abi_encode().into();
+    let Ok((ret, _)) = endpoint
+        .eth_call_timed(arb_state::refresher::MULTICALL3_ADDR, cd)
+        .await
+    else {
+        // Probe infrastructure unreachable — fail-open, don't blind-drop.
+        warn!("V3 pool quarantine probe failed at transport level — keeping all pools");
+        return HashSet::new();
+    };
+    let Ok(results) = aggregate3Call::abi_decode_returns(&ret) else {
+        return HashSet::new();
+    };
+
+    let mut dead: HashSet<Address> = HashSet::new();
+    let q96: f64 = 79_228_162_514_264_337_593_543_950_336.0; // 2^96
+    for (pr, r) in probes.iter().zip(results.iter()) {
+        let mut dead_dir = !r.success;
+        if let Some(arb_core::types::PoolState::V3(v3)) = store.get(&pr.pool) {
+            if !dead_dir {
+                let amount_out: U256 = quote_uni::quoteExactInputSingleCall::abi_decode_returns(
+                    &r.returnData[..],
+                )
+                .map(|d| d._0)
+                .unwrap_or_default();
+                // Predicted output from slot0 price in f64 — a >2x shortfall
+                // means the executable depth isn't where the price says it is.
+                let sqrt_f: f64 = v3.sqrt_price_x96.to_string().parse().unwrap_or(0.0);
+                let price = (sqrt_f / q96) * (sqrt_f / q96); // token1_raw / token0_raw
+                let fee_frac = v3.fee as f64 / 1e6;
+                let in_f: f64 = pr.amount_in.to_string().parse().unwrap_or(0.0);
+                let expected = if pr.zfo {
+                    in_f * price * (1.0 - fee_frac)
+                } else {
+                    in_f / price * (1.0 - fee_frac)
+                };
+                let got: f64 = amount_out.to_string().parse().unwrap_or(0.0);
+                if got < expected * 0.5 {
+                    dead_dir = true;
+                }
+            }
+        } else {
+            dead_dir = true;
+        }
+        if dead_dir {
+            dead.insert(pr.pool);
+        }
+    }
+    for p in &dead {
+        let dirs: Vec<&str> = probes
+            .iter()
+            .filter(|pr| &pr.pool == p)
+            .map(|pr| if pr.zfo { "zfo" } else { "ofz" })
+            .collect();
+        debug!(pool = %p, ?dirs, "pool quarantined by quoter probe");
+    }
+    dead
+}
+
+/// Decode the executor's revert from an exec-probe error into a stable
+/// label — keeps logs/metrics honest about WHY a path can't land.
+fn classify_exec_probe_revert(detail: &str) -> &'static str {
+    let s = detail.to_lowercase();
+    if s.contains("0x4e88422a") {
+        "insufficient_profit"
+    } else if s.contains("0x82b42900") {
+        "unauthorized"
+    } else if s.contains("0x4ecb9b6d") {
+        "swap_failed"
+    } else if s.contains("0xab35696f") {
+        "contract_paused"
+    } else if s.contains("0x94118333") {
+        "gas_price_too_high"
+    } else if s.contains("0x0f359167") {
+        "unsettled_delta"
+    } else if s.contains("0xbf16aab6") {
+        "unsupported_token"
+    } else if s.contains("0x73402469") {
+        "invalid_protocol"
+    } else if s.contains("0x5274afe7") {
+        "safe_erc20_failed"
+    } else if s.contains("0x2c5211c6") {
+        "invalid_amount"
+    } else {
+        "unknown_revert"
+    }
+}
 
 struct PathCircuitBreaker {
     stats: HashMap<u32, PathStats>,
@@ -560,6 +810,29 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     info!(pools = count, elapsed_ms = elapsed.as_millis(), "Initial state refresh complete");
     metrics::POOL_COUNT.set(count as f64);
 
+    // Quarantine dead concentrated-liquidity pools BEFORE enumeration:
+    // abandoned pools report liquidity>0 at a stale price, fabricating
+    // phantom spreads vs healthy pools that revert InsufficientProfit on
+    // chain. One batched QuoterV2 probe drops them from the graph.
+    {
+        let quarantined = probe_dead_v3_pools(
+            &endpoint,
+            &store,
+            &pool_infos,
+            &token_decimals,
+            cfg.chain.chain_id,
+        )
+        .await;
+        if !quarantined.is_empty() {
+            pool_infos.retain(|pi| !quarantined.contains(&pi.address));
+            warn!(
+                dropped = quarantined.len(),
+                remaining = pool_infos.len(),
+                "Quarantined dead V3 pools (on-chain quoter probe)"
+            );
+        }
+    }
+
     let pricing_refresh_blocks: u64 = 100;
     let derived = crate::pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
     info!(derived, total_priced = token_usd_prices.len(), "Initial price derivation complete");
@@ -702,6 +975,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let warp_threshold_usd = cfg.submission.warp_threshold_usd;
     let warp_budget_usd = cfg.submission.warp_budget_usd;
     let mut warp_spent_this_session: f64 = 0.0;
+    // Deterministic bundler-sim reverts (e.g. executor Unauthorized) cannot
+    // self-heal — after a streak, suppress all submissions until restart
+    // instead of burning sponsor calls.
+    let mut exec_revert_streak: u32 = 0;
+    let mut executor_broken = false;
+    // Cached once: the smart account is the executor's only authorized
+    // caller — used for pre-submission execution probes.
+    let mut smart_account: Option<Address> = None;
     info!(
         threshold_usd = warp_threshold_usd,
         budget_usd = warp_budget_usd,
@@ -885,7 +1166,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
                     candidates = candidates.len(), optimized = optimized_count, "Optimized path");
 
-                if !dry_run {
+                if !dry_run && executor_broken {
+                    // Skip — the executor reverts in simulation; nothing lands.
+                } else if !dry_run {
                     let optimized_path = &paths[best_path_idx];
 
                     let target_block = block_number + 3;
@@ -893,6 +1176,64 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         best.path_id, best.flash_amount, &endpoint, arb_contract, &signer, target_block,
                     ).await {
                         Ok(bundle) => {
+                            // On-chain exec probe: simulate the exact
+                            // executor call as the smart account before
+                            // spending a sponsor call. Sim-vs-chain
+                            // divergence (dead pools, tick-range
+                            // exhaustion, protocol mismatches) reverts
+                            // here instead of at the bundler — count it as
+                            // a revert so the breaker suppresses the path.
+                            if let Some(venue) = &pimlico_venue {
+                                if smart_account.is_none() {
+                                    smart_account = venue.account().await.ok();
+                                    if let Some(a) = smart_account {
+                                        info!(account = %a, "Smart account resolved for exec probes");
+                                    }
+                                }
+                                if let (Some(account), Some(call)) =
+                                    (smart_account, bundle.call.as_ref())
+                                {
+                                    let probe = alloy::rpc::types::TransactionRequest::default()
+                                        .from(account)
+                                        .to(call.to)
+                                        .input(call.data.clone().into());
+                                    match endpoint.provider().call(probe).await {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            // ErrorPayload = the chain
+                                            // executed the call and it
+                                            // reverted — deterministic for
+                                            // this state, count as a revert.
+                                            // Transport failures (429,
+                                            // timeout) prove nothing — skip
+                                            // the submission but don't
+                                            // penalize the path.
+                                            if e.as_error_resp().is_some() {
+                                                let reason = classify_exec_probe_revert(
+                                                    &format!("{e:?}")
+                                                );
+                                                warn!(
+                                                    path_id = best.path_id,
+                                                    reason,
+                                                    error = %e,
+                                                    "exec probe reverted — path suppressed, no submission"
+                                                );
+                                                circuit_breaker.record_revert(
+                                                    best.path_id,
+                                                    block_number,
+                                                );
+                                            } else {
+                                                warn!(
+                                                    path_id = best.path_id,
+                                                    error = %e,
+                                                    "exec probe transport error — submission skipped"
+                                                );
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
                             endpoint.bump_nonce();
                             circuit_breaker.record_submit(best.path_id);
                             let budget_ok = warp_spent_this_session < warp_budget_usd;
@@ -953,6 +1294,34 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                                 .inc();
                                             warn!(venue, reason, error = %e,
                                                 "Sponsorship blocked — op rejected, no funded-wallet fallback");
+                                            if reason == "exec_revert" {
+                                                exec_revert_streak += 1;
+                                                if exec_revert_streak == 1 {
+                                                    let hops: Vec<String> = optimized_path
+                                                        .hops
+                                                        .iter()
+                                                        .map(|h| format!(
+                                                            "{:?} {} {}->{}",
+                                                            h.protocol, h.pool, h.token_in, h.token_out
+                                                        ))
+                                                        .collect();
+                                                    warn!(
+                                                        path_id = best.path_id,
+                                                        flash_token = %best.flash_token,
+                                                        flash_amount = %best.flash_amount,
+                                                        sim_profit = %best.gross_profit,
+                                                        ?hops,
+                                                        "exec_revert path detail — reproduce with cast"
+                                                    );
+                                                }
+                                                if exec_revert_streak >= 3 && !executor_broken {
+                                                    executor_broken = true;
+                                                    error!(
+                                                        "Executor reverts deterministically in bundler simulation \
+                                                         — submissions suppressed until restart"
+                                                    );
+                                                }
+                                            }
                                         } else {
                                             warn!(venue, error = %e, "Error");
                                         }

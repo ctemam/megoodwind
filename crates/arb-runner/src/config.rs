@@ -11,7 +11,11 @@ use arb_rpc::ChainConfig;
 /// expressions — no runtime config lookups inside the calculation cycle.
 pub mod spec {
     /// Minimum margin threshold per execution (USD).
-    pub const MIN_NET_PROFIT_USD: f64 = 1.50;
+    /// Hard floor on accepted net profit. Under mandatory Pimlico
+    /// sponsorship the engine pays no gas — the operator's only cost is
+    /// sponsor credit (~$0.05-0.15/op on BSC/Base), so edges far below the
+    /// legacy gas-era $1.50 are real profit.
+    pub const MIN_NET_PROFIT_USD: f64 = 0.25;
     /// 3-hop depth limitation.
     pub const MAX_PATH_HOPS: usize = 3;
     /// Prioritize 0% borrow-fee venues.

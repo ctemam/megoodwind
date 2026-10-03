@@ -16,12 +16,20 @@ name = "verify4337"
 path = "src/bin/verify4337.rs"
 
 [[bin]]
+name = "deploy4337"
+path = "src/bin/deploy4337.rs"
+
+[[bin]]
 name = "latency_profile"
 path = "src/bin/latency_profile.rs"
 
 [[bin]]
 name = "profit_profile"
 path = "src/bin/profit_profile.rs"
+
+[[bin]]
+name = "pathdump"
+path = "src/bin/pathdump.rs"
 
 [dependencies]
 arb-core = { workspace = true }
@@ -53,3 +61,4 @@ lazy_static = "1"
 axum = "0.7"
 chrono = "0.4"
 dotenvy = "0.15"
+hex = "0.4"
