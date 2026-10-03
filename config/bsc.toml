@@ -100,7 +100,7 @@ pimlico_enabled      = true
 pimlico_bundler_url  = "https://api.pimlico.io/v2/binance/rpc?apikey=${PIMLICO_API_KEY}"
 sponsor_policy_id_env = "ALLBRIGHTA_SPONSOR_POLICY_ID"
 # entry_point / account_factory default to canonical v0.6 addresses.
-strict_4337          = false  # backruns need builder venues — a UserOp cannot order after a victim tx
+strict_4337          = true  # executor OWNER is the Pimlico smart account — all execution via sponsored UserOps (no victim-ordering bundles; BSC dislocations often persist >=1 block)
 
 [token_usd_prices]
 USDT = 1.0

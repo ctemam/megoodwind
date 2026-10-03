@@ -12,12 +12,15 @@
 use alloy_primitives::{Address, B256, U256};
 use arb_mempool::watcher::PendingSwap;
 use lazy_static::lazy_static;
-use prometheus::{register_counter_vec, register_int_counter_vec, CounterVec, IntCounterVec};
+use prometheus::{
+    register_counter_vec, register_int_counter_vec, register_int_gauge_vec, CounterVec,
+    IntCounterVec, IntGaugeVec,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock};
-use std::fs::{create_dir_all, OpenOptions};
-use std::io::Write;
+use std::sync::{mpsc, Mutex, RwLock};
+use std::fs::{create_dir_all, File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -68,6 +71,42 @@ lazy_static! {
     pub static ref LEADER_EVICTED: IntCounterVec = register_int_counter_vec!(
         "arb_leader_evicted_total",
         "Auto-discovered leader wallets evicted by the registry cap",
+        &["chain"]
+    )
+    .unwrap();
+    /// Observations dropped because the async writer queue was full — the
+    /// execution path always wins: intelligence telemetry is shed first.
+    pub static ref LEADER_QUEUE_DROPPED: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_queue_dropped_total",
+        "Leader observations dropped on a full writer queue",
+        &["chain"]
+    )
+    .unwrap();
+    /// Pending jobs in the async observation-writer queue.
+    pub static ref LEADER_QUEUE_DEPTH: IntGaugeVec = register_int_gauge_vec!(
+        "arb_leader_queue_depth",
+        "Depth of the leader-observation writer queue",
+        &["chain"]
+    )
+    .unwrap();
+    /// Flush batches completed by the async writer worker.
+    pub static ref LEADER_WRITER_BATCHES: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_writer_batch_total",
+        "Batched JSONL flushes by the leader-observation writer",
+        &["chain"]
+    )
+    .unwrap();
+    /// Total microseconds the writer spent serializing + flushing.
+    pub static ref LEADER_WRITER_FLUSH_US: CounterVec = register_counter_vec!(
+        "arb_leader_writer_flush_us_total",
+        "Total microseconds spent in writer serialization/flush",
+        &["chain"]
+    )
+    .unwrap();
+    /// Total microseconds spent inside the discovery stats mutex.
+    pub static ref LEADER_DISCOVERY_LOCK_US: CounterVec = register_counter_vec!(
+        "arb_leader_discovery_lock_us_total",
+        "Total microseconds spent in the discovery sender-map critical section",
         &["chain"]
     )
     .unwrap();
@@ -236,8 +275,119 @@ pub struct LeaderObservation {
     /// Full signed tx bytes — kept ONLY for offline replay against
     /// historical state. Never resubmitted (nonce/signature are the
     /// leader's; copying them would be invalid and out of policy).
-    pub raw_tx: String,
-    pub raw_input: String,
+    /// Stored raw so the hot path never pays for hex encoding; the async
+    /// writer serializes them as the same 0x-prefixed hex on disk.
+    #[serde(serialize_with = "hex_ser", deserialize_with = "hex_de")]
+    pub raw_tx: Vec<u8>,
+    #[serde(serialize_with = "hex_ser", deserialize_with = "hex_de")]
+    pub raw_input: Vec<u8>,
+}
+
+fn hex_ser<S: serde::Serializer>(b: &[u8], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format!("0x{}", hex::encode(b)))
+}
+
+fn hex_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+    let s = String::deserialize(d)?;
+    hex::decode(s.strip_prefix("0x").unwrap_or(&s)).map_err(serde::de::Error::custom)
+}
+
+/// Work handed to the async observation writer — never blocks the caller.
+enum WriterJob {
+    Observation { wallet_hex: String, obs: Box<LeaderObservation> },
+    DiscoveryEvent(Box<DiscoveryEvent>),
+    Shutdown,
+}
+
+/// One background writer per chain: batches JSONL appends so the mempool
+/// hot path only enqueues. Keeps per-wallet files open; flushes on a
+/// ~100ms tick or after a bounded batch.
+fn writer_loop(
+    rx: mpsc::Receiver<WriterJob>,
+    dir: PathBuf,
+    chain: String,
+    depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let chain_dir = dir.join(&chain);
+    let _ = create_dir_all(&chain_dir);
+    let mut files: HashMap<String, BufWriter<File>> = HashMap::new();
+    let mut pending = Vec::with_capacity(64);
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(job) => pending.push(job),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        while let Ok(job) = rx.try_recv() {
+            pending.push(job);
+            if pending.len() >= 128 {
+                break;
+            }
+        }
+        if pending.is_empty() {
+            continue;
+        }
+        let t0 = std::time::Instant::now();
+        let mut shutdown = false;
+        for job in pending.drain(..) {
+            depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            match job {
+                WriterJob::Shutdown => {
+                    shutdown = true;
+                }
+                WriterJob::Observation { wallet_hex, obs } => {
+                    let mut line = serde_json::to_vec(&obs).unwrap_or_default();
+                    line.push(b'\n');
+                    let res = files
+                        .entry(wallet_hex.clone())
+                        .or_insert_with(|| {
+                            match OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(chain_dir.join(format!("{wallet_hex}.jsonl")))
+                            {
+                                Ok(f) => BufWriter::new(f),
+                                Err(_) => BufWriter::new(File::open("/dev/null").unwrap()),
+                            }
+                        });
+                    if let Err(e) = res.write_all(&line) {
+                        LEADER_WRITE_ERRORS.with_label_values(&[&chain]).inc();
+                        warn!(error = %e, wallet = %wallet_hex, "leader observation write failed");
+                    }
+                }
+                WriterJob::DiscoveryEvent(ev) => {
+                    let path = chain_dir.join("_discovered.jsonl");
+                    let mut line = serde_json::to_vec(&ev).unwrap_or_default();
+                    line.push(b'\n');
+                    if let Err(e) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .and_then(|mut f| f.write_all(&line))
+                    {
+                        LEADER_WRITE_ERRORS.with_label_values(&[&chain]).inc();
+                        warn!(error = %e, "discovery event write failed");
+                    }
+                }
+            }
+        }
+        for f in files.values_mut() {
+            let _ = f.flush();
+        }
+        LEADER_WRITER_BATCHES.with_label_values(&[&chain]).inc();
+        LEADER_WRITER_FLUSH_US
+            .with_label_values(&[&chain])
+            .inc_by(t0.elapsed().as_micros() as f64);
+        LEADER_QUEUE_DEPTH
+            .with_label_values(&[&chain])
+            .set(depth.load(std::sync::atomic::Ordering::Relaxed) as i64);
+        if shutdown {
+            break;
+        }
+    }
+    for mut f in files.into_values() {
+        let _ = f.flush();
+    }
 }
 
 /// Coarse attribution: enough to bucket a wallet's flow before replay
@@ -262,7 +412,8 @@ fn classify(swap: &PendingSwap, touched_tracked_pool: bool) -> &'static str {
 pub struct LeaderObserver {
     registry: std::sync::Arc<LeaderRegistry>,
     discoverer: Option<LeaderDiscoverer>,
-    dir: PathBuf,
+    writer_tx: mpsc::SyncSender<WriterJob>,
+    depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     chain: String,
 }
 
@@ -274,10 +425,22 @@ impl LeaderObserver {
         discover_cfg: &LeadersConfig,
     ) -> Self {
         let registry = std::sync::Arc::new(registry);
+        // Bounded queue between the mempool hot path and the disk writer:
+        // try_send never blocks; on a full queue the observation is dropped
+        // so execution always wins over telemetry.
+        let (writer_tx, writer_rx) = mpsc::sync_channel::<WriterJob>(2048);
+        let writer_dir = data_dir.clone();
+        let writer_chain = chain.clone();
+        let depth = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let writer_depth = std::sync::Arc::clone(&depth);
+        std::thread::Builder::new()
+            .name(format!("leader-writer-{chain}"))
+            .spawn(move || writer_loop(writer_rx, writer_dir, writer_chain, writer_depth))
+            .expect("spawn leader observation writer");
         let discoverer = discover_cfg.discover.then(|| {
             LeaderDiscoverer::new(
                 std::sync::Arc::clone(&registry),
-                data_dir.clone(),
+                writer_tx.clone(),
                 chain.clone(),
                 discover_cfg.discover_min_score,
                 discover_cfg.discover_min_observations,
@@ -285,7 +448,12 @@ impl LeaderObserver {
                 discover_cfg.discover_halflife_secs,
             )
         });
-        Self { registry, discoverer, dir: data_dir, chain }
+        Self { registry, discoverer, writer_tx, depth, chain }
+    }
+
+    /// Flush + stop the writer thread (tests and clean shutdown).
+    pub fn shutdown_writer(&self) {
+        let _ = self.writer_tx.try_send(WriterJob::Shutdown);
     }
 
     /// Returns configured+discovered wallet count.
@@ -311,15 +479,19 @@ impl LeaderObserver {
             .unwrap_or_default()
     }
 
-    /// Hot-path call on every decoded pending swap. Feeds the discovery
-    /// scorer first (when enabled), then O(1) registry lookup — returns
-    /// immediately when `from` is not a registered leader.
+    /// Hot-path call on every decoded pending swap: bounded in-memory
+    /// scoring + one non-blocking enqueue. No file I/O, no serialization,
+    /// no hex encoding — all of that happens in the writer worker, so a
+    /// slow disk or lock contention can never delay candidate evaluation.
     pub fn observe(&self, pending: &PendingSwap) {
         let t0 = std::time::Instant::now();
         if let Some(d) = &self.discoverer {
             d.track(pending);
         }
         let Some(wallet) = self.registry.lookup(&pending.from) else {
+            LEADER_OBSERVE_US
+                .with_label_values(&[&self.chain])
+                .inc_by(t0.elapsed().as_micros() as f64);
             return;
         };
 
@@ -356,29 +528,27 @@ impl LeaderObserver {
             }),
             pools_touched: pending.decoded.pools_touched.clone(),
             class: class.to_string(),
-            raw_tx: format!("0x{}", hex::encode(&pending.raw_tx)),
-            raw_input: format!("0x{}", hex::encode(&pending.raw_input)),
+            raw_tx: pending.raw_tx.clone(),
+            raw_input: pending.raw_input.clone(),
         };
 
-        if let Err(e) = self.persist(&wallet_hex, &obs) {
-            LEADER_WRITE_ERRORS.with_label_values(&[&self.chain]).inc();
-            warn!(error = %e, wallet = %wallet_hex, "leader observation write failed");
+        match self
+            .writer_tx
+            .try_send(WriterJob::Observation { wallet_hex, obs: Box::new(obs) })
+        {
+            Ok(()) => {
+                self.depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                LEADER_QUEUE_DROPPED.with_label_values(&[&self.chain]).inc();
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                LEADER_WRITE_ERRORS.with_label_values(&[&self.chain]).inc();
+            }
         }
         LEADER_OBSERVE_US
             .with_label_values(&[&self.chain])
             .inc_by(t0.elapsed().as_micros() as f64);
-    }
-
-    fn persist(&self, wallet_hex: &str, obs: &LeaderObservation) -> std::io::Result<()> {
-        let dir = self.dir.join(&self.chain);
-        create_dir_all(&dir)?;
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join(format!("{wallet_hex}.jsonl")))?;
-        let mut line = serde_json::to_vec(obs).unwrap_or_default();
-        line.push(b'\n');
-        f.write_all(&line)
     }
 }
 
@@ -424,13 +594,20 @@ pub struct LeaderDiscoverer {
     stats: Mutex<HashMap<Address, SenderStats>>,
     /// (sender, callee) → (hit count, last seen) — repeat-callee signal.
     callee_hits: Mutex<HashMap<(Address, Address), (u32, std::time::Instant)>>,
-    dir: PathBuf,
+    /// Discovery events go to the same async writer as observations —
+    /// promotion never opens a file on the hot path.
+    writer_tx: mpsc::SyncSender<WriterJob>,
     chain: String,
     min_score: f64,
     min_observations: u32,
     max_wallets: usize,
     halflife_secs: f64,
 }
+
+/// Hard caps keep discovery maps bounded — once full, new senders/pairs
+/// are simply not tracked (existing entries keep scoring).
+const MAX_SENDER_STATS: usize = 20_000;
+const MAX_CALLEE_PAIRS: usize = 50_000;
 
 #[derive(Debug, Serialize)]
 struct DiscoveryEvent {
@@ -446,7 +623,7 @@ struct DiscoveryEvent {
 impl LeaderDiscoverer {
     fn new(
         registry: std::sync::Arc<LeaderRegistry>,
-        dir: PathBuf,
+        writer_tx: mpsc::SyncSender<WriterJob>,
         chain: String,
         min_score: f64,
         min_observations: u32,
@@ -457,7 +634,7 @@ impl LeaderDiscoverer {
             registry,
             stats: Mutex::new(HashMap::new()),
             callee_hits: Mutex::new(HashMap::new()),
-            dir,
+            writer_tx,
             chain,
             min_score,
             min_observations,
@@ -480,7 +657,12 @@ impl LeaderDiscoverer {
         // on the same (sender, callee) pair inside the decay window scores.
         if w == 0.0 {
             let mut callees = self.callee_hits.lock().unwrap();
-            let count = callees.entry((from, pending.to)).or_insert((0u32, now));
+            let key = (from, pending.to);
+            // Cap the pair map: only update existing pairs once full.
+            if !callees.contains_key(&key) && callees.len() >= MAX_CALLEE_PAIRS {
+                return;
+            }
+            let count = callees.entry(key).or_insert((0u32, now));
             // expire stale callee entries cheaply
             count.1 = now;
             count.0 += 1;
@@ -490,7 +672,17 @@ impl LeaderDiscoverer {
         }
 
         let promote = {
+            let lock_t0 = std::time::Instant::now();
             let mut map = self.stats.lock().unwrap();
+            let lock_us = lock_t0.elapsed().as_micros() as f64;
+            LEADER_DISCOVERY_LOCK_US
+                .with_label_values(&[&self.chain])
+                .inc_by(lock_us);
+            // Cap the sender map: cold unobserved senders stop being
+            // tracked once full — already-scored senders keep working.
+            if !map.contains_key(&from) && map.len() >= MAX_SENDER_STATS {
+                return;
+            }
             let s = map.entry(from).or_default();
             // Exponential decay since last sighting, then add this obs.
             if let Some(last) = s.last_seen {
@@ -558,7 +750,15 @@ impl LeaderDiscoverer {
             dominant_class: dominant.to_string(),
             reason: "bot-signal score crossed threshold in live pending stream".to_string(),
         };
-        let _ = self.persist_event(&ev);
+        match self.writer_tx.try_send(WriterJob::DiscoveryEvent(Box::new(ev))) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                LEADER_QUEUE_DROPPED.with_label_values(&[&self.chain]).inc();
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                LEADER_WRITE_ERRORS.with_label_values(&[&self.chain]).inc();
+            }
+        }
     }
 
     fn tracked_senders(&self) -> usize {
@@ -588,17 +788,7 @@ impl LeaderDiscoverer {
             .map(|(a, _)| a)
     }
 
-    fn persist_event(&self, ev: &DiscoveryEvent) -> std::io::Result<()> {
-        let dir = self.dir.join(&self.chain);
-        create_dir_all(&dir)?;
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("_discovered.jsonl"))?;
-        let mut line = serde_json::to_vec(ev).unwrap_or_default();
-        line.push(b'\n');
-        f.write_all(&line)
-    }
+
 }
 
 // ============================================================================
@@ -934,8 +1124,20 @@ mod tests {
             seen_at: std::time::Instant::now(),
         };
         obs.observe(&pending);
+        obs.shutdown_writer();
         let file = dir.join("BSC").join("0x4444444444444444444444444444444444444444.jsonl");
-        let body = std::fs::read_to_string(&file).unwrap();
+        // Persistence is async: poll briefly for the writer to flush.
+        let mut body = String::new();
+        for _ in 0..50 {
+            if let Ok(b) = std::fs::read_to_string(&file) {
+                if !b.is_empty() {
+                    body = b;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!body.is_empty(), "writer did not flush the observation");
         assert!(body.contains("\"class\":\"single_hop_router\""));
         assert!(body.contains("\"raw_tx\":\"0x0405\""));
         // Non-leader sender is ignored.
@@ -999,9 +1201,19 @@ mod tests {
         obs.observe(&mk(bot, true));
         assert!(obs.registry.contains(&bot));
         let disc = dir.join("BSC").join("_discovered.jsonl");
-        assert!(std::fs::read_to_string(&disc)
-            .unwrap()
-            .contains("0x8888888888888888888888888888888888888888"));
+        // Discovery events are persisted by the async writer too.
+        obs.shutdown_writer();
+        let mut found = String::new();
+        for _ in 0..50 {
+            if let Ok(b) = std::fs::read_to_string(&disc) {
+                found = b;
+                if !found.is_empty() {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(found.contains("0x8888888888888888888888888888888888888888"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
