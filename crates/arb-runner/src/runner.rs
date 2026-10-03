@@ -39,6 +39,9 @@ use crate::metrics;
 const CIRCUIT_BREAKER_MAX_REVERTS: u32 = 3;
 const CIRCUIT_BREAKER_SUPPRESS_BLOCKS: u64 = 30;
 const CIRCUIT_BREAKER_DECAY_BLOCKS: u64 = 100;
+/// A pool whose last successful state read is older than this is stale —
+/// candidate paths through it are suppressed before optimization.
+const STALE_STATE_MAX_AGE_MS: u64 = 90_000;
 
 mod quote_uni {
     alloy::sol! {
@@ -1191,11 +1194,27 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         let pass1_count = initial_results.len();
         metrics::PATHS_EVALUATED.inc_by(paths.len() as f64);
 
-        let candidates: Vec<_> = initial_results.into_iter()
+        // Stale-state filter: pools whose refresh keeps failing (timeouts,
+        // RPC blacklists) hold old ticks that fabricate spreads — paths
+        // through them are phantom candidates that the exec probe then has
+        // to reject on-chain. Skip them before optimization.
+        let stale_filtered = initial_results.into_iter()
             .filter(|r| r.profit_bps >= min_initial_bps)
             .filter(|r| !circuit_breaker.is_suppressed(r.path_id, block_number))
             .filter(|r| !token_breaker.is_path_token_suppressed(&paths[r.path_id as usize], block_number))
-            .collect();
+            .collect::<Vec<_>>();
+        let (stale_hit, candidates): (Vec<_>, Vec<_>) = stale_filtered
+            .into_iter()
+            .partition(|r| {
+                paths[r.path_id as usize]
+                    .hops
+                    .iter()
+                    .any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS))
+            });
+        if !stale_hit.is_empty() {
+            metrics::STALE_SUPPRESSED.inc_by(stale_hit.len() as f64);
+            debug!(skipped = stale_hit.len(), "candidate paths skipped — stale pool state");
+        }
 
         if !candidates.is_empty() {
             metrics::PROFITABLE_FOUND.inc_by(candidates.len() as f64);
@@ -1265,10 +1284,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             }
 
             if let Some((best, effective_usd)) = best_result {
+                let hop_pools: Vec<String> = paths[best_path_idx]
+                    .hops
+                    .iter()
+                    .map(|h| format!("{}", h.pool))
+                    .collect();
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
                     gross_profit = %best.gross_profit, flash_amount = %best.flash_amount,
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
-                    candidates = candidates.len(), optimized = optimized_count, "Optimized path");
+                    candidates = candidates.len(), optimized = optimized_count,
+                    hops = ?hop_pools, "Optimized path");
 
                 if !dry_run && executor_broken {
                     // Skip — the executor reverts in simulation; nothing lands.
@@ -1577,6 +1602,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             candidate_ids.dedup();
             candidate_ids
                 .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
+            let stale_n = candidate_ids.len();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
+            let dropped_stale = stale_n - candidate_ids.len();
+            if dropped_stale > 0 {
+                metrics::STALE_SUPPRESSED.inc_by(dropped_stale as f64);
+                debug!(skipped = dropped_stale, "backrun candidates skipped — stale pool state");
+            }
             if candidate_ids.is_empty() { continue; }
             metrics::BACKRUN_CANDIDATES.inc();
 

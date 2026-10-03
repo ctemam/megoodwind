@@ -182,13 +182,6 @@ token0 = "USDT"
 token1 = "TK_0x9558a9254890b2a8b057a789f413631b9084f4a3"
 fee_bps = 100
 [[pools]]
-name = "AUTO_USDT_WBNB_25"
-address = "0x306cd1b67f53b3ec51dabe461c1b7c219a951a3c"
-protocol = "v2"
-token0 = "USDT"
-token1 = "WBNB"
-fee_bps = 25
-[[pools]]
 name = "AUTO_TK_0x255e746abb8d9acac00d6d023e5e63e3b8dfa7cd_USDT_25"
 address = "0x2a4b99a9c4544d35e8d266111c50b67fea01d53d"
 protocol = "v2"
@@ -244,13 +237,6 @@ protocol = "v3"
 token0 = "USDT"
 token1 = "TK_0x8b194370825e37b33373e74a41009161808c1488"
 fee_bps = 30
-[[pools]]
-name = "AUTO_TK_0x205812cdbed920aff76c6580abd681a46d11efc7_USDT_25"
-address = "0x07ab12de339237a5a12f8bf9083d050d27720769"
-protocol = "v2"
-token0 = "TK_0x205812cdbed920aff76c6580abd681a46d11efc7"
-token1 = "USDT"
-fee_bps = 25
 [[pools]]
 name = "AUTO_USDT_TK_0xaf588a95b857c2259f57f810ac9402e52813fe38_25"
 address = "0x8adeab5b9a6abcde14022e12a2a337b7f62fa718"

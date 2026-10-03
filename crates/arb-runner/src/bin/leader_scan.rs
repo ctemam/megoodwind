@@ -594,16 +594,29 @@ async fn main() -> Result<()> {
         // Provenance gate (counterfeit-pool defense): sham/honeypot pools
         // typically hold dust liquidity on one side. V2: both reserves must
         // clear a raw floor; V3: liquidity() must be non-trivial.
+        // Sham-pool check first: bait contracts answer getReserves/slot0 with
+        // fabricated data but skip the rest of the pair ABI. A real V2 pool is
+        // an ERC20 LP token (totalSupply resolves) deployed by a factory
+        // (factory() resolves nonzero); a real V3 pool resolves factory() too.
+        // Selector set: factory()=0xc45a0155, totalSupply()=0x18160ddd.
+        let factory_ok = endpoint
+            .eth_call_timed(*addr, addr_of([0xc4, 0x5a, 0x01, 0x55]))
+            .await
+            .ok()
+            .and_then(|(o, _)| o.get(12..32).map(|b| Address::from_slice(b)))
+            .map(|f| f != Address::ZERO)
+            .unwrap_or(false);
         let prov = if v3 {
-            endpoint
+            let liq_deep = endpoint
                 .eth_call_timed(*addr, addr_of([0x1a, 0x68, 0x65, 0x02]))
                 .await
                 .ok()
                 .and_then(|(o, _)| o.get(..32).map(|b| U256::from_be_slice(b)))
                 .map(|liq| if liq > U256::from(10_000u64) { "deep" } else { "thin" })
-                .unwrap_or("suspect")
+                .unwrap_or("suspect");
+            if factory_ok { liq_deep } else { "suspect" }
         } else {
-            reserves
+            let reserve_depth = reserves
                 .as_ref()
                 .and_then(|o| {
                     let r0 = o.get(0..32).map(|b| U256::from_be_slice(b));
@@ -617,7 +630,15 @@ async fn main() -> Result<()> {
                         "thin"
                     }
                 })
-                .unwrap_or("suspect")
+                .unwrap_or("suspect");
+            let lp_ok = endpoint
+                .eth_call_timed(*addr, addr_of([0x18, 0x16, 0x0d, 0xdd]))
+                .await
+                .ok()
+                .and_then(|(o, _)| o.get(..32).map(|b| U256::from_be_slice(b)))
+                .map(|ts| ts > U256::ZERO)
+                .unwrap_or(false);
+            if factory_ok && lp_ok { reserve_depth } else { "suspect" }
         };
         let kind = if v3 { "v3" } else { "v2" };
         if v3 { n_v3 += 1 } else { n_v2 += 1 }

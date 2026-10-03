@@ -153,7 +153,10 @@ pub fn project_pending_path(
 
     let projected = PoolStore::new();
     for (addr, st) in store.get_all() {
-        projected.update(addr, st);
+        // Preserve the source freshness timestamp so a stale pool stays
+        // stale inside the projected state.
+        let ts = store.updated_at(&addr).unwrap_or(0);
+        projected.update_at(addr, st, ts);
     }
 
     let hops: Vec<(Address, Address)> = if decoded.path.len() >= 2 {
@@ -216,7 +219,8 @@ pub fn project_pending_path(
             if let Some((new_state, out)) =
                 project_and_quote(*pool_addr, *t_in, est_in, &projected)
             {
-                projected.update(*pool_addr, new_state);
+                let ts = projected.updated_at(pool_addr).unwrap_or(0);
+                projected.update_at(*pool_addr, new_state, ts);
                 if !chained {
                     // Convert the hop's output to USD for the next hop; when
                     // the output token is unpriced, keep the carried value
@@ -296,11 +300,13 @@ fn project_direct(
 
     let projected = PoolStore::new();
     for (addr, st) in store.get_all() {
-        projected.update(addr, st);
+        let ts = store.updated_at(&addr).unwrap_or(0);
+        projected.update_at(addr, st, ts);
     }
 
     let (new_state, _) = project_and_quote(pool, token_in, amount_in, &projected)?;
-    projected.update(pool, new_state);
+    let ts = projected.updated_at(&pool).unwrap_or(0);
+    projected.update_at(pool, new_state, ts);
 
     let victim_usd = usd_value(amount_in, token_in, usd_prices, decimals);
     Some((projected, vec![pool], victim_usd))

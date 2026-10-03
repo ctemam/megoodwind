@@ -97,6 +97,11 @@ lazy_static::lazy_static! {
         "Pools suppressed by bait telemetry (repeated gate-pass-then-revert signature)"
     ).unwrap();
 
+    pub static ref STALE_SUPPRESSED: Counter = register_counter!(
+        "arb_stale_suppressed_total",
+        "Candidate paths suppressed for containing pools whose state refresh is stale"
+    ).unwrap();
+
     pub static ref BUILDER_SIM_REJECT: Counter = register_counter!(
         "arb_builder_sim_reject_total",
         "Builder simulation rejections (pre-revert signal)"
