@@ -360,27 +360,25 @@ async fn main() -> Result<()> {
             };
             n_amt += 1;
             router_stats.get_mut(pending.decoded.router).map(|s| s.1 += 1);
-            let (hop_in, hop_out) = if pending.decoded.path.len() >= 2 {
-                (pending.decoded.path[0], pending.decoded.path[1])
-            } else if let (Some(i), Some(o)) = (pending.decoded.token_in, pending.decoded.token_out) {
-                (i, o)
-            } else {
-                continue;
-            };
-            let pair_key = if hop_in < hop_out { (hop_in, hop_out) } else { (hop_out, hop_in) };
-            let Some(pair_pools) = pair_to_pools.get(&pair_key) else { continue };
+            // Project every hop of the pending path onto tracked pools;
+            // a pair match on ANY hop (not just the first) now counts.
+            let hit_any_pair = pending.decoded.path.windows(2).any(|w| {
+                let (a, b) = (w[0], w[1]);
+                pair_to_pools.contains_key(&if a < b { (a, b) } else { (b, a) })
+            }) || (pending.decoded.token_in.is_some()
+                && pending.decoded.token_out.is_some()
+                && {
+                    let (a, b) = (pending.decoded.token_in.unwrap(), pending.decoded.token_out.unwrap());
+                    pair_to_pools.contains_key(&if a < b { (a, b) } else { (b, a) })
+                });
+            if !hit_any_pair { continue; }
             n_pair += 1;
-            let hit_pools: Vec<Address> = match pending.decoded.first_hop_fee {
-                Some(fee) => {
-                    let fee_bps = fee / 100;
-                    let exact: Vec<Address> = pair_pools.iter()
-                        .filter(|(_, f)| *f == fee_bps && fee_bps != 0)
-                        .map(|(a, _)| *a)
-                        .collect();
-                    if exact.is_empty() { pair_pools.iter().map(|(a, _)| *a).collect() } else { exact }
-                }
-                None => pair_pools.iter().map(|(a, _)| *a).collect(),
-            };
+            let Some((projected, hit_pools, victim_usd)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
             let mut cand: Vec<usize> = Vec::new();
             for pa in &hit_pools {
                 if let Some(ids) = pool_to_paths.get(pa) {
@@ -391,18 +389,6 @@ async fn main() -> Result<()> {
             cand.sort_unstable();
             cand.dedup();
             n_cand += 1;
-
-            let projected = PoolStore::new();
-            for (a, s) in store.get_all() {
-                projected.update(a, s);
-            }
-            for pa in &hit_pools {
-                if let Some(ns) =
-                    arb_mempool::impact::project_post_state(*pa, hop_in, amount_in, &projected)
-                {
-                    projected.update(*pa, ns);
-                }
-            }
 
             let mut best_for_swap: Option<(U256, u32, Address)> = None;
             for &pidx in cand.iter().take(20) {
@@ -426,7 +412,10 @@ async fn main() -> Result<()> {
                     gross_profit: prof,
                     profit_bps: bps,
                 };
-                if real_gate.should_submit(&sim, path).accept {
+                let dec = real_gate.should_submit(&sim, path);
+                // Cap: a backrun can't extract more than the victim's input.
+                let capped = victim_usd.map_or(false, |v| dec.effective_profit_usd > v);
+                if dec.accept && !capped {
                     n_gate += 1;
                 }
                 if best_for_swap.map_or(true, |(p, _, _)| prof > p) {

@@ -1432,39 +1432,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         while let Ok(pending) = mempool_rx.try_recv() {
             let Some(amount_in) = pending.decoded.amount_in else { continue };
 
-            // First hop of the pending swap — the pool that receives the full
-            // amount_in price impact. Decoded calldata gives the token path;
-            // fall back to the swap's in/out pair for path-less selectors.
-            let (hop_in, hop_out) = if pending.decoded.path.len() >= 2 {
-                (pending.decoded.path[0], pending.decoded.path[1])
-            } else if let (Some(i), Some(o)) = (pending.decoded.token_in, pending.decoded.token_out) {
-                (i, o)
-            } else {
-                continue;
-            };
-
-            // Configured pools on that pair — the pending swap moves exactly
-            // one of them, but the calldata only carries tokens, not pools.
-            // When a V3 fee is decoded, prefer the matching fee tier; if none
-            // matches, project onto all of them (screening approximation —
-            // the gate still has to see real profit on the projected state).
-            let pair_key = if hop_in < hop_out { (hop_in, hop_out) } else { (hop_out, hop_in) };
-            let Some(pair_pools) = pair_to_pools.get(&pair_key) else { continue };
-            let hit_pools: Vec<Address> = match pending.decoded.first_hop_fee {
-                Some(fee) => {
-                    let fee_bps = fee / 100;
-                    let exact: Vec<Address> = pair_pools.iter()
-                        .filter(|(_, f)| *f == fee_bps && fee_bps != 0)
-                        .map(|(a, _)| *a)
-                        .collect();
-                    if exact.is_empty() {
-                        pair_pools.iter().map(|(a, _)| *a).collect()
-                    } else {
-                        exact
-                    }
-                }
-                None => pair_pools.iter().map(|(a, _)| *a).collect(),
-            };
+            // Project every hop of the pending swap's path onto the tracked
+            // pools it touches: the resting state has no spread — the pending
+            // swap creates one. Later hops of a multi-hop victim move our
+            // pools too, not just the first.
+            let Some((projected, hit_pools, victim_usd)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
 
             let mut candidate_ids: Vec<usize> = Vec::new();
             for pool_addr in &hit_pools {
@@ -1476,23 +1453,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             candidate_ids.sort_unstable();
             candidate_ids.dedup();
             metrics::BACKRUN_CANDIDATES.inc();
-
-            // Project the pending swap's impact onto the pools it hits: the
-            // resting state has no spread — the pending swap creates one.
-            // Only the first hop is projected (full amount_in lands there;
-            // later hops of a multi-hop victim get progressively less, so
-            // skipping them is conservative).
-            let projected = PoolStore::new();
-            for (addr, st) in store.get_all() {
-                projected.update(addr, st);
-            }
-            for pool_addr in &hit_pools {
-                if let Some(new_state) =
-                    arb_mempool::impact::project_post_state(*pool_addr, hop_in, amount_in, &projected)
-                {
-                    projected.update(*pool_addr, new_state);
-                }
-            }
 
             {
                 for &pidx in candidate_ids.iter().take(20) {
@@ -1529,7 +1489,58 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         };
 
                         let decision = profit_gate.should_submit(&sim, path);
+                        // A backrun extracts value from the dislocation the
+                        // victim creates — it cannot exceed the victim's own
+                        // input value. Larger "profits" mean the projection
+                        // model overshot (e.g., a same-tick V3 estimate or an
+                        // ambiguous same-pair match).
+                        if decision.accept {
+                            if let Some(vusd) = victim_usd {
+                                if decision.effective_profit_usd > vusd {
+                                    debug!(
+                                        path_id = path.id,
+                                        profit_usd = decision.effective_profit_usd,
+                                        victim_usd = vusd,
+                                        "Backrun candidate dropped: profit exceeds victim size"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                         if decision.accept && !dry_run {
+                            // The projected state is approximate — before
+                            // spending a submission, re-read the pools the
+                            // pending tx touches, re-project, and re-verify
+                            // the edge is still there.
+                            if refresher.refresh(&store).await.is_ok() {
+                                let verified = arb_mempool::impact::project_pending_path(
+                                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                                    &token_usd_prices, &token_decimals,
+                                ).and_then(|(reprojected, _, _)| {
+                                    arb_sim::optimize::find_optimal_amount(
+                                        path, &reprojected,
+                                        flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                            .unwrap_or(path.flash_amount),
+                                        {
+                                            let token_max = flash_bounds.get(&path.flash_token)
+                                                .map(|b| b.1)
+                                                .unwrap_or(path.flash_amount * U256::from(10u32));
+                                            let liq_max = arb_sim::optimize::path_max_flash(
+                                                path, &reprojected, 0.05, token_max);
+                                            token_max.min(liq_max)
+                                        },
+                                        optimization_iterations,
+                                    )
+                                });
+                                match verified {
+                                    Some((_, reprofit)) if !reprofit.is_zero() => {}
+                                    _ => {
+                                        debug!(path_id = path.id, "Backrun edge gone on re-check");
+                                        continue;
+                                    }
+                                }
+                            }
+
                             info!(
                                 path_id = path.id, profit_bps,
                                 pending_router = pending.decoded.router,

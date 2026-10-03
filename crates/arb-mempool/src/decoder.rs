@@ -19,6 +19,10 @@ pub struct DecodedSwap {
     /// First-hop pool fee in UniswapV3 fee units (1e-6), when the calldata
     /// carries it. Used to disambiguate same-pair pools.
     pub first_hop_fee: Option<u32>,
+    /// Per-hop pool fees in UniswapV3 fee units (1e-6) when the calldata packs
+    /// them (V3 packed paths); `hop_fees[i]` is the fee of `path[i] -> path[i+1]`.
+    /// Empty for V2/aggregator decodes.
+    pub hop_fees: Vec<u32>,
     pub pools_touched: Vec<Address>,
 }
 
@@ -39,6 +43,7 @@ fn read_addr(data: &[u8], word: usize) -> Option<Address> {
 struct DecodedRoute {
     path: Vec<Address>,
     first_hop_fee: Option<u32>,
+    hop_fees: Vec<u32>,
     amount_in: U256,
 }
 
@@ -53,26 +58,27 @@ fn decode_v2_swap(data: &[u8]) -> Option<DecodedRoute> {
     for i in 0..path_len {
         path.push(read_addr(data, path_len_offset + 1 + i)?);
     }
-    Some(DecodedRoute { path, first_hop_fee: None, amount_in })
+    Some(DecodedRoute { path, first_hop_fee: None, hop_fees: Vec::new(), amount_in })
 }
 
 /// Tokenize a packed V3 path (`token[20] fee[3] token[20] ...`).
-/// Returns (tokens, first_hop_fee) or None when the encoding is malformed.
-fn unpack_v3_path(path_bytes: &[u8]) -> Option<(Vec<Address>, Option<u32>)> {
+/// Returns (tokens, hop_fees) or None when the encoding is malformed;
+/// `hop_fees[i]` is the fee tier of `tokens[i] -> tokens[i+1]`.
+fn unpack_v3_path(path_bytes: &[u8]) -> Option<(Vec<Address>, Vec<u32>)> {
     let len = path_bytes.len();
     if len < 20 || (len - 20) % 23 != 0 { return None; }
     let n_tokens = (len - 20) / 23 + 1; // hops + 1
     let mut tokens = Vec::with_capacity(n_tokens);
+    let mut fees = Vec::with_capacity(n_tokens.saturating_sub(1));
     for i in 0..n_tokens {
         let off = i * 23;
         tokens.push(Address::from_slice(&path_bytes[off..off + 20]));
+        if i + 1 < n_tokens {
+            let f = off + 20;
+            fees.push(u32::from_be_bytes([0, path_bytes[f], path_bytes[f + 1], path_bytes[f + 2]]));
+        }
     }
-    let first_hop_fee = if len >= 23 {
-        Some(u32::from_be_bytes([0, path_bytes[20], path_bytes[21], path_bytes[22]]))
-    } else {
-        None
-    };
-    Some((tokens, first_hop_fee))
+    Some((tokens, fees))
 }
 
 /// swapTokensForExactTokens/ETH(amountOut, amountInMax, path, to, deadline) —
@@ -88,7 +94,7 @@ fn decode_v2_exact_out(data: &[u8]) -> Option<DecodedRoute> {
     for i in 0..path_len {
         path.push(read_addr(data, path_len_offset + 1 + i)?);
     }
-    Some(DecodedRoute { path, first_hop_fee: None, amount_in: amount_in_max })
+    Some(DecodedRoute { path, first_hop_fee: None, hop_fees: Vec::new(), amount_in: amount_in_max })
 }
 
 /// swapExactETHForTokens(amountOutMin, path, to, deadline) — the input amount
@@ -103,7 +109,7 @@ fn decode_v2_eth_in(data: &[u8], value: U256) -> Option<DecodedRoute> {
     for i in 0..path_len {
         path.push(read_addr(data, path_len_offset + 1 + i)?);
     }
-    Some(DecodedRoute { path, first_hop_fee: None, amount_in: value })
+    Some(DecodedRoute { path, first_hop_fee: None, hop_fees: Vec::new(), amount_in: value })
 }
 
 /// Two SwapRouter layouts exist in the wild: UniV3 SwapRouter puts `deadline`
@@ -146,6 +152,7 @@ fn decode_v3_exact_input_single(data: &[u8]) -> Option<DecodedRoute> {
     Some(DecodedRoute {
         path: vec![token_in, token_out],
         first_hop_fee: Some(fee),
+        hop_fees: vec![fee],
         amount_in,
     })
 }
@@ -158,11 +165,16 @@ fn v3_exact_input_params(data: &[u8], base: usize) -> Option<DecodedRoute> {
     let path_len: usize = read_u256(data, path_len_off)?.try_into().ok()?;
     let path_start = path_len_off * 32 + 32;
     if data.len() < path_start + path_len { return None; }
-    let (tokens, first_hop_fee) = unpack_v3_path(&data[path_start..path_start + path_len])?;
+    let (tokens, hop_fees) = unpack_v3_path(&data[path_start..path_start + path_len])?;
     if tokens.len() < 2 { return None; }
     // After the path field: recipient, [deadline], amountIn, amountOutMin
     let amount_in = v3_amount_after_recipient(data, base + 2)?;
-    Some(DecodedRoute { path: tokens, first_hop_fee, amount_in })
+    Some(DecodedRoute {
+        path: tokens,
+        first_hop_fee: hop_fees.first().copied(),
+        hop_fees,
+        amount_in,
+    })
 }
 
 fn decode_v3_exact_input(data: &[u8]) -> Option<DecodedRoute> {
@@ -239,11 +251,16 @@ fn decode_universal_router(data: &[u8]) -> Option<DecodedRoute> {
                 if path_len < 43 { continue; } // min: 20 + 3 + 20
                 let path_start = path_offset + 32;
                 if input_data.len() < path_start + path_len { continue; }
-                if let Some((tokens, first_hop_fee)) =
+                if let Some((tokens, hop_fees)) =
                     unpack_v3_path(&input_data[path_start..path_start + path_len])
                 {
                     if tokens.len() >= 2 {
-                        return Some(DecodedRoute { path: tokens, first_hop_fee, amount_in });
+                        return Some(DecodedRoute {
+                            path: tokens,
+                            first_hop_fee: hop_fees.first().copied(),
+                            hop_fees,
+                            amount_in,
+                        });
                     }
                 }
             }
@@ -258,7 +275,7 @@ fn decode_universal_router(data: &[u8]) -> Option<DecodedRoute> {
                     }
                 }
                 if ok {
-                    return Some(DecodedRoute { path, first_hop_fee: None, amount_in });
+                    return Some(DecodedRoute { path, first_hop_fee: None, hop_fees: Vec::new(), amount_in });
                 }
             }
         }
@@ -277,7 +294,7 @@ fn decode_swap_description(data: &[u8]) -> Option<DecodedRoute> {
     let dst_token = read_addr(data, base + 1)?;
     let amount = read_u256(data, base + 4)?;
     // Aggregators pick their own route — the in/out pair is all we know.
-    Some(DecodedRoute { path: vec![src_token, dst_token], first_hop_fee: None, amount_in: amount })
+    Some(DecodedRoute { path: vec![src_token, dst_token], first_hop_fee: None, hop_fees: Vec::new(), amount_in: amount })
 }
 
 /// Decode 1inch unoswapTo: (address to, address srcToken, uint256 amount, uint256 minReturn, uint256[] pools)
@@ -285,7 +302,7 @@ fn decode_unoswap(data: &[u8]) -> Option<DecodedRoute> {
     if data.len() < 5 * 32 { return None; }
     let src_token = read_addr(data, 1)?;
     let amount = read_u256(data, 2)?;
-    Some(DecodedRoute { path: vec![src_token], first_hop_fee: None, amount_in: amount })
+    Some(DecodedRoute { path: vec![src_token], first_hop_fee: None, hop_fees: Vec::new(), amount_in: amount })
 }
 
 impl TxDecoder {
@@ -362,9 +379,9 @@ impl TxDecoder {
             _ => None,
         };
 
-        let (path, first_hop_fee, amount_in) = match route {
-            Some(r) => (r.path, r.first_hop_fee, Some(r.amount_in)),
-            None => (Vec::new(), None, None),
+        let (path, first_hop_fee, hop_fees, amount_in) = match route {
+            Some(r) => (r.path, r.first_hop_fee, r.hop_fees, Some(r.amount_in)),
+            None => (Vec::new(), None, Vec::new(), None),
         };
         let token_in = path.first().copied();
         let token_out = if path.len() >= 2 { path.last().copied() } else { None };
@@ -376,6 +393,7 @@ impl TxDecoder {
             amount_in,
             path,
             first_hop_fee,
+            hop_fees,
             pools_touched: vec![],
         })
     }
