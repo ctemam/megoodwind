@@ -34,10 +34,17 @@ const BLACKLIST_SECS: u64 = 60;
 const RETRY_MAX: u32 = 2;
 const RETRY_INITIAL_BACKOFF_MS: u64 = 50;
 const RETRY_COMPUTE_UNITS_PER_SEC: u64 = 50;
+/// Per-endpoint rate cap: 5 requests per 5s (~1 rps sustained + burst of 5).
+/// Keeps failover bursts from tripping public endpoints' 429 thresholds;
+/// excess requests queue briefly rather than erroring.
+const RATE_LIMIT_REQS_PER_5S: u64 = 5;
 
 /// HTTP provider with the standard retry/backoff transport layer applied.
 fn retry_http_provider(url: url::Url) -> HttpProvider {
     let client = alloy::rpc::client::ClientBuilder::default()
+        .layer(alloy::transports::layers::ThrottleLayer::new(
+            RATE_LIMIT_REQS_PER_5S as u32 / 5,
+        ))
         .layer(alloy::transports::layers::RetryBackoffLayer::new(
             RETRY_MAX,
             RETRY_INITIAL_BACKOFF_MS,

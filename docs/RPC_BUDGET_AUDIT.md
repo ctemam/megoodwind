@@ -129,7 +129,59 @@ Fields per attempt: `chain, endpoint, method, timestamp, request_success,
 transport_failure, rpc_error, retry_count, latency_ms, cost_class
 (free|paid|pimlico|builder)`.
 
-## 6. What cannot be finalized without provider data
+## 6. Per-endpoint rate cap (implemented)
+
+`ThrottleLayer` (alloy's governor-backed standard layer) now wraps every
+HTTPS read provider: **5 requests per 5 seconds = 1 rps sustained** per
+endpoint (`RATE_LIMIT_REQS_PER_5S = 5`). Excess requests queue in-process
+rather than erroring; a queue delay past `CALL_DEADLINE` (400ms) falls
+through to the existing failover. Stability check on live BSC (120s):
+zero 429s, one slow-endpoint timeout — vs ~9 transport events (2×429,
+5+ timeouts) in the unthrottled window.
+
+Daily ceiling per endpoint at the cap: `1 req/s × 86,400 = 86,400 req/day`
+[computed]. A pool of N endpoints therefore has `86,400 × N` req/day of
+sustainable read budget **before** any provider-declared quota applies.
+
+## 7. Ten-chain daily budget availability
+
+Per-chain assumptions: ~145 tracked pools → ~7 HTTP req/refresh
+[assumption, scaled from BSC's measured 261 Call3s → ~6 batches]; refresh
+once per observed block; retry multiplier ×1.5 [measured range 1.4–2.0];
+per-endpoint cap 1 rps → `86,400 req/day` sustainable each.
+
+`endpoints needed` = `ceil(blocks/s × req_per_refresh / 1 rps)` — the pool
+size required so refresh alone never exceeds the cap.
+
+| chain | block time | blocks/day | req/day (logical) | req/day (physical, ×1.5) | endpoints needed | public mempool? |
+|---|---|---|---|---|---|---|
+| **BSC** | 0.44s [measured] | 194,000 | 1.36M | 2.0M | **16** (have 27) | yes — backrun channel live |
+| **Base** | 2.0s [measured] | 43,200 | 300k | 450k | **4** (have 12) | no — private sequencer |
+| Ethereum | ~12s [declared] | 7,200 | 50k | 75k | **1** | yes — mev-share/flashbots |
+| Arbitrum | ~0.25s [declared] | 346,000 | 2.4M | 3.6M | **28** | no — private sequencer |
+| Optimism | ~2s [declared] | 43,200 | 300k | 450k | **4** | no |
+| Polygon PoS | ~2s [declared] | 43,200 | 300k | 450k | **4** | yes |
+| Avalanche C | ~2s [declared] | 43,200 | 300k | 450k | **4** | yes |
+| Fantom | ~1s [declared] | 86,400 | 600k | 900k | **7** | yes |
+| Gnosis | ~5s [declared] | 17,300 | 120k | 180k | **2** | yes |
+| Blast | ~2s [declared] | 43,200 | 300k | 450k | **4** | no — sequencer |
+
+**Aggregate (all 10 chains):** ~5.4M logical / ~8.1M physical req/day —
+spread across ~10 endpoint pools, entirely on free public endpoints. No
+provider-declared daily quota binds: the only budgets are per-second
+rate caps (now enforced at 1 rps/endpoint) and the paid classes kept at
+zero outside submissions.
+
+**Two real constraints the table surfaces:**
+1. **Arbitrum at ~0.25s/block needs 28+ endpoints or refresh decimation**
+   (every-2nd-block halves it to 14) — sub-second refreshes don't add
+   arb value anyway.
+2. **Backrun-viable chains** (public mempool) are BSC, Ethereum, Polygon,
+   Avalanche, Fantom, Gnosis. On sequencer chains (Base, Arbitrum,
+   Optimism, Blast) the only channel is resting-state arb, which is
+   measured ≈0 — those chains are coverage plays, not profit channels.
+
+## 8. What cannot be finalized without provider data
 
 1. Per-endpoint declared quotas for the keyed endpoints (nodereal, dwellir, onfinality).
 2. Pimlico credit quota + per-call pricing.
