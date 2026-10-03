@@ -1567,7 +1567,27 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             metrics::BACKRUN_CANDIDATES.inc();
 
             {
-                for &pidx in candidate_ids.iter().take(20) {
+                // Rank candidates by cheap single-point profit so the 20
+                // full optimizations go to the most promising routes,
+                // not the first 20 by path index.
+                let mut screened: Vec<(usize, U256)> = candidate_ids
+                    .iter()
+                    .map(|&i| {
+                        let p = &paths[i];
+                        let min_a = flash_bounds
+                            .get(&p.flash_token)
+                            .map(|b| b.0)
+                            .unwrap_or(p.flash_amount);
+                        let hi_probe = (min_a * U256::from(10u32))
+                            .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                                .unwrap_or(p.flash_amount * U256::from(10u32)));
+                        let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                            .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                        (i, s)
+                    })
+                    .collect();
+                screened.sort_by(|a, b| b.1.cmp(&a.1));
+                for &(pidx, _) in screened.iter().take(20) {
                     let path = &paths[pidx];
                     if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
 

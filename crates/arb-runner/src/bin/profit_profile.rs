@@ -437,7 +437,30 @@ async fn main() -> Result<()> {
             let mut best_for_swap: Option<(U256, u32, Address)> = None;
             let mut best_path: Option<usize> = None;
             let mut victim_usd_dbg = victim_usd;
-            for &pidx in cand.iter().take(20) {
+            // Cheap screen: rank candidate paths by single-point profit at
+            // their min flash amount so the 20 full optimizations go to the
+            // most promising routes instead of the first 20 by index.
+            let mut screened: Vec<(usize, U256)> = cand
+                .iter()
+                .map(|&i| {
+                    let p = &paths[i];
+                    let min_a = flash_bounds
+                        .get(&p.flash_token)
+                        .map(|b| b.0)
+                        .unwrap_or(p.flash_amount);
+                    // Two probe points: unimodal profit curves can start at
+                    // zero for small clips — a mid-size probe catches paths
+                    // that only profit at larger flash amounts.
+                    let hi_probe = (min_a * U256::from(10u32))
+                        .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                            .unwrap_or(p.flash_amount * U256::from(10u32)));
+                    let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                        .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                    (i, s)
+                })
+                .collect();
+            screened.sort_by(|a, b| b.1.cmp(&a.1));
+            for &(pidx, _) in screened.iter().take(20) {
                 let path = &paths[pidx];
                 let (min_a, token_max) = flash_bounds
                     .get(&path.flash_token)

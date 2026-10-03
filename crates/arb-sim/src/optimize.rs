@@ -7,7 +7,9 @@ use arb_paths::PathTemplate;
 use arb_state::PoolStore;
 
 /// Simulate a path at a given flash amount, returning the gross profit (or zero if unprofitable).
-fn simulate_profit(path: &PathTemplate, amount: U256, store: &PoolStore) -> U256 {
+/// Cheap single-point profit eval — used to rank backrun candidates before
+/// spending full ternary optimization on the most promising routes.
+pub fn simulate_profit(path: &PathTemplate, amount: U256, store: &PoolStore) -> U256 {
     let mut current = amount;
 
     for hop in &path.hops {
