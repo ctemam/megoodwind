@@ -1729,22 +1729,32 @@ app.get('/api/opportunities', async (req, res) => {
     const rows = Object.values(byId)
       .sort((a, b) => (b.allbright_net_usd || 0) - (a.allbright_net_usd || 0)
         || (b.unix_ms || 0) - (a.unix_ms || 0))
-    let funnel = null
+    // Funnel derived from the records (scan/profiler write the JSONL, not the
+    // runner's metric registry). Live counters merge on top for matched_live /
+    // submitted which only the runner emits.
+    const funnel = {
+      decoded: rows.length,
+      replay_attempts: rows.filter(o => o.simulation_status && o.simulation_status !== 'pending').length,
+      replay_positive: rows.filter(o => o.simulation_status === 'pass').length,
+      actionable: rows.filter(o => o.simulation_status === 'pass' && (o.allbright_net_usd || 0) > 0 && !o.rejection_reason).length,
+      matched_live: 0, submitted: 0,
+    }
+    for (const o of rows) {
+      if (o.rejection_reason) funnel[`rejected_${o.rejection_reason}`] = (funnel[`rejected_${o.rejection_reason}`] || 0) + 1
+    }
+    let online = false
     try {
       const m = await fetchMetrics(c)
-      funnel = {}
+      online = true
       for (const [k, v] of Object.entries(m)) {
         if (k.startsWith('arb_opportunity_total{')) {
           const stage = k.match(/stage="([^"]+)"/)?.[1]
-          if (stage) funnel[stage] = (funnel[stage] || 0) + v
-        }
-        if (k.startsWith('arb_opportunity_rejected_total{')) {
-          const reason = k.match(/reason="([^"]+)"/)?.[1]
-          if (reason) funnel[`rejected_${reason}`] = (funnel[`rejected_${reason}`] || 0) + v
+          if (stage && (stage === 'matched_live' || stage === 'submitted' || stage === 'landed' || stage === 'settled'))
+            funnel[stage] = (funnel[stage] || 0) + v
         }
       }
-    } catch { funnel = null }
-    out.chains[c] = { online: funnel != null, funnel, rows }
+    } catch { /* runner offline — record-derived funnel still shown */ }
+    out.chains[c] = { online, funnel, rows }
   }
   res.json(out)
 })
