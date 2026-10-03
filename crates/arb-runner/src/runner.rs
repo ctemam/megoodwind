@@ -867,6 +867,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
     let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
+    let refresher = match cfg.chain.call_deadline_ms {
+        Some(ms) => refresher.with_call_deadline(ms),
+        None => refresher,
+    };
 
     let (count, elapsed) = refresher.refresh(&store).await?;
     info!(pools = count, elapsed_ms = elapsed.as_millis(), "Initial state refresh complete");

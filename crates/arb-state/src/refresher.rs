@@ -293,6 +293,7 @@ pub struct StateRefresher {
     state_reader_addr: Address,
     pool_configs: Vec<PoolConfig>,
     chain_id: u64,
+    call_deadline: std::time::Duration,
     reader_breaker: MethodCircuitBreaker,
 }
 
@@ -319,8 +320,17 @@ impl StateRefresher {
             state_reader_addr,
             pool_configs,
             chain_id,
+            call_deadline: Self::CALL_DEADLINE,
             reader_breaker: MethodCircuitBreaker::default(),
         }
+    }
+
+    /// Per-chain read deadline override ([chain] call_deadline_ms). Chains
+    /// whose public endpoints answer aggregate3 batches in >400ms (Ethereum,
+    /// Polygon) need more slack or every refresh batch is benched.
+    pub fn with_call_deadline(mut self, deadline_ms: u64) -> Self {
+        self.call_deadline = std::time::Duration::from_millis(deadline_ms);
+        self
     }
 
     /// Increment the contract-failure streak for a reader method; warn once
@@ -369,7 +379,7 @@ impl StateRefresher {
             for attempt in 0..2 {
                 let (idx, provider) = self.endpoint.pool_pick();
                 let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-                match tokio::time::timeout(Self::CALL_DEADLINE, mc.aggregate3(batch.to_vec()).call()).await {
+                match tokio::time::timeout(self.call_deadline, mc.aggregate3(batch.to_vec()).call()).await {
                     Ok(Ok(r)) => return r,
                     outcome => {
                         if let Ok(Err(e)) = &outcome {
@@ -858,13 +868,13 @@ impl StateRefresher {
                 let (mut idx, provider) = self.endpoint.pool_pick();
                 let mut reader = IStateReader::new(self.state_reader_addr, provider);
                 for chunk in &$chunks {
-                    match tokio::time::timeout(Self::CALL_DEADLINE, reader.$call(chunk.clone()).call()).await {
+                    match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call()).await {
                         Ok(Ok(states)) => all.extend(states),
                         outcome => {
                             if let Ok(Err(e)) = &outcome {
                                 warn!(chunk_size = chunk.len(), "{} chunk read failed: {}", $label, e);
                             } else {
-                                warn!(chunk_size = chunk.len(), "{} chunk read timed out ({}ms)", $label, Self::CALL_DEADLINE.as_millis());
+                                warn!(chunk_size = chunk.len(), "{} chunk read timed out ({}ms)", $label, self.call_deadline.as_millis());
                             }
                             let transport_fail = match &outcome {
                                 Ok(Err(e)) => arb_rpc::is_contract_transport_error(e),
@@ -876,7 +886,7 @@ impl StateRefresher {
                                 let (nidx, np) = self.endpoint.pool_pick();
                                 idx = nidx;
                                 reader = IStateReader::new(self.state_reader_addr, np);
-                                match tokio::time::timeout(Self::CALL_DEADLINE, reader.$call(chunk.clone()).call()).await {
+                                match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call()).await {
                                     Ok(Ok(states)) => all.extend(states),
                                     outcome2 => {
                                         match &outcome2 {
@@ -990,7 +1000,7 @@ impl StateRefresher {
                 }
                 let (idx, provider) = self.endpoint.pool_pick();
                 let reader = IStateReader::new(self.state_reader_addr, provider);
-                match tokio::time::timeout(Self::CALL_DEADLINE, reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
+                match tokio::time::timeout(self.call_deadline, reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
                     Ok(Ok(states)) => {
                         self.clear_reader_failure("Wombat");
                         states
@@ -1010,7 +1020,7 @@ impl StateRefresher {
                             self.endpoint.blacklist_read(idx);
                             let (_, np) = self.endpoint.pool_pick();
                             let retry = IStateReader::new(self.state_reader_addr, np);
-                            match tokio::time::timeout(Self::CALL_DEADLINE, retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
+                            match tokio::time::timeout(self.call_deadline, retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
                                 Ok(Ok(states)) => states,
                                 outcome2 => {
                                     match &outcome2 {
@@ -1077,7 +1087,7 @@ impl StateRefresher {
                 out
             },
             async {
-                tokio::time::timeout(Self::CALL_DEADLINE, self.endpoint.block_number())
+                tokio::time::timeout(self.call_deadline, self.endpoint.block_number())
                     .await
                     .ok()
                     .and_then(|r| r.ok())

@@ -18,6 +18,7 @@ arb_contract = "0x70DD16A8dA1639fc734d3AA0765436D8dBaeccC3"
 state_reader = "0x0000000000000000000000000000000000000000"
 block_time_ms = 12000
 scan_budget_ms = 2500
+call_deadline_ms = 1500
 
 [wallet]
 private_key_env = "PRIVATE_KEY"

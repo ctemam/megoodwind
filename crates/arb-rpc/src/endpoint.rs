@@ -470,6 +470,36 @@ impl Endpoint {
             .await?)
     }
 
+    /// Lenient `eth_getBlockReceipts`: skips receipts the typed decoder rejects
+    /// (e.g. Polygon bor state-sync pseudo-receipts with tx type 0x7f) instead
+    /// of failing the whole block. Returns the decodable receipts plus the
+    /// number skipped.
+    pub async fn get_block_receipts_lenient(
+        &self,
+        block: u64,
+    ) -> Result<(Vec<alloy::rpc::types::TransactionReceipt>, u64)> {
+        let raw: Option<serde_json::Value> = self
+            .with_failover(|p| async move {
+                p.raw_request(
+                    "eth_getBlockReceipts".into(),
+                    (format!("0x{block:x}"),),
+                )
+                .await
+            })
+            .await?;
+        let Some(raw) = raw else { return Ok((vec![], 0)) };
+        let arr = raw.as_array().cloned().unwrap_or_default();
+        let mut out = Vec::with_capacity(arr.len());
+        let mut skipped = 0u64;
+        for v in arr {
+            match serde_json::from_value::<alloy::rpc::types::TransactionReceipt>(v) {
+                Ok(r) => out.push(r),
+                Err(_) => skipped += 1,
+            }
+        }
+        Ok((out, skipped))
+    }
+
     /// Get native balance from the read pool.
     pub async fn get_balance(&self, address: Address) -> Result<U256> {
         Ok(self.with_failover(|p| async move { p.get_balance(address).await }).await?)

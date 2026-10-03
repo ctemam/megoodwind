@@ -5,6 +5,9 @@ rpc_https = ""
 rpc_https_pool = [
     "https://polygon-bor-rpc.publicnode.com",
     "https://polygon.drpc.org",
+    "https://polygon.publicnode.com",
+    "https://polygon.rpc.thirdweb.com",
+    "https://polygon.gateway.tenderly.co",
 ]
 rpc_wss = "wss://polygon-bor-rpc.publicnode.com"
 rpc_wss_pool = [
@@ -18,6 +21,7 @@ arb_contract = "0xe4286046a9d739Cdb61Fb5a7ad3e72361BF7d277"
 state_reader = "0x0000000000000000000000000000000000000000"
 block_time_ms = 2000
 scan_budget_ms = 1200
+call_deadline_ms = 1500
 
 [wallet]
 private_key_env = "PRIVATE_KEY"
@@ -74,6 +78,13 @@ USDT  = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
 WETH  = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619"
 WPOL  = "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"
 DAI   = "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063"
+TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd = "0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd"
+TK_0x1bdf71ede1a4777db1eebe7232bcda20d6fc1610 = "0x1bdf71ede1a4777db1eebe7232bcda20d6fc1610"
+TK_0x6a92b1e99de09f71cd96bc91f934826d96b8b26e = "0x6a92b1e99de09f71cd96bc91f934826d96b8b26e"
+TK_0xab787774bdf01fc22410165ffabf76e0e0ebc94f = "0xab787774bdf01fc22410165ffabf76e0e0ebc94f"
+TK_0xd125443f38a69d776177c2b9c041f462936f8218 = "0xd125443f38a69d776177c2b9c041f462936f8218"
+TK_0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32 = "0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32"
+TK_0xeb51d9a39ad5eef215dc0bf39a8821ff804a0f01 = "0xeb51d9a39ad5eef215dc0bf39a8821ff804a0f01"
 
 [scanner.paths]
 max_hops = 4
@@ -567,3 +578,84 @@ fee_bps = 100
 # Wallet intelligence: real-time top-wallet discovery (observation only).
 [leaders]
 discover = true
+
+# --- added 2026-10-03: QuickSwap factory-verified pairs + leader-route imports ---
+[[pools]]
+name = "AUTO_DAI_TK_0xeb51d9a39ad5eef215dc0bf39a8821ff804a0f01_25"
+address = "0x882df4b0fb50a229c3b4124eb18c759911485bfb"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xeb51d9a39ad5eef215dc0bf39a8821ff804a0f01"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_DAI_TK_0xab787774bdf01fc22410165ffabf76e0e0ebc94f_25"
+address = "0x1011e6d2982eb5677cc8a59eee6e23492dbf37b7"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xab787774bdf01fc22410165ffabf76e0e0ebc94f"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_TK_0x6a92b1e99de09f71cd96bc91f934826d96b8b26e_DAI_25"
+address = "0x1a9221261dc445d773e66075b9e9e52f40e15ab1"
+protocol = "v2"
+token0 = "TK_0x6a92b1e99de09f71cd96bc91f934826d96b8b26e"
+token1 = "DAI"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd_TK_0xd125443f38a69d776177c2b9c041f462936f8218_25"
+address = "0x32aeaeb973982f0bae0a56db2e6d94dcb579db15"
+protocol = "v2"
+token0 = "TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd"
+token1 = "TK_0xd125443f38a69d776177c2b9c041f462936f8218"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_WPOL_USDC_25"
+address = "0x6d9e8dbb2779853db00418d4dcf96f3987cfc9d2"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "USDC"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_TK_0x1bdf71ede1a4777db1eebe7232bcda20d6fc1610_USDT_30"
+address = "0x296b95dd0e8b726c4e358b0683ff0b6d675c35e9"
+protocol = "v3"
+token0 = "TK_0x1bdf71ede1a4777db1eebe7232bcda20d6fc1610"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd_WETH_1"
+address = "0xff69201019e25e3f8f3180fabdb58d60afed9a1d"
+protocol = "v3"
+token0 = "TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_WETH_TK_0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32_25"
+address = "0xfc2fc983a411c4b1e238f7eb949308cf0218c750"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd_TK_0xd125443f38a69d776177c2b9c041f462936f8218_30"
+address = "0xa6b96e60648e11055e82f1b7b226a2aa453a29bb"
+protocol = "v3"
+token0 = "TK_0x03b54a6e9a984069379fae1a4fc4dbae93b3bccd"
+token1 = "TK_0xd125443f38a69d776177c2b9c041f462936f8218"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_USDCe_TK_0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32_25"
+address = "0xa5cabfc725dfa129f618d527e93702d10412f039"
+protocol = "v2"
+token0 = "USDCe"
+token1 = "TK_0xdf7837de1f2fa4631d716cf2502f8b230f1dcc32"
+fee_bps = 25

@@ -158,11 +158,11 @@ async fn main() -> Result<()> {
     let senders_unused = ();
     let mut dec_cache: HashMap<Address, u32> = HashMap::new();
     let mut n_receipts = 0u64;
+    let mut n_skipped_receipts = 0u64;
 
     for block in (lo..=hi).rev() {
-        let Some(receipts) = endpoint.get_block_receipts(block).await? else {
-            continue;
-        };
+        let (receipts, skipped) = endpoint.get_block_receipts_lenient(block).await?;
+        n_skipped_receipts += skipped;
         n_receipts += receipts.len() as u64;
         // (sender, tokens touched) of the previous in-block tx, for
         // cross-sender bundle fingerprinting.
@@ -279,7 +279,7 @@ async fn main() -> Result<()> {
         .collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    println!("LEADER_SCAN receipts={n_receipts} senders_with_flows={} class={class_filter}", ranked.len());
+    println!("LEADER_SCAN receipts={n_receipts} skipped_undecodable={n_skipped_receipts} senders_with_flows={} class={class_filter}", ranked.len());
     let data_dir = format!("data/leaders/{chain}");
     let _ = std::fs::create_dir_all(&data_dir);
     let mut export = String::new();
