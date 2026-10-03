@@ -865,6 +865,125 @@ app.post('/api/config/drafts', (req, res) => {
 
 app.get('/api/config/drafts', (_req, res) => res.json(drafts.slice(-50).reverse()))
 
+// ── AI Ops agent ─────────────────────────────────────────────────────────
+// Read-only monitoring copilot: live fleet context + anomaly feed + chat.
+// Models are OpenAI-compatible endpoints (OpenAI, OpenRouter, Ollama, vLLM,
+// LM Studio). Keys stay on this box in .agent-models.json (gitignored).
+const AGENT_MODELS_FILE = path.join(__dirname, '.agent-models.json')
+const AGENT_FEED_FILE = path.join(__dirname, '.agent-feed.json')
+let agentModels = []; let agentFeed = []
+try { agentModels = JSON.parse(fs.readFileSync(AGENT_MODELS_FILE, 'utf8')) } catch {}
+try { agentFeed = JSON.parse(fs.readFileSync(AGENT_FEED_FILE, 'utf8')) } catch {}
+const saveModels = () => fs.writeFileSync(AGENT_MODELS_FILE, JSON.stringify(agentModels, null, 1))
+const saveFeed = () => fs.writeFileSync(AGENT_FEED_FILE, JSON.stringify(agentFeed.slice(-100)))
+
+async function fleetBrief() {
+  // Compact live context injected into every agent call + monitoring checks.
+  const out = { runners: [], capacity: null, pnl: {}, hits: {}, alerts: [] }
+  try {
+    for (const c of Object.keys(CHAINS)) {
+      const m = await fetchMetrics(c)
+      out.runners.push({ chain: c, online: !!m.arb_current_block,
+        block: m.arb_current_block || 0,
+        scans: m['arb_scan_latency_seconds_count'] || 0,
+        avg_scan_ms: m['arb_scan_latency_seconds_count']
+          ? +(((m['arb_scan_latency_seconds_sum'] || 0) / m['arb_scan_latency_seconds_count']) * 1000).toFixed(1) : 0,
+        evals: m.arb_paths_evaluated_total || 0, hits: m.arb_profitable_found_total || 0,
+        gross: m.arb_gross_profit_usd_total || 0, net: m.arb_net_profit_usd_total || 0,
+        pools: m.arb_pools_total || 0 })
+    }
+    const snaps = histLog.filter(s => s.t >= Date.now() - 3600e3)
+    if (snaps.length) {
+      const last = snaps[snaps.length - 1]
+      for (const c of Object.keys(CHAINS)) {
+        const prev = {}, acc = {}
+        for (const s of snaps) { const m = s.chains[c]; if (!m) continue
+          for (const [k, v] of Object.entries(m)) { if (k in prev) acc[k] = (acc[k]||0)+Math.max(0,v-prev[k]); prev[k]=v } }
+        out.hits[c] = acc['arb_profitable_found_total'] || 0
+      }
+    }
+  } catch {}
+  try {
+    const cap = await fetch(`http://127.0.0.1:${PORT}/api/config/capacity`).then(r => r.json())
+    out.capacity = { pct: cap.fleet_capacity_pct, band: cap.band }
+  } catch {}
+  // ── anomaly checks (the agent's monitoring mission) ──
+  for (const r of out.runners) {
+    if (!r.online) out.alerts.push(`CRITICAL: ${r.chain} runner offline / metrics unreachable`)
+    if (r.online && r.scans === 0) out.alerts.push(`WARNING: ${r.chain} reporting 0 scans`)
+    const util = r.avg_scan_ms / (parseChainConfig(r.chain)?.block_time_ms || 3000)
+    if (util > 0.5) out.alerts.push(`WARNING: ${r.chain} scan utilization ${(util*100).toFixed(0)}% of block budget`)
+    if (out.hits[r.chain] === 0 && r.online)
+      out.alerts.push(`INFO: ${r.chain} zero profitable hits in last hour`)
+  }
+  if (out.capacity?.band === 'throttle' || out.capacity?.band === 'freeze')
+    out.alerts.push(`CRITICAL: fleet capacity ${(out.capacity.pct*100).toFixed(0)}% — expansion ${out.capacity.band}`)
+  return out
+}
+
+// Monitoring watcher: every 60s compute anomalies; post new ones to the feed.
+const seenAlerts = new Map()
+async function watchTick() {
+  try {
+    const b = await fleetBrief()
+    for (const a of b.alerts) {
+      const last = seenAlerts.get(a) || 0
+      if (Date.now() - last > 3600e3) {  // re-report at most hourly
+        seenAlerts.set(a, Date.now())
+        agentFeed.push({ t: Date.now(), kind: 'monitor', text: a })
+      }
+    }
+    if (agentFeed.length > 0) saveFeed()
+  } catch {}
+}
+setInterval(watchTick, 60_000); watchTick()
+
+app.get('/api/agent/models', (_req, res) =>
+  res.json(agentModels.map(m => ({ id: m.id, name: m.name, base_url: m.base_url, model: m.model, has_key: !!m.api_key }))))
+app.post('/api/agent/models', (req, res) => {
+  const { name, base_url, model, api_key } = req.body || {}
+  if (!base_url || !model) return res.status(400).json({ error: 'base_url and model required' })
+  const m = { id: `mdl-${Date.now().toString(36)}`, name: name || model, base_url, model, api_key: api_key || '' }
+  agentModels.push(m); saveModels()
+  res.json({ id: m.id, name: m.name, model: m.model })
+})
+app.get('/api/agent/feed', (_req, res) => res.json(agentFeed.slice(-50).reverse()))
+
+app.post('/api/agent/chat', async (req, res) => {
+  const { model_id, messages } = req.body || {}
+  const brief = await fleetBrief()
+  const ctx = `You are the Allbright ops copilot — READ-ONLY monitoring agent for a multichain flash-loan arbitrage engine. You observe and report; you never execute transactions or change config. Live fleet state: ${JSON.stringify(brief)}. Answer concisely from this data; if asked to act, explain it stays with the Commander.`
+  const mdl = agentModels.find(m => m.id === model_id)
+  if (!mdl) {
+    // Rule-based fallback: answer from live data, no model needed.
+    const q = (messages?.at(-1)?.content || '').toLowerCase()
+    let text = 'No model configured — add one at the bottom of this panel (OpenAI-compatible: OpenAI, OpenRouter, Ollama).'
+    if (/status|health|online|runner/.test(q))
+      text = brief.runners.map(r => `${r.chain.toUpperCase()}: ${r.online ? `online, block ${r.block}, ${r.scans.toLocaleString()} scans, ${r.avg_scan_ms}ms avg, ${r.hits.toLocaleString()} hits, ${r.evals.toLocaleString()} evals` : 'OFFLINE'}`).join('\n') || 'no runner data'
+    else if (/capacity|expansion|headroom/.test(q))
+      text = `Fleet capacity ${(brief.capacity ? (brief.capacity.pct * 100).toFixed(0) + '% (' + brief.capacity.band + ')' : 'unknown')} — green ≤50%, review >50%, throttle >70%, freeze >85%.`
+    else if (/profit|p&l|earned|hit/.test(q))
+      text = brief.runners.map(r => `${r.chain.toUpperCase()}: ${r.hits.toLocaleString()} profitable paths, $${r.gross.toFixed(4)} gross, $${r.net.toFixed(4)} net`).join('\n') || 'no data'
+    else if (/alert|anomal|problem|wrong/.test(q))
+      text = brief.alerts.length ? brief.alerts.join('\n') : 'No active anomalies — fleet nominal.'
+    return res.json({ text, model: 'local-rules', alerts: brief.alerts })
+  }
+  try {
+    const r = await fetch(`${mdl.base_url.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(mdl.api_key ? { authorization: `Bearer ${mdl.api_key}` } : {}) },
+      body: JSON.stringify({ model: mdl.model, messages: [{ role: 'system', content: ctx }, ...(messages || [])], temperature: 0.3 }),
+      signal: AbortSignal.timeout(60000),
+    })
+    const j = await r.json()
+    if (j.error) return res.status(502).json({ error: `${mdl.name}: ${j.error.message || JSON.stringify(j.error)}` })
+    const text = j.choices?.[0]?.message?.content || '(empty response)'
+    agentFeed.push({ t: Date.now(), kind: 'chat', model: mdl.name, text })
+    saveFeed()
+    res.json({ text, model: mdl.name, alerts: brief.alerts })
+  } catch (e) { res.status(502).json({ error: `${mdl.name} unreachable: ${e.message}` }) }
+})
+
 // ── Expansion recommendation engine ─────────────────────────────────────
 // Rankings come only from verifiable registries (DefiLlama TVL, chainid.network,
 // canonical token lists) and live chain probes. Nothing invented — factors that

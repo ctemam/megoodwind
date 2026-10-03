@@ -191,7 +191,7 @@ export default function ChainConfig() {
           {zeroHit.length > 0 && (
             <div style={{ fontSize: 12 }}>
               <span className="dim">Zero-hit: </span>
-              {zeroHit.map(sym => <span key={sym} style={{ marginRight: 12, color: 'var(--warn)' }}>{sym}</span>))}
+              {zeroHit.map(sym => <span key={sym} style={{ marginRight: 12, color: 'var(--warn)' }}>{sym}</span>)}
               <span className="dim"> — review for removal; rank by net profit per scan capacity, not raw path count</span>
             </div>
           )}
@@ -315,7 +315,7 @@ export default function ChainConfig() {
             <input placeholder="name (e.g. arbitrum)" value={fields.name || ''} onChange={f('name')} style={{ width: 150 }} />
             <input placeholder="chain id" value={fields.chain_id || ''} onChange={f('chain_id')} style={{ width: 90 }} />
             <input placeholder="https://…rpc" value={fields.rpc_url || ''} onChange={f('rpc_url')} style={{ minWidth: 260 }} />
-          </>
+          </>}
           {ftype === 'endpoint' && <input placeholder="https://…" value={fields.url || ''} onChange={f('url')} style={{ minWidth: 320 }} />}
           {ftype === 'token' && <>
             <input placeholder="symbol (e.g. CAKE)" value={fields.symbol || ''} onChange={f('symbol')} />

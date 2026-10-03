@@ -9,6 +9,7 @@ import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
 import ChainConfig from './pages/ChainConfig.jsx'
+import AgentPanel from './AgentPanel.jsx'
 
 const NAV = [
   ['/', '⌂', 'Dashboard'],
@@ -24,6 +25,7 @@ const NAV = [
 export default function App() {
   const { refreshMs, setRefreshMs, currency, setCurrency, profitPeriod, setProfitPeriod, prices, all, history } = useApp()
   const [collapsed, setCollapsed] = useState(false)
+  const [agentOpen, setAgentOpen] = useState(false)
   const net = (profitPeriod === 'day' ? all.profit?.day : all.profit?.lifetime)
     ?? (history.length ? history[history.length - 1].net : 0)
   const online = Object.values(all.chains || {}).filter(Boolean).length
@@ -62,6 +64,7 @@ export default function App() {
             <div className="sd" style={online < 2 ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
             <div><b>{online === 2 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/2 runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
           </div>
+          <button className={`agent-btn ${agentOpen ? 'on' : ''}`} onClick={() => setAgentOpen(o => !o)} title="Ops Copilot">◆</button>
           <div className="ctl">
             <select value={currency} onChange={e => setCurrency(e.target.value)}>
               {['USD', 'ETH', 'USDT'].map(c => <option key={c}>{c}</option>)}
@@ -88,6 +91,7 @@ export default function App() {
           <div className="seg">Scan → Evaluate → Execute → Settle</div>
           <div className="seg" style={{ marginLeft: 'auto' }}>Flash Loan · DeFi Arbitrage · MEV-aware</div>
         </div>
+        <AgentPanel open={agentOpen} onClose={() => setAgentOpen(false)} />
       </main>
     </>
   )
