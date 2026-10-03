@@ -38,6 +38,13 @@ struct SenderAgg {
     best_tx: Option<B256>,
     /// Tokens touched (arb bots trade many pairs; accumulators concentrate).
     tokens: std::collections::HashSet<Address>,
+    /// Times this sender's profitable tx immediately followed a DIFFERENT
+    /// sender's tx touching the same tokens — the backrun-bundle signature:
+    /// the pair was co-submitted to a builder, i.e. this wallet uses a
+    /// private channel invisible to the pending stream.
+    private_hits: u32,
+    /// Single-tx wins touching >=3 tokens — multi-hop atomic arb signature.
+    atomic_txs: u32,
 }
 
 #[tokio::main]
@@ -115,6 +122,9 @@ async fn main() -> Result<()> {
             continue;
         };
         n_receipts += receipts.len() as u64;
+        // (sender, tokens touched) of the previous in-block tx, for
+        // cross-sender bundle fingerprinting.
+        let mut prev: Option<(Address, std::collections::HashSet<Address>)> = None;
         for receipt in &receipts {
             if !receipt.status() {
                 continue;
@@ -122,6 +132,8 @@ async fn main() -> Result<()> {
             let sender = receipt.from;
             let mut net_usd = 0.0f64;
             let mut unpriced = 0u32;
+            let mut tx_tokens: std::collections::HashSet<Address> =
+                std::collections::HashSet::new();
             for log in receipt.inner.logs() {
                 let topics = log.topics();
                 if topics.len() != 3 || topics[0] != TRANSFER_SIG {
@@ -133,6 +145,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 let token = log.address();
+                tx_tokens.insert(token);
                 let amount = U256::from_be_slice(log.data().data.as_ref());
                 let raw = amount.to_string().parse::<f64>().unwrap_or(0.0)
                     * if to == sender { 1.0 } else { -1.0 };
@@ -148,14 +161,31 @@ async fn main() -> Result<()> {
                 }
                 senders.entry(sender).or_default().tokens.insert(token);
             }
-            if senders.get(&sender).map(|s| s.tokens.is_empty()).unwrap_or(true)
-                && !senders.contains_key(&sender)
-            {
+            let cur_tokens = tx_tokens.clone();
+            if tx_tokens.is_empty() {
+                prev = Some((sender, tx_tokens));
                 continue; // no token flow — plain transfer/contract call
             }
+            // Bundle fingerprint: this tx profited while sharing tokens with
+            // the immediately preceding tx from a different sender.
+            let mut private_hit = false;
+            if net_usd > 0.0 {
+                if let Some((ps, ptoks)) = &prev {
+                    if *ps != sender && ptoks.iter().any(|t| tx_tokens.contains(t)) {
+                        private_hit = true;
+                    }
+                }
+            }
+            prev = Some((sender, cur_tokens));
             let gas_usd =
                 receipt.gas_used as f64 * receipt.effective_gas_price as f64 / 1e18 * native_usd;
             let agg = senders.entry(sender).or_default();
+            if private_hit {
+                agg.private_hits += 1;
+            }
+            if net_usd > 0.0 && tx_tokens.len() >= 3 {
+                agg.atomic_txs += 1;
+            }
             agg.txs += 1;
             agg.gas_usd += gas_usd;
             agg.net_usd += net_usd;
@@ -183,8 +213,9 @@ async fn main() -> Result<()> {
         println!(
             "LEADER_SCAN {addr:#x} net_after_gas={net_after_gas:.4} \
              net_usd={:.4} gas_usd={:.4} txs={} tokens={} best_tx_usd={:.4} \
-             best={best} unpriced={}",
-            s.net_usd, s.gas_usd, s.txs, s.tokens.len(), s.best_tx_usd, s.unpriced_flows
+             best={best} unpriced={} private_hits={} atomic={}",
+            s.net_usd, s.gas_usd, s.txs, s.tokens.len(), s.best_tx_usd,
+            s.unpriced_flows, s.private_hits, s.atomic_txs
         );
     }
     Ok(())
