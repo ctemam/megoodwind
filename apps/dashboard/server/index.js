@@ -619,6 +619,16 @@ function parseChainConfig(c) {
     block_time_ms: +(tomlScalar(t, 'block_time_ms') || 0),
     dry_run: /dry_run\s*=\s*true/.test(t),
     flash_tokens: tomlList(t, 'flash_tokens'),
+    policy: (() => {
+      const s = tomlSection(t, 'policy')
+      return {
+        green: +(tomlScalar(s, 'expansion_green_pct') || 50) / 100,
+        throttle: +(tomlScalar(s, 'expansion_throttle_pct') || 70) / 100,
+        freeze: +(tomlScalar(s, 'expansion_freeze_pct') || 85) / 100,
+        batch_min: +(tomlScalar(s, 'token_batch_min') || 25),
+        batch_max: +(tomlScalar(s, 'token_batch_max') || 50),
+      }
+    })(),
     tokens, prices, pools,
     submission: {
       pimlico: /pimlico_enabled\s*=\s*true/.test(t),
@@ -810,6 +820,8 @@ app.get('/api/config/capacity', (_req, res) => {
       hits_per_m: oppDensity, gross_profit_usd: gross,
       score: oppDensity * cfg.pools.length * Math.max(gross, 0.01) * rpcStability * execSuccess,
       token_hits: tokenHits, zero_hit_tokens: zeroHit,
+      batch_min: cfg.policy.batch_min, batch_max: cfg.policy.batch_max,
+      _policy: cfg.policy,
     }
   }
   const scanUtil = Math.max(0, ...Object.values(chains).map(c => c.utilization))
@@ -820,19 +832,23 @@ app.get('/api/config/capacity', (_req, res) => {
       .map(p => ({ name: p.name, cpu: p.monit?.cpu ?? 0, mem_mb: Math.round((p.monit?.memory || 0) / 1048576) }))
   } catch {}
   const fleet = Math.max(cpuPct, memPct, scanUtil)
-  // Expansion policy (sidechat): green ≤50% — expansion only inside the green
-  // zone; >50% review, >70% throttle (no new chains/tokens), >85% freeze.
-  const band = fleet > 0.85 ? 'freeze' : fleet > 0.7 ? 'throttle' : fleet > 0.5 ? 'review' : 'green'
+  // Expansion policy — thresholds come from each chain's [policy] section
+  // (default 50/70/85); the fleet band uses the most conservative setting.
+  const pols = Object.values(chains).map(c => c._policy).filter(Boolean)
+  const greenLine = pols.length ? Math.min(...pols.map(p => p.green)) : 0.5
+  const throttleLine = pols.length ? Math.min(...pols.map(p => p.throttle)) : 0.7
+  const freezeLine = pols.length ? Math.min(...pols.map(p => p.freeze)) : 0.85
+  const band = fleet > freezeLine ? 'freeze' : fleet > throttleLine ? 'throttle' : fleet > greenLine ? 'review' : 'green'
   res.json({
     cpu_pct: cpuPct, mem_pct: memPct, cpus,
     mem_used_gb: +((os.totalmem() - os.freemem()) / 1073741824).toFixed(1),
     mem_total_gb: +(os.totalmem() / 1073741824).toFixed(1),
     load1: os.loadavg()[0],
     scan_util: scanUtil, chains, runners,
-    fleet_capacity_pct: fleet, band,
-    expansion_eligible: band === 'green',
-    headroom_chains: fleet >= 0.5 ? 0 :
-      Math.max(0, Math.floor((0.5 - fleet) / Math.max(0.01, fleet / Math.max(1, Object.keys(chains).length)))),
+    fleet_capacity_pct: fleet, band, expansion_eligible: band === 'green',
+    policy_lines: { green: greenLine, throttle: throttleLine, freeze: freezeLine },
+    headroom_chains: fleet >= greenLine ? 0 :
+      Math.max(0, Math.floor((greenLine - fleet) / Math.max(0.01, fleet / Math.max(1, Object.keys(chains).length)))),
   })
 })
 

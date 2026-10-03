@@ -86,7 +86,7 @@ export default function ChainConfig() {
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 14, marginBottom: 10 }}>
             <div style={{ flex: 1, height: 14, background: '#12203d', borderRadius: 7, overflow: 'hidden', position: 'relative' }}>
               <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', transition: 'width .4s', background: b.c }} />
-              {[50, 70, 85].map(x => (
+              {[(capacity.policy_lines?.green ?? .5), (capacity.policy_lines?.throttle ?? .7), (capacity.policy_lines?.freeze ?? .85)].map(v => v * 100).map(x => (
                 <div key={x} style={{ position: 'absolute', left: `${x}%`, top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,.35)' }} />
               ))}
             </div>
@@ -96,7 +96,7 @@ export default function ChainConfig() {
             <span>CPU {(capacity.cpu_pct * 100).toFixed(0)}% (load {capacity.load1?.toFixed(2)}/{capacity.cpus} cores)</span>
             <span>MEM {(capacity.mem_pct * 100).toFixed(0)}% ({capacity.mem_used_gb}/{capacity.mem_total_gb} GB)</span>
             <span>Scan util {(capacity.scan_util * 100).toFixed(1)}% of block budget</span>
-            <span style={{ color: 'var(--dim)' }}>zones: ≤50 green · >50 review · >70 throttle · >85 freeze</span>
+            <span style={{ color: 'var(--dim)' }}>zones: ≤{(capacity.policy_lines?.green ?? .5) * 100} green · >{(capacity.policy_lines?.green ?? .5) * 100} review · >{(capacity.policy_lines?.throttle ?? .7) * 100} throttle · >{(capacity.policy_lines?.freeze ?? .85) * 100} freeze · from [policy] in chain TOML</span>
           </div>
           {capacity.chains && (
             <table style={{ marginTop: 10 }}>
@@ -167,14 +167,15 @@ export default function ChainConfig() {
         const m = capacity.chains[chain]
         const ranked = Object.entries(m.token_hits || {}).sort((a, b) => b[1] - a[1])
         const zeroHit = m.zero_hit_tokens || []
-        const batchOk = m.tokens >= 25 && m.tokens <= 50
+        const bmin = m.batch_min ?? 25, bmax = m.batch_max ?? 50
+        const batchOk = m.tokens >= bmin && m.tokens <= bmax
         return (
         <div className="panel">
           <h3>Token batch — {chain.toUpperCase()}</h3>
           <div style={{ display: 'flex', gap: 24, fontSize: 12.5, flexWrap: 'wrap', marginBottom: 8 }}>
             <span className="dim">Tokens: <b style={{ color: 'var(--txt)' }}>{m.tokens}</b>
               {' '}<span style={{ color: batchOk ? 'var(--acc)' : 'var(--warn)' }}>
-                ({batchOk ? 'within' : m.tokens < 25 ? 'below' : 'above'} 25–50 target batch)</span></span>
+                ({batchOk ? 'within' : m.tokens < bmin ? 'below' : 'above'} {bmin}–{bmax} target batch)</span></span>
             <span className="dim">Earning hits (1h): <b style={{ color: 'var(--acc)' }}>{ranked.length}</b></span>
             <span className="dim">Quarantine candidates: <b style={{ color: zeroHit.length ? 'var(--warn)' : 'var(--acc)' }}>{zeroHit.length}</b> (0 profitable hits)</span>
           </div>

@@ -306,3 +306,12 @@ token_suppression_blocks = 200
 thin_pool_threshold_usd = 50000
 cmc_drift_alert_pct = 25.0
 refresh_blocks = 100
+
+[policy]
+# Expansion policy (advisor): expansion allowed only while fleet capacity
+# stays in the green zone; staged token admission per chain.
+expansion_green_pct = 50
+expansion_throttle_pct = 70
+expansion_freeze_pct = 85
+token_batch_min = 25
+token_batch_max = 50
