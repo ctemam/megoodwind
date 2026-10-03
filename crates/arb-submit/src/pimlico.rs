@@ -29,8 +29,9 @@ pub struct PimlicoConfig {
     pub entry_point: Address,
     pub account_factory: Address,
     pub salt: U256,
-    /// Pimlico sponsorship policy id (sp_...). None = no sponsorship —
-    /// ops are rejected, never self-funded.
+    /// Optional Pimlico sponsorship policy id (sp_...) — scopes limits.
+    /// Without one, ops are still sponsored within the account's Pimlico
+    /// balance. Ops are never self-funded either way.
     pub sponsor_policy_id: Option<String>,
 }
 
@@ -107,12 +108,18 @@ impl PimlicoClient {
         &self,
         op_json: &serde_json::Value,
         entry_point: Address,
-        policy_id: &str,
+        policy_id: Option<&str>,
     ) -> std::result::Result<(Bytes, UserOpGas), SponsorReject> {
+        // Policy id is optional — without it the paymaster sponsors within
+        // the account's Pimlico balance.
+        let params = match policy_id {
+            Some(id) => json!([op_json, format!("{:#x}", entry_point), { "sponsorshipPolicyId": id }]),
+            None => json!([op_json, format!("{:#x}", entry_point)]),
+        };
         let payload = json!({
             "jsonrpc": "2.0", "id": 1,
             "method": "pm_sponsorUserOperation",
-            "params": [op_json, format!("{:#x}", entry_point), { "sponsorshipPolicyId": policy_id }],
+            "params": params,
         });
         let resp = self
             .http
@@ -273,32 +280,30 @@ impl PimlicoSubmitter {
             .await?;
 
         let mut paymaster_and_data = Bytes::new();
-        if let Some(policy) = &self.cfg.sponsor_policy_id {
-            match self
-                .client
-                .sponsor(&unsigned.to_json(), self.cfg.entry_point, policy)
-                .await
-            {
-                Ok((pmd, sponsored_gas)) => {
-                    gas = sponsored_gas;
-                    paymaster_and_data = pmd;
-                }
-                Err(reject) => {
-                    // Gasless-only rule: a sponsorship rejection rejects the
-                    // operation. There is no funded-wallet fallback.
-                    if reject.transient {
-                        warn!(reason = reject.reason, error = %reject, "sponsorship transiently unavailable — op rejected");
-                    } else {
-                        warn!(reason = reject.reason, error = %reject, "sponsorship rejected — op rejected (fix policy/budget)");
-                    }
-                    return Err(anyhow::Error::new(reject));
-                }
+        // Sponsorship is always attempted — with a policy when set, or
+        // within the account's Pimlico balance when not. A rejection
+        // rejects the op; there is no funded-wallet fallback.
+        match self
+            .client
+            .sponsor(
+                &unsigned.to_json(),
+                self.cfg.entry_point,
+                self.cfg.sponsor_policy_id.as_deref(),
+            )
+            .await
+        {
+            Ok((pmd, sponsored_gas)) => {
+                gas = sponsored_gas;
+                paymaster_and_data = pmd;
             }
-        } else {
-            return Err(anyhow::Error::new(SponsorReject::permanent(
-                "no_policy",
-                "gasless mode: ALLBRIGHTA_SPONSOR_POLICY_ID not set — op rejected, no funded-wallet fallback".to_string(),
-            )));
+            Err(reject) => {
+                if reject.transient {
+                    warn!(reason = reject.reason, error = %reject, "sponsorship transiently unavailable — op rejected");
+                } else {
+                    warn!(reason = reject.reason, error = %reject, "sponsorship rejected — op rejected (fix policy/budget)");
+                }
+                return Err(anyhow::Error::new(reject));
+            }
         }
 
         let mut op = unsigned;

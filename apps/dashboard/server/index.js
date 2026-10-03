@@ -469,13 +469,15 @@ app.get('/api/deploy/preflight', async (_req, res) => {
       checks.push({ name: `${cfg.label} runner`, ok: false, detail: `unreachable: ${e.message}` })
     }
   }
-  // Gasless-mode gate: strict_4337 requires a sponsor policy — ops are
-  // rejected rather than self-funded when it is missing.
+  // Gasless mode: sponsorship is always attempted via the Pimlico
+  // paymaster. A policy (sp_...) is optional scoping — without one ops
+  // are sponsored within the account's Pimlico balance. Paymaster
+  // reachability is the real gate, probed live.
   const sponsorSet = !!env.ALLBRIGHTA_SPONSOR_POLICY_ID
-  checks.push({ name: 'Sponsor policy (gasless)', ok: sponsorSet,
+  checks.push({ name: 'Sponsor policy (optional)', ok: true,
     detail: sponsorSet
-      ? `ALLBRIGHTA_SPONSOR_POLICY_ID set — paymaster covers gas, user funding: NO`
-      : 'missing — strict_4337 ops will be rejected until ALLBRIGHTA_SPONSOR_POLICY_ID is set' })
+      ? 'sp_ policy set — scoped sponsorship limits'
+      : 'not set — ops sponsored within Pimlico account balance; set for spend caps' })
   for (const key of ['BSC_ARB_CONTRACT', 'BASE_ARB_CONTRACT', 'PIMLICO_API_KEY', 'PRIVATE_KEY']) {
     const set = !!env[key]
     checks.push({ name: `env ${key}`, ok: set, detail: set ? 'set' : 'missing from .env' })

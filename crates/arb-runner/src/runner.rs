@@ -610,7 +610,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             warn!("Pimlico paymaster UNREACHABLE at boot — sponsorship will fail; ops rejected, no fallback");
                         }
                         if !sponsored {
-                            warn!("No sponsor policy (ALLBRIGHTA_SPONSOR_POLICY_ID) — every op will be rejected in gasless mode");
+                            info!("No sponsor policy — ops sponsored within Pimlico account balance (set ALLBRIGHTA_SPONSOR_POLICY_ID for limits)");
                         }
                         pimlico_venue = Some(venue.clone());
                         submitters.push(Box::new(venue));
