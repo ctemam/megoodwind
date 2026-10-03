@@ -113,6 +113,27 @@ lazy_static! {
         &["chain"]
     )
     .unwrap();
+    /// Multi-chain intelligence metrics (expansion spec): shadow-simulation
+    /// attempts and positive reproductions, and strategies expired on stale
+    /// evidence — all partitioned per chain.
+    pub static ref LEADER_SHADOW_ATTEMPTS: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_shadow_attempts_total",
+        "Shadow-sim evaluations of strategies (per chain)",
+        &["chain"]
+    )
+    .unwrap();
+    pub static ref LEADER_SHADOW_POSITIVE: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_shadow_positive_total",
+        "Shadow-sim evaluations that reproduced positive profit (per chain)",
+        &["chain"]
+    )
+    .unwrap();
+    pub static ref LEADER_STRATEGY_EXPIRED: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_strategy_expired_total",
+        "Strategies expired on stale evidence (per chain)",
+        &["chain"]
+    )
+    .unwrap();
     /// Total microseconds spent inside the discovery stats mutex.
     pub static ref LEADER_DISCOVERY_LOCK_US: CounterVec = register_counter_vec!(
         "arb_leader_discovery_lock_us_total",
@@ -913,6 +934,7 @@ impl Default for PromoteThresholds {
 /// `data/leaders/<chain>/_strategies.jsonl`.
 pub struct StrategyRegistry {
     path: PathBuf,
+    chain: String,
     pub records: HashMap<String, StrategyRecord>,
     /// Blocks of inactivity before a strategy expires.
     ttl_blocks: u64,
@@ -929,7 +951,7 @@ impl StrategyRegistry {
                 }
             }
         }
-        Self { path, records, ttl_blocks }
+        Self { path, chain: chain.to_string(), records, ttl_blocks }
     }
 
     /// Upsert outcome evidence for a wallet. Returns (transitioned_to, is_new).
@@ -1062,6 +1084,11 @@ impl StrategyRegistry {
                 r.state = StrategyState::Expired;
                 expired.push(r.strategy_id.clone());
             }
+        }
+        if !expired.is_empty() {
+            LEADER_STRATEGY_EXPIRED
+                .with_label_values(&[&self.chain])
+                .inc_by(expired.len() as u64);
         }
         expired
     }

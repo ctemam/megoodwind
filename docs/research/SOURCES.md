@@ -31,6 +31,18 @@ having read it.
 | Prometheus naming practices | https://prometheus.io/docs/practices/naming/ | [verified — arb_* naming] | 2026-10-03 |
 | PM2 | https://pm2.keymetrics.io/docs/usage/quick-start/ | [recommended] | — |
 
+## Multi-chain expansion (per SKILLS_SPEC expansion section)
+
+| source | url | status | reviewed |
+|---|---|---|---|
+| Ethereum finality | https://ethereum.org/en/developers/docs/consensus-mechanisms/pos/finality/ | [recommended] | — |
+| Optimism protocol docs | https://docs.optimism.io/ | [recommended] | — |
+| Arbitrum developer docs | https://docs.arbitrum.io/ | [recommended] | — |
+| Base documentation | https://docs.base.org/ | [recommended] | — |
+| Polygon documentation | https://docs.polygon.technology/ | [recommended] | — |
+| Avalanche developer docs | https://build.avax.network/ | [recommended] | — |
+| BNB Chain documentation | https://docs.bnbchain.org/ | [recommended] | — |
+
 ## MEV and primary research
 
 | source | url | status | reviewed |

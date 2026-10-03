@@ -372,6 +372,10 @@ async fn main() -> Result<()> {
                 .map(|r| (r.strategy_id.clone(), r.route_pools.clone()))
                 .collect();
             for (id, route) in &ids {
+                // Per-chain shadow-sim accounting (expansion spec metrics).
+                arb_leaders::LEADER_SHADOW_ATTEMPTS
+                    .with_label_values(&[cfg.chain.name.as_str()])
+                    .inc();
                 // Candidate paths sharing at least one route pool, minus quarantined.
                 let mut cand: HashMap<usize, usize> = HashMap::new();
                 for p in route {
@@ -405,6 +409,9 @@ async fn main() -> Result<()> {
                     }
                 }
                 if best_usd > 0.0 {
+                    arb_leaders::LEADER_SHADOW_POSITIVE
+                        .with_label_values(&[cfg.chain.name.as_str()])
+                        .inc();
                     if strat.mark_verified(id, best_usd, VERIFY_CAP_USD) {
                         println!("VERIFY {id} profit_usd={best_usd:.1} cap_usd={VERIFY_CAP_USD} -> bounded_live");
                         n_ver += 1;

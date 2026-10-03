@@ -43,6 +43,132 @@ this repository with repo evidence; `[recommended]` = authoritative source
 queued for review; `[assumption]`/`[unknown]` must never describe production
 behavior. URLs are tracked in `docs/research/SOURCES.md` with review dates.
 
+## Multi-chain Wallet Intelligence Expansion
+
+Wallet intelligence is a **chain-portable subsystem**, not a BSC-specific
+feature. Discovery, attribution, replay, shadow and promotion share one
+schema while allowing chain-specific ingestion, finality, AMM, RPC and
+submission behavior.
+
+### Required lead-architect capabilities
+
+| capability | requirement |
+|---|---|
+| Chain topology analysis | Public/private mempool availability, sequencer behavior, builder markets, finality and reorg risk per chain |
+| Chain-specific ingestion | WSS/pending-transaction adapters where available; mined-block receipt scanning where private orderflow dominates |
+| Multi-chain attribution | Normalize wallet, transaction, receipt, token-transfer and gas attribution into one chain-tagged schema |
+| Chain-specific P&L | Correct native gas conversion for BNB/ETH/MATIC/AVAX; distinguish realized P&L from inventory movement |
+| DEX/protocol adapters | Chain-specific Uniswap forks, Algebra/Aero, PancakeSwap, Curve, Balancer, DODO without contaminating generic math |
+| RPC capacity planning | Per-chain HTTPS/WSS pools, rate limits, block rates, historical-replay availability, endpoint health |
+| Finality and reorg handling | Chain-specific confirmation depth; invalidate observations/replay results after reorgs |
+| Private-orderflow research | Identify builder, relay, sequencer and private RPC channels per chain |
+| Cross-chain clustering | Detect shared operators via executor bytecode, route geometry, timing, funding and beneficiary patterns |
+| Independent rollout control | Discovery enabled per chain; a weak/private-only chain must not reduce BSC execution latency |
+| Chain-aware strategy expiry | Strategies expire per chain — a route can stay profitable on one chain after dying on another |
+| Cross-chain dashboard contracts | Chain, block, timestamp, source tier, confidence and freshness on every intelligence metric |
+
+### Required architecture
+
+```text
+ChainAdapter
+├── chain_id
+├── native_symbol
+├── block_time
+├── finality_policy
+├── mempool_visibility
+├── receipt_source
+├── rpc_budget
+├── gas_price_source
+├── venue_adapters
+├── pool_protocol_adapters
+└── private_orderflow_adapters
+```
+
+operating on normalized records:
+
+```text
+NormalizedObservation {
+    chain_id, block_number, block_hash, tx_hash, wallet,
+    executor_family, strategy_class, route, pools, token_flows,
+    gas_native, gas_usd, realized_pnl_usd,
+    source_visibility, finality_status
+}
+```
+
+### Expansion rollout
+
+- **Stage 1 — Discovery-only:** verify chain ID and native token; verify
+  block/receipt APIs; measure block interval and finality; classify mempool
+  visibility; configure read/WSS budgets; scan mined blocks; write
+  chain-partitioned leader data; **do not execute**.
+- **Stage 2 — Replay:** requires receipt completeness, token decimals and
+  transfer attribution, gas-price conversion, historical state at the
+  correct block, reorg/finality checks, minimum sample size.
+- **Stage 3 — Shadow:** compare leader realized P&L vs Allbright simulated
+  P&L; track route coverage, pool-state agreement, expected profit,
+  slippage, gas, submission venue, private-orderflow visibility, shadow
+  precision.
+- **Stage 4 — Bounded live:** only when shadow precision meets the chain
+  threshold, the submission venue is proven, signer/nonce handling is
+  chain-safe, daily notional and loss caps are configured, revert and bait
+  breakers are active, and rollback has been tested.
+
+### Chain capability matrix
+
+| chain type | intelligence source | primary challenge | rollout policy |
+|---|---|---|---|
+| Public mempool EVM | WSS pending + mined receipts | latency and builder competition | discovery → shadow → bounded backrun |
+| Private-builder-heavy EVM | mined receipts + builder/relay data | pre-inclusion invisibility | outcome discovery → replay → private venue |
+| Sequencer chain | receipts, sequencer feeds where available | no conventional public mempool | resting-state/replay only unless an approved orderflow source exists |
+| Reorg-prone/low-finality | receipts + confirmation tracking | attribution reversal | delay promotion until finality |
+| Cross-chain operator | per-chain observations + executor clustering | identity/strategy correlation | share research, never share unsafe execution assumptions |
+
+### Per-chain intelligence metrics
+
+Every intelligence metric carries `{chain}` plus measurement timestamp,
+source block, freshness, and measured/projected/simulated status:
+
+```text
+leader_discovered_total{chain}          leader_replay_positive_total{chain}
+leader_observed_total{chain}            leader_shadow_attempts_total{chain}
+leader_replay_attempts_total{chain}     leader_shadow_positive_total{chain}
+leader_shadow_precision{chain}          leader_route_coverage{chain}
+leader_net_pnl_usd{chain}               leader_gas_usd{chain}
+leader_reorg_invalidations_total{chain} leader_data_stale{chain}
+leader_strategy_expired_total{chain}    leader_queue_dropped_total{chain}
+```
+
+Emitted today (`arb_leader_*` prefix): `discovered`, `pending` (observed),
+`shadow_attempts`, `shadow_positive`, `strategy_expired`, `queue_dropped`,
+`route coverage` via strategy records, `evicted`, `write_errors`. The rest
+are registered as the replay/reorg/finality emit points land.
+
+### Expansion safety rules
+
+- A chain must not inherit another chain's thresholds automatically.
+- BSC intelligence must not block BSC execution while another chain scans.
+- A chain with no pre-inclusion orderflow must not be labeled "backrun-ready".
+- Cross-chain wallet clustering is evidence, not permission to copy.
+- Strategies expire independently per chain.
+- Pool imports must pass chain-specific provenance and liquidity checks.
+- RPC/data budget exhaustion fails closed for execution but never stops
+  other chains.
+- Dashboard totals must not combine chains with different observation
+  windows without showing window and timestamp.
+
+### Verification requirements before a chain enters production intelligence
+
+1. Minimum multi-hour mined-block discovery window.
+2. Receipts reconciled against ≥2 RPC sources.
+3. Reorg/finality behavior measured.
+4. Native gas and token decimals validated.
+5. Labeled sample replayed manually.
+6. Leader P&L vs Allbright shadow P&L compared.
+7. No latency regression on already-live chains.
+8. Dashboard chain totals and timestamps verified.
+9. Chain-specific kill switch and rollback tested.
+10. Chain stays discovery-only until all evidence is recorded.
+
 ## Continuous Research and Skill Maintenance
 
 Every agent task keeps skills at industry cutting edge: before executing a
