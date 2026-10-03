@@ -2,9 +2,6 @@ import React, { useEffect, useState } from 'react'
 import { useApp, fmt } from '../state.jsx'
 import Collap from '../Collap.jsx'
 
-const CHAIN_INFO = { 56: { key: 'bsc', label: 'BSC', sym: 'BNB', px: 'binancecoin' }, 8453: { key: 'base', label: 'BASE', sym: 'ETH', px: 'ethereum' } }
-const chainInfo = id => CHAIN_INFO[id] || { key: `chain${id}`, label: `ETH #${id}`, sym: 'ETH', px: 'ethereum' }
-
 export default function Wallet() {
   const { prices, currency } = useApp()
   const [wallets, setWallets] = useState([])
@@ -14,7 +11,31 @@ export default function Wallet() {
   const [msg, setMsg] = useState(null)
   const [mm, setMm] = useState(null)      // {available, accounts:[{address, chainId, balanceWei}]}
   const [mmBusy, setMmBusy] = useState(false)
-  const [sort, setSort] = useState({ key: 'chain', dir: 1 })
+  const [sort, setSort] = useState({ key: 'nick', dir: 1 })
+  const [nicks, setNicks] = useState({})  // address.lower -> nickname
+  const [mmBals, setMmBals] = useState({}) // address.lower -> {bsc, base}
+
+  const saveNick = async (address, name) => {
+    const r = await fetch('/api/wallet/nicknames', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, name }),
+    }).then(r => r.json()).catch(() => null)
+    if (r?.nicknames) setNicks(r.nicknames)
+  }
+  useEffect(() => {
+    fetch('/api/wallet/nicknames').then(r => r.json()).then(setNicks).catch(() => {})
+  }, [])
+
+  // Per-chain balances for each detected MetaMask account — queried on
+  // EVERY configured chain server-side, not just MetaMask's active one.
+  useEffect(() => {
+    for (const a of mm?.accounts || []) {
+      const key = a.address.toLowerCase()
+      if (mmBals[key]) continue
+      fetch(`/api/wallet/balance?address=${a.address}`).then(r => r.json())
+        .then(d => setMmBals(x => ({ ...x, [key]: d }))).catch(() => {})
+    }
+  }, [mm])
 
   const load = async () => {
     const [w, c] = await Promise.all([
@@ -63,19 +84,26 @@ export default function Wallet() {
     setMsg(r.dryRun ? `DRY-RUN: would call ${r.wouldCall} on ${r.chain} → ${r.to || '(owner)'} ${r.amountWei || ''} wei` : (r.error || 'submitted'))
   }
   const eth = (wei) => wei ? Number(BigInt(wei)) / 1e18 : null
+  const usdOf = (c, n) => n != null ? n * ((c === 'bsc' ? prices?.binancecoin?.usd : prices?.ethereum?.usd) ?? 0) : null
 
-  // Unified rows: executor/signer wallets + detected MetaMask accounts.
+  // Unified rows: one row per account, per-chain balance columns + total.
   const rows = [
-    ...wallets.map(w => ({
-      chain: w.chain.toUpperCase(), role: w.kind.replace('_', ' '), address: w.address,
-      native: eth(w.balanceWei), sym: w.chain === 'bsc' ? 'BNB' : 'ETH',
-      usd: eth(w.balanceWei) != null ? eth(w.balanceWei) * (w.chain === 'bsc' ? prices?.binancecoin?.usd : prices?.ethereum?.usd) || null : null,
-    })),
+    ...wallets.map(w => {
+      const n = eth(w.balanceWei)
+      return {
+        address: w.address, role: w.kind.replace('_', ' '),
+        nick: nicks[w.address.toLowerCase()] || '',
+        bsc: w.chain === 'bsc' ? n : null, base: w.chain === 'base' ? n : null,
+        usd: w.chain ? usdOf(w.chain, n) : null,
+      }
+    }),
     ...(mm?.accounts || []).map(a => {
-      const ci = chainInfo(a.chainId)
-      const n = eth(a.balanceWei)
-      return { chain: ci.label, role: 'metamask', address: a.address, native: n, sym: ci.sym,
-        usd: n != null ? n * (prices?.[ci.px]?.usd ?? 0) || null : null }
+      const key = a.address.toLowerCase()
+      const b = mmBals[key] || {}
+      const bsc = eth(b.bsc), base = eth(b.base)
+      const usd = [usdOf('bsc', bsc), usdOf('base', base)].reduce((s, v) => s + (v ?? 0), 0)
+      return { address: a.address, role: 'metamask', nick: nicks[key] || '',
+        bsc, base, usd: (bsc != null || base != null) ? usd : null }
     }),
   ]
   const sorted = rows.slice().sort((a, b) => {
@@ -91,6 +119,9 @@ export default function Wallet() {
       {label}{sort.key === key ? (sort.dir === 1 ? ' ▲' : ' ▼') : ''}
     </th>
   )
+  const tot = k => rows.reduce((s, r) => s + (r[k] ?? 0), 0)
+  const totUsd = rows.reduce((s, r) => s + (r.usd ?? 0), 0)
+  const showN = (n, sym) => n == null ? '—' : `${n.toFixed(6)} ${sym}`
 
   return (
     <div className="grid">
@@ -105,19 +136,36 @@ export default function Wallet() {
               </button>}
         </>}>
         <table>
-          <thead><tr>{th('chain', 'Chain')}{th('role', 'Role')}{th('address', 'Address')}{th('native', 'Balance')}{th('usd', 'USD')}</tr></thead>
+          <thead><tr>
+            {th('nick', 'Nickname')}{th('role', 'Role')}{th('address', 'Address')}
+            {th('bsc', 'BSC · BNB')}{th('base', 'BASE · ETH')}{th('usd', 'Total USD')}
+          </tr></thead>
           <tbody>
             {sorted.map((r, i) => (
-              <tr key={`${r.address}:${r.chain}:${i}`}>
-                <td>{r.chain}</td>
+              <tr key={`${r.address}:${i}`}>
+                <td>
+                  <input className="nick" placeholder="—"
+                    defaultValue={r.nick} key={r.address}
+                    onBlur={e => e.target.value !== r.nick && saveNick(r.address, e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
+                </td>
                 <td>{r.role === 'metamask' ? <span className="tag">metamask</span> : r.role}</td>
                 <td className="mono">{r.address.slice(0, 10)}…{r.address.slice(-6)}</td>
-                <td>{r.native === null ? '—' : `${r.native.toFixed(6)} ${r.sym}`}</td>
+                <td className="mono">{showN(r.bsc, 'BNB')}</td>
+                <td className="mono">{showN(r.base, 'ETH')}</td>
                 <td>{r.usd != null ? fmt(r.usd, currency, prices) : '—'}</td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={5} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
+            {!rows.length && <tr><td colSpan={6} className="dim">No wallet/contract addresses configured in .env yet — connect MetaMask to add yours.</td></tr>}
           </tbody>
+          {rows.length > 0 && (
+            <tfoot><tr className="total">
+              <td colSpan={3}><b>Total · {rows.length} accounts</b></td>
+              <td className="mono"><b>{showN(tot('bsc'), 'BNB')}</b></td>
+              <td className="mono"><b>{showN(tot('base'), 'ETH')}</b></td>
+              <td><b>{fmt(totUsd, currency, prices)}</b></td>
+            </tr></tfoot>
+          )}
         </table>
         {mm?.error && <div className="dim" style={{ fontSize: 12, marginTop: 8 }}>MetaMask: {mm.error}</div>}
       </Collap>

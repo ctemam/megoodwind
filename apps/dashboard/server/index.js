@@ -364,6 +364,42 @@ app.get('/api/wallets', async (_req, res) => {
   res.json({ live: isLive(), wallets })
 })
 
+// Account nicknames — user labels for wallet rows, persisted locally.
+const NICK_FILE = path.join(__dirname, '.wallet-nicknames.json')
+let nicknames = {}
+try { nicknames = JSON.parse(fs.readFileSync(NICK_FILE, 'utf8')) } catch {}
+
+app.get('/api/wallet/nicknames', (_req, res) => res.json(nicknames))
+app.post('/api/wallet/nicknames', (req, res) => {
+  const { address, name } = req.body || {}
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address || '')) return res.status(400).json({ error: 'invalid address' })
+  const key = address.toLowerCase()
+  if (name && String(name).trim()) nicknames[key] = String(name).trim().slice(0, 40)
+  else delete nicknames[key]
+  fs.writeFile(NICK_FILE, JSON.stringify(nicknames), () => {})
+  res.json({ ok: true, nicknames })
+})
+
+// Any-address multi-chain balance — used to fill per-chain columns for
+// MetaMask accounts regardless of which network MetaMask is focused on.
+// Result is wei hex → string; 30s cache keyed by address.
+const balCache = new Map()
+app.get('/api/wallet/balance', async (req, res) => {
+  const address = String(req.query.address || '')
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return res.status(400).json({ error: 'invalid address' })
+  const key = address.toLowerCase()
+  const hit = balCache.get(key)
+  if (hit && Date.now() - hit.t < 30_000) return res.json(hit.d)
+  const d = {}
+  for (const c of Object.keys(CHAINS)) {
+    try { d[c] = await rpc(c, 'eth_getBalance', [key, 'latest']) }
+    catch { d[c] = null }
+  }
+  const out = { address: key, ...d }
+  balCache.set(key, { t: Date.now(), d: out })
+  res.json(out)
+})
+
 // Currency conversion — CoinGecko free API (no key).
 let priceCache = null
 let priceCacheT = 0
