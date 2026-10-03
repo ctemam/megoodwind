@@ -332,6 +332,18 @@ async fn main() -> Result<()> {
         let _ = refresher.refresh(&store).await?;
         pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
 
+        // Quarantine pools whose implied price diverges >3x from same-pair
+        // peers — broken/exhausted state fabricates phantom arb legs.
+        let pool_tokens: HashMap<Address, (Address, Address)> = pool_infos
+            .iter()
+            .map(|p| (p.address, (p.token0, p.token1)))
+            .collect();
+        let quarantined = arb_mempool::impact::quarantine_outlier_pools(
+            &store, &pair_to_pools, &pool_tokens, 3.0);
+        if !quarantined.is_empty() {
+            println!("PROFILER quarantined_pools={quarantined:?}");
+        }
+
         let mut wss_urls = cfg.chain.rpc_wss_pool.clone();
         wss_urls.retain(|u| !u.trim().is_empty());
         if wss_urls.is_empty() {
@@ -349,7 +361,7 @@ async fn main() -> Result<()> {
         let (mut n_rx, mut n_amt, mut n_pair, mut n_cand) = (0u64, 0u64, 0u64, 0u64);
         let (mut n_prof, mut n_gate) = (0u64, 0u64);
         let mut best_bps = 0u32;
-        let mut top: Vec<(u32, f64, &'static str)> = Vec::new();
+        let mut top: Vec<(u32, f64, &'static str, String, Option<f64>)> = Vec::new();
         let mut router_stats: HashMap<&'static str, (u64, u64)> = HashMap::new();
         let mut dumped = 0u32;
 
@@ -410,6 +422,7 @@ async fn main() -> Result<()> {
             else { continue };
             let mut cand: Vec<usize> = Vec::new();
             for pa in &hit_pools {
+                if quarantined.contains(pa) { continue; }
                 if let Some(ids) = pool_to_paths.get(pa) {
                     cand.extend_from_slice(ids);
                 }
@@ -417,9 +430,13 @@ async fn main() -> Result<()> {
             if cand.is_empty() { continue; }
             cand.sort_unstable();
             cand.dedup();
+            cand.retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
+            if cand.is_empty() { continue; }
             n_cand += 1;
 
             let mut best_for_swap: Option<(U256, u32, Address)> = None;
+            let mut best_path: Option<usize> = None;
+            let mut victim_usd_dbg = victim_usd;
             for &pidx in cand.iter().take(20) {
                 let path = &paths[pidx];
                 let (min_a, token_max) = flash_bounds
@@ -445,11 +462,16 @@ async fn main() -> Result<()> {
                 // Cap: a backrun can't extract more than the victim's input.
                 // Capped candidates are phantom projections — excluded from
                 // gate_pass AND the best/top display, same as the runner.
-                let capped = victim_usd.map_or(false, |v| dec.effective_profit_usd > v);
+                // Implausible decoded victim size (>~$100M) = decode garbage,
+                // same unverifiable class as an exceeded cap.
+                let capped = victim_usd.map_or(false, |v| {
+                    v > 1e8 || dec.effective_profit_usd > v
+                });
                 if dec.accept && !capped {
                     n_gate += 1;
                     if best_for_swap.map_or(true, |(p, _, _)| prof > p) {
                         best_for_swap = Some((prof, bps, path.flash_token));
+                        best_path = Some(pidx);
                     }
                 }
             }
@@ -457,7 +479,10 @@ async fn main() -> Result<()> {
                 n_prof += 1;
                 if bps > best_bps { best_bps = bps; }
                 let usd = usd_value(prof, &ft, &token_usd_prices, &token_decimals);
-                top.push((bps, usd, pending.decoded.router));
+                let pools_dbg = best_path
+                    .map(|i| paths[i].hops.iter().map(|h| format!("{:#x}", h.pool)).collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
+                top.push((bps, usd, pending.decoded.router, pools_dbg, victim_usd_dbg));
             }
         }
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -466,8 +491,8 @@ async fn main() -> Result<()> {
              pair_match={n_pair} candidates={n_cand} projected_profitable={n_prof} \
              gate_pass={n_gate} best_bps={best_bps}"
         );
-        for (bps, usd, router) in top.iter().take(10) {
-            println!("PROFILER   BACKRUN bps={bps} gross_usd={usd:.4} router={router}");
+        for (bps, usd, router, pools, vusd) in top.iter().take(10) {
+            println!("PROFILER   BACKRUN bps={bps} gross_usd={usd:.4} router={router} victim_usd={vusd:?} pools={pools}");
         }
         let mut rs: Vec<_> = router_stats.into_iter().collect();
         rs.sort_by(|a, b| b.1.0.cmp(&a.1.0));

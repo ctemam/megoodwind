@@ -305,3 +305,68 @@ fn project_direct(
     let victim_usd = usd_value(amount_in, token_in, usd_prices, decimals);
     Some((projected, vec![pool], victim_usd))
 }
+
+/// Pool-state sanity quarantine: a pool whose implied spot price diverges
+/// from same-pair peers by more than `max_ratio` is broken (manipulated,
+/// exhausted, or misread state) — paths through it fabricate phantom arb.
+/// Returns the set of pool addresses to exclude from candidate evaluation.
+///
+/// Prices are normalized to units of pair token b per token a. V2 price =
+/// reserve1/reserve0; V3 price = (sqrtP/2^96)^2 — both raw-unit ratios, so
+/// decimal adjustment cancels across pools on the same pair.
+pub fn quarantine_outlier_pools(
+    store: &PoolStore,
+    pair_pools: &HashMap<(Address, Address), Vec<(Address, u32)>>,
+    pool_tokens: &HashMap<Address, (Address, Address)>,
+    max_ratio: f64,
+) -> std::collections::HashSet<Address> {
+    let mut out = std::collections::HashSet::new();
+    for ((a, b), pools) in pair_pools {
+        if pools.len() < 2 {
+            continue;
+        }
+        let mut priced: Vec<(Address, f64)> = Vec::new();
+        for (pool, _) in pools {
+            let Some((t0, _)) = pool_tokens.get(pool).copied() else { continue };
+            let Some(state) = store.get(pool) else { continue };
+            let p = match state {
+                PoolState::V2(s) => {
+                    let r0 = s.reserve0.to_string().parse::<f64>().unwrap_or(0.0);
+                    let r1 = s.reserve1.to_string().parse::<f64>().unwrap_or(0.0);
+                    if r0 <= 0.0 { continue }
+                    r1 / r0
+                }
+                PoolState::V3(s) => {
+                    let sp = s.sqrt_price_x96.to_string().parse::<f64>().unwrap_or(0.0);
+                    if sp <= 0.0 { continue }
+                    let q96 = (sp / 79228162514264337593543950336.0).powi(2);
+                    q96
+                }
+                _ => continue,
+            };
+            // Normalize to token(b)-per-token(a): if the pool's token0 is
+            // pair token b, the computed ratio is inverted.
+            let p_norm = if t0 == *a { p } else if p > 0.0 { 1.0 / p } else { continue };
+            if p_norm > 0.0 && p_norm.is_finite() {
+                priced.push((*pool, p_norm));
+            }
+        }
+        // Need >=3 priced pools: with only 2, either could be the broken
+        // one and a two-point "median" is just the larger value — flagging
+        // would hit the healthy pool and spare the outlier.
+        if priced.len() < 3 {
+            continue;
+        }
+        let mut vals: Vec<f64> = priced.iter().map(|(_, p)| *p).collect();
+        vals.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+        // True middle for odd counts; lower-middle for even (conservative:
+        // favours flagging high-side outliers over healthy pools).
+        let median = vals[(vals.len() - 1) / 2];
+        for (pool, p) in priced {
+            if p > median * max_ratio || p < median / max_ratio {
+                out.insert(pool);
+            }
+        }
+    }
+    out
+}

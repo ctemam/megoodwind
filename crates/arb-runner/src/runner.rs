@@ -858,6 +858,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         let fee_bps = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
         pair_to_pools.entry(key).or_default().push((p.address, fee_bps));
     }
+    let pool_tokens: HashMap<Address, (Address, Address)> = pool_infos
+        .iter()
+        .map(|p| (p.address, (p.token0, p.token1)))
+        .collect();
+    let mut quarantined: std::collections::HashSet<Address> =
+        std::collections::HashSet::new();
 
     let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
         .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
@@ -1107,6 +1113,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             Ok((count, elapsed)) => {
                 metrics::STATE_REFRESH_LATENCY.observe(elapsed.as_secs_f64());
                 debug!(block = block_number, pools = count, refresh_ms = elapsed.as_millis(), "State refreshed");
+                // Quarantine pools whose implied price diverges >3x from
+                // same-pair peers — broken/exhausted state fabricates
+                // phantom arb legs on otherwise-real pending swaps.
+                quarantined = arb_mempool::impact::quarantine_outlier_pools(
+                    &store, &pair_to_pools, &pool_tokens, 3.0);
             }
             Err(e) => {
                 warn!(block = block_number, error = %e, "State refresh failed");
@@ -1483,6 +1494,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
             let mut candidate_ids: Vec<usize> = Vec::new();
             for pool_addr in &hit_pools {
+                if quarantined.contains(pool_addr) { continue; }
                 if let Some(ids) = pool_to_paths.get(pool_addr) {
                     candidate_ids.extend_from_slice(ids);
                 }
@@ -1490,6 +1502,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             if candidate_ids.is_empty() { continue; }
             candidate_ids.sort_unstable();
             candidate_ids.dedup();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
+            if candidate_ids.is_empty() { continue; }
             metrics::BACKRUN_CANDIDATES.inc();
 
             {
@@ -1533,6 +1548,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         // model overshot (e.g., a same-tick V3 estimate or an
                         // ambiguous same-pair match).
                         if decision.accept {
+                            if victim_usd.map_or(false, |v| v > 1e8) {
+                                debug!(victim_usd, "Backrun dropped: implausible decoded victim size");
+                                continue;
+                            }
                             if let Some(vusd) = victim_usd {
                                 if decision.effective_profit_usd > vusd {
                                     debug!(
