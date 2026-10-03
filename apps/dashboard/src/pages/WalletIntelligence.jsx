@@ -43,6 +43,7 @@ export default function WalletIntelligence() {
   const [minTrades, setMinTrades] = useState(0)
   const [sort, setSort] = useState(['rank', -1])
   const [open, setOpen] = useState(null)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -127,8 +128,9 @@ export default function WalletIntelligence() {
             <input type="number" min="0" value={minTrades}
               onChange={e => setMinTrades(+e.target.value)} style={{ width: 60, marginLeft: 6 }} /></label>
         </form>
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ overflowX: 'auto', overflowY: expanded ? 'auto' : 'hidden', maxHeight: expanded ? '70vh' : 'none' }}>
           <table>
+            {/* collapsed: top rows inline; expanded: full scrollable list */}
             <thead><tr>{COLS.map(([k, label]) => (
               <th key={k} style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
                 onClick={() => clickSort(k)}>{label}{arrow(k)}</th>
@@ -139,7 +141,7 @@ export default function WalletIntelligence() {
                   {cd ? 'No wallets match the filters.' : 'Loading wallet intelligence…'}
                 </td></tr>
               )}
-              {rows.map(r => {
+              {(expanded ? rows : rows.slice(0, 15)).map(r => {
                 const key = `${r.wallet}/${r.class}`
                 const obs = cd?.obs_tails?.[r.wallet]
                 return (
@@ -196,6 +198,15 @@ export default function WalletIntelligence() {
             </tbody>
           </table>
         </div>
+        {rows.length > 15 && (
+          <div style={{ textAlign: 'center', marginTop: 8 }}>
+            <button className="tag" style={{ cursor: 'pointer' }}
+              onClick={() => setExpanded(e => !e)}>
+              {expanded ? `▴ Collapse — showing all ${rows.length} wallets`
+                : `▾ Expand — ${rows.length - 15} more wallets`}
+            </button>
+          </div>
+        )}
         <div className="dim" style={{ fontSize: 11.5, marginTop: 8 }}>
           All figures are measured from mined-block outcome attribution — never projected.
           State promotion is backend-governed: this page is read-only by design.
