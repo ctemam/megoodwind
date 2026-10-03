@@ -1517,9 +1517,27 @@ app.get('/api/wallet-intelligence', async (req, res) => {
     const scanned = readJsonl(path.join(dir, '_scanned.jsonl'))
     const strategies = readJsonl(path.join(dir, '_strategies.jsonl'))
     const discovered = readJsonl(path.join(dir, '_discovered.jsonl'))
-    let cursor = null, verify = null
+    let cursor = null, verify = null, scanmeta = null
     try { cursor = JSON.parse(fs.readFileSync(path.join(dir, '_cursor.json'), 'utf8')) } catch {}
     try { verify = JSON.parse(fs.readFileSync(path.join(dir, '_verify.json'), 'utf8')) } catch {}
+    try { scanmeta = JSON.parse(fs.readFileSync(path.join(dir, '_scanmeta.json'), 'utf8')) } catch {}
+    // Honest frequency: needs the real scan window + chain block time.
+    let blocksPerHour = null
+    try {
+      const bt = +(tomlScalar(readToml(c), 'block_time_ms') || 0)
+      if (bt > 0 && scanmeta?.scanned_blocks > 0)
+        blocksPerHour = 3600000 / bt / scanmeta.scanned_blocks
+    } catch {}
+    const freqPerHour = trades => (trades == null || blocksPerHour == null) ? null : trades * blocksPerHour
+    const forgeAction = r => {
+      if (r.state === 'expired') return 'expired'
+      if (r.state === 'bounded_live') return `live <$${r.max_notional_usd ?? '?'}`
+      if (r.state === 'shadow') return 'shadow'
+      if (r.sim_verified) return 'verified'
+      if (r.state === 'replay' && r.coverage != null && r.coverage < 1) return 'import route'
+      if (r.state === 'replay') return 'shadow-ready'
+      return 'hold'
+    }
     const stratByWallet = {}
     for (const s of strategies) stratByWallet[`${s.wallet}/${s.class}`] = s
     const discSet = new Set(discovered.map(d => d.wallet))
@@ -1537,6 +1555,8 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         net_after_gas_usd: w.net_after_gas_usd ?? null,
         avg_profit_usd: (w.trade_txs > 0 && w.net_after_gas_usd != null)
           ? w.net_after_gas_usd / w.trade_txs : null,
+        freq_per_hour: freqPerHour(w.trade_txs),
+        shadow_precision: null, revert_rate: null,
         private_hits: w.private_hits ?? 0, atomic_txs: w.atomic_txs ?? 0,
         coverage: strat?.coverage ?? null,
         route_pools: strat?.route_pools ?? [],
@@ -1550,6 +1570,7 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         discovered_pending: discSet.has(w.address),
         best_tx: w.best_tx ?? null,
       })
+      rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
       inRows.add(`${w.address}/${w.class}`)
     }
     // Registry strategies with no scan row (expired-visibility preserved).
@@ -1563,6 +1584,8 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         net_after_gas_usd: s.net_pnl_usd ?? null,
         avg_profit_usd: (s.sample_trades > 0 && s.net_pnl_usd != null)
           ? s.net_pnl_usd / s.sample_trades : null,
+        freq_per_hour: freqPerHour(s.sample_trades),
+        shadow_precision: null, revert_rate: null,
         private_hits: 0, atomic_txs: 0,
         coverage: s.coverage ?? null, route_pools: s.route_pools ?? [],
         executor_family: s.executor_family ?? null,
@@ -1574,6 +1597,7 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         max_notional_usd: s.max_notional_usd ?? null,
         discovered_pending: discSet.has(s.wallet), best_tx: null,
       })
+      rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
     }
     // Observation tails for the detail drawer (last 5 per wallet on demand —
     // cheap: files are bounded and only present for observed wallets).

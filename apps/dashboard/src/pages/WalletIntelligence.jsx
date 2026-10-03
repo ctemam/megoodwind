@@ -11,12 +11,14 @@ const D = '—' // missing values are never inferred
 
 const COLS = [
   ['rank', 'Rank'], ['wallet', 'Wallet'], ['class', 'Strategy'],
-  ['state', 'State'], ['trades', 'Trades'], ['win_rate', 'Win %'],
+  ['state', 'State'], ['trades', 'Trades'], ['freq_per_hour', 'Freq/hr*'],
+  ['win_rate', 'Win %'],
   ['median_win_usd', 'Median win'], ['net_after_gas_usd', 'Net P&L'],
   ['avg_profit_usd', 'Avg/trade'], ['private_hits', 'Priv hits'],
-  ['coverage', 'Route cov'], ['verified_profit_usd', 'Sim P&L'],
+  ['coverage', 'Route cov'], ['shadow_precision', 'Shadow prec'],
+  ['revert_rate', 'Revert %'], ['verified_profit_usd', 'Sim P&L'],
   ['confidence', 'Conf'], ['last_seen_block', 'Last seen'],
-  ['expires_at_block', 'Expiry'],
+  ['expires_at_block', 'Expiry'], ['forge_action', 'Forge'],
 ]
 
 // Forge score — same composite as leader_scan's ranking.
@@ -64,8 +66,9 @@ export default function WalletIntelligence() {
       .filter(x => (x.trades ?? 0) >= minTrades)
     const [k, dir] = sort
     r.sort((a, b) => {
-      const av = k === 'wallet' || k === 'class' || k === 'state' ? a[k] : num(a[k])
-      const bv = k === 'wallet' || k === 'class' || k === 'state' ? b[k] : num(b[k])
+      const strCols = ['wallet', 'class', 'state', 'forge_action']
+      const av = strCols.includes(k) ? a[k] : num(a[k])
+      const bv = strCols.includes(k) ? b[k] : num(b[k])
       if (av == null) return 1
       if (bv == null) return -1
       return (av > bv ? 1 : av < bv ? -1 : 0) * dir
@@ -157,6 +160,8 @@ export default function WalletIntelligence() {
                       <td>{r.class}</td>
                       <td><span className={`tag ${STATE_STYLE[r.state] || ''}`}>{r.state}</span></td>
                       <td>{r.trades ?? D}</td>
+                      <td className="dim" title="trades/hr in scan window · projected">
+                        {r.freq_per_hour == null ? D : r.freq_per_hour.toFixed(1)}</td>
                       <td className={(r.win_rate ?? 0) >= 0.8 ? 'pos' : ''}>{pct(r.win_rate)}</td>
                       <td>{usd(r.median_win_usd)}</td>
                       <td className={(r.net_after_gas_usd ?? 0) > 0 ? 'pos' : 'neg'}>
@@ -164,11 +169,14 @@ export default function WalletIntelligence() {
                       <td>{usd(r.avg_profit_usd)}</td>
                       <td>{r.private_hits > 0 ? <b className="pos">{r.private_hits}</b> : r.private_hits}</td>
                       <td>{r.coverage == null ? D : `${(r.coverage * 100).toFixed(0)}% (${r.route_pools.length}p)`}</td>
+                      <td className="dim">{r.shadow_precision == null ? D : pct(r.shadow_precision)}</td>
+                      <td className="dim">{r.revert_rate == null ? D : pct(r.revert_rate)}</td>
                       <td className={r.sim_verified ? 'pos' : ''}>
                         {r.sim_verified ? usd(r.verified_profit_usd) : D}</td>
                       <td>{r.confidence == null ? D : r.confidence.toFixed(2)}</td>
                       <td className="dim">{blk(r.last_seen_block)}</td>
                       <td className="dim">{blk(r.expires_at_block)}</td>
+                      <td className="dim">{r.forge_action ?? D}</td>
                     </tr>
                     {open === key && (
                       <tr className="detail"><td colSpan={COLS.length}>

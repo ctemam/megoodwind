@@ -547,6 +547,18 @@ async fn main() -> Result<()> {
     }
     let _ = strat.save();
     let _ = arb_leaders::StrategyRegistry::save_cursor(&chain, hi);
+    // Scan window metadata so consumers (dashboard) can derive honest
+    // frequency metrics instead of assuming a window.
+    let _ = std::fs::write(
+        format!("{data_dir}/_scanmeta.json"),
+        serde_json::json!({
+            "from_block": lo,
+            "to_block": hi,
+            "scanned_blocks": hi.saturating_sub(lo) + 1,
+            "at": chrono::Utc::now().to_rfc3339(),
+        })
+        .to_string(),
+    );
     let n_live = strat
         .records
         .values()
