@@ -23,7 +23,7 @@ arb_contract = "0xe4286046a9d739Cdb61Fb5a7ad3e72361BF7d277"
 state_reader = "0xec3d37cd945bf2a6a6d2712e56c688a08273e7a2"
 block_time_ms = 2000
 scan_budget_ms = 1200
-call_deadline_ms = 900  # lightened batches (MC3_MAX_CALLS=30) answer well under this on healthy public endpoints
+call_deadline_ms = 2200  # lightened batches (MC3_MAX_CALLS=30) answer well under this on healthy public endpoints
 
 [wallet]
 private_key_env = "PRIVATE_KEY"
