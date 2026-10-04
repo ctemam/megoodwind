@@ -12,7 +12,7 @@
 //!
 //! Rows: LEADER_SCAN (per-wallet aggregate), LEADER_SCAN_TX (largest txs).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_provider::Provider as _;
@@ -189,6 +189,10 @@ async fn main() -> Result<()> {
     // Counterparty addresses seen inside profitable txs, with hit counts —
     // candidate pools for auto-import.
     let mut pool_candidates: HashMap<Address, u32> = HashMap::new();
+    // Pools confirmed inside decoded leader routes — first-class import
+    // candidates regardless of hit count or s_contracts membership (a wallet
+    // calling a pair directly puts the pool into s_contracts too).
+    let mut route_pool_addrs: HashSet<Address> = HashSet::new();
     let _ = &mut s_contracts;
     let senders_unused = ();
     let mut dec_cache: HashMap<Address, u32> = HashMap::new();
@@ -673,24 +677,27 @@ async fn main() -> Result<()> {
                     }
                     let mut w_sorted: Vec<(Address, u32)> =
                         workers.into_iter().collect();
-                    w_sorted.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+                    // Deterministic tie-break on count — equal-count workers
+                    // must not reorder between runs (HashMap iteration is
+                    // per-process random).
+                    w_sorted.sort_by(|(a, ca), (b, cb)| {
+                        cb.cmp(ca).then_with(|| a.cmp(b))
+                    });
                     pending.clear();
-                    for (w, _) in w_sorted.into_iter().take(6) {
+                    for (w, _) in w_sorted.into_iter().take(16) {
                         println!(
                             "EXEC_WORKER {addr:#x} exec={exec:#x} worker={w:#x}"
                         );
-                        let mut n = 0u8;
                         for (h, _) in to_index
                             .get(&w)
                             .map(|v| v.as_slice())
                             .unwrap_or(&[])
                         {
-                            if n >= 4 {
+                            if pending.len() >= 384 {
                                 break;
                             }
                             if seen_txs.insert(*h) {
                                 pending.push(*h);
-                                n += 1;
                             }
                         }
                     }
@@ -738,6 +745,7 @@ async fn main() -> Result<()> {
         // Close the loop: shadow-missing counterparties go straight into the
         // probe set even when their raw hit count ranks below the top-80 cut.
         for p in &route_pools {
+            route_pool_addrs.insert(*p);
             if !tracked.contains(p) {
                 pool_candidates.entry(*p).or_insert(1);
             }
@@ -891,6 +899,29 @@ async fn main() -> Result<()> {
         .map(|(a, n)| (*a, *n))
         .collect();
     cand.sort_by(|a, b| b.1.cmp(&a.1));
+    // Route-discovered pools are probed first — a pool inside a decoded
+    // leader route outranks any transfer-graph counterparty, and s_contracts
+    // membership can't exclude it (the on-chain provenance gate below is the
+    // real filter).
+    let mut seen: HashSet<Address> = HashSet::new();
+    let mut probe_list: Vec<(Address, u32)> = Vec::new();
+    for a in &route_pool_addrs {
+        if !tracked.contains(a)
+            && !tokens.values().any(|t| t == a)
+            && seen.insert(*a)
+        {
+            probe_list.push((*a, *pool_candidates.get(a).unwrap_or(&1)));
+        }
+    }
+    for (a, n) in cand {
+        if probe_list.len() >= 80 {
+            break;
+        }
+        if seen.insert(a) {
+            probe_list.push((a, n));
+        }
+    }
+    probe_list.truncate(80);
     let mut pools_toml = String::from(
         "# auto-discovered pools from leader routes — merge into config [[pools]]\n",
     );
@@ -899,7 +930,7 @@ async fn main() -> Result<()> {
     let mut n_thin = 0u32;
     let addr_of = |sel: [u8; 4]| alloy_primitives::Bytes::from(sel.to_vec());
     let mut new_tokens: Vec<String> = Vec::new();
-    for (addr, hits) in cand.iter().take(80) {
+    for (addr, hits) in probe_list.iter() {
         let slot0 = endpoint
             .eth_call_timed(*addr, addr_of([0x38, 0x50, 0xc7, 0xbd]))
             .await
