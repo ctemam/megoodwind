@@ -934,7 +934,7 @@ fn log_accepted_opportunity(
     effective_usd: f64,
     profit_bps: u32,
     ready: bool,
-) {
+) -> arb_core::opportunity::ActionableOpportunity {
     use arb_core::opportunity::{ActionableOpportunity, ExecutionStatus, SimulationStatus};
     let tx_short: String = ref_tx.chars().take(18).collect();
     let mut o = ActionableOpportunity::new(
@@ -957,6 +957,7 @@ fn log_accepted_opportunity(
     if let Err(e) = o.append_jsonl(&dir) {
         debug!(error = %e, "opportunity feed append failed");
     }
+    o
 }
 
 fn write_status_json(
@@ -1793,10 +1794,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     .iter()
                     .map(|h| format!("{}", h.pool))
                     .collect();
-                log_accepted_opportunity(
+                // Gate-accepts are logged as sim-verified (evaluated only).
+                // execution_status=ready is appended only at the moment a
+                // live submission is attempted; candidates that die at the
+                // probe/bundle/venue stages get a rejection_reason instead —
+                // "actionable" must always mean "ready to execute".
+                let mut logged_opp = log_accepted_opportunity(
                     chain_label, "classic", "classic_engine",
                     &format!("blk{block_number}"), &paths[best_path_idx],
-                    effective_usd, best.profit_bps, !dry_run && !executor_broken);
+                    effective_usd, best.profit_bps, false);
+                let feed_dir = format!("data/leaders/{chain_label}");
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
                     gross_profit = %best.gross_profit, flash_amount = %best.flash_amount,
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
@@ -1876,6 +1883,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                                     best.path_id,
                                                     block_number,
                                                 );
+                                                logged_opp.mark_rejected(
+                                                    "simulation_revert", &feed_dir);
                                             } else {
                                                 warn!(
                                                     path_id = best.path_id,
@@ -1890,6 +1899,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             }
                             endpoint.bump_nonce();
                             circuit_breaker.record_submit(best.path_id);
+                            // Passed gate + exec probe — mark ready at the
+                            // moment of submission, per ExecutionStatus::Ready.
+                            logged_opp.execution_status =
+                                arb_core::opportunity::ExecutionStatus::Ready;
+                            let _ = logged_opp.append_jsonl(&feed_dir);
                             let budget_ok = warp_spent_this_session < warp_budget_usd;
                             let use_high_ev = budget_ok && effective_usd >= warp_threshold_usd;
                             if !budget_ok {
@@ -1930,8 +1944,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 .signed_txs
                                 .last()
                                 .map(|t| alloy_primitives::keccak256(t));
+                            let no_results = sub_results.is_empty();
                             let mut any_hash: Option<(String, &'static str)> = None;
                             let mut builder_sim_rejected = false;
+                            let mut venue_rejected = false;
+                            let mut venue_errored = false;
                             for arb_submit::router::RoutedSubmit { venue, tier, result, .. } in sub_results {
                                 match result {
                                     Ok(r) if r.success => {
@@ -1941,6 +1958,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         }
                                     }
                                     Ok(r) => {
+                                        venue_rejected = true;
                                         let err_str = r.error.as_deref().unwrap_or("");
                                         let is_sim_reject = err_str.contains("non-reverting tx in bundle failed")
                                             || err_str.contains("bundle execution failed")
@@ -1952,6 +1970,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         debug!(venue, error = ?r.error, "Rejected");
                                     }
                                     Err(e) => {
+                                        venue_errored = true;
                                         if let Some(reason) =
                                             arb_submit::pimlico::sponsorship_reject_reason(&e)
                                         {
@@ -1999,6 +2018,19 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 circuit_breaker.record_revert(best.path_id, block_number);
                             }
 
+                            // No venue accepted — the opportunity was never
+                            // executable in practice; record why so the row
+                            // leaves the actionable set.
+                            if any_hash.is_none() {
+                                logged_opp.mark_rejected(
+                                    if no_results { "no_venue" }
+                                    else if venue_rejected { "builder_reject" }
+                                    else if venue_errored { "venue_error" }
+                                    else { "no_venue" },
+                                    &feed_dir,
+                                );
+                            }
+
                             // Keep the session Warp spend in sync with the metric
                             if use_high_ev {
                                 warp_spent_this_session += 0.15;
@@ -2030,7 +2062,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         TxOutcome::Revert => circuit_breaker.record_revert(best.path_id, block_number),
                                         TxOutcome::Dropped => {}
                                     }
-                                    record_settlement(&settle_ctx, hash_venue, &hash, &res, &[]);
+                                    record_settlement(&settle_ctx, hash_venue, &hash, &res,
+                                        &[logged_opp.opportunity_id.clone()]);
                                     let landed_ok = metrics::SUBMIT_LANDED.with_label_values(&["success"]).get() as u64;
                                     let landed_revert = metrics::SUBMIT_LANDED.with_label_values(&["revert"]).get() as u64;
                                     let status = if landed_ok > 0 { "SUCCESS" } else if landed_revert > 0 { "REVERT" } else { "DROPPED" };
@@ -2055,13 +2088,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 } else {
                                     spawn_settlement(
                                         settle_ctx.clone(), hash_venue, Some(hash),
-                                        our_tx_hash, Vec::new(),
+                                        our_tx_hash, vec![logged_opp.opportunity_id.clone()],
                                         Some((best.path_id, cb_tx.clone(), block_number)),
                                     );
                                 }
                             }
                         }
-                        Err(e) => error!(error = %e, "Failed to build bundle"),
+                        Err(e) => {
+                            error!(error = %e, "Failed to build bundle");
+                            logged_opp.mark_rejected("bundle_build_failed", &feed_dir);
+                        }
                     }
                 } else {
                     info!(path_id = best.path_id, effective_usd = format!("{:.4}", effective_usd),
@@ -2414,16 +2450,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
                                 "Backrun candidate found"
                             );
-                            // Feed only re-verified candidates: gate accepts that
-                            // die at the re-check are phantom edges, not
-                            // actionable opportunities.
-                            log_accepted_opportunity(
-                                chain_label, "backrun",
-                                &format!("{}", pending.from),
-                                &format!("{}", pending.tx_hash),
-                                path, _effective_usd,
-                                sim.profit_bps, !dry_run);
-                            metrics::BACKRUN_SUBMITTED.inc();
+
 
                             // Build a true [victim, ours] ordered bundle: the
                             // watcher streams full pending txs, so the victim's
@@ -2515,11 +2542,24 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         }
                                     }
                                 }
+                                // Feed only candidates that cleared the
+                                // re-check AND the exec probe — a row marked
+                                // ready means "every gate stands and this is
+                                // being submitted", never "sim-positive once".
+                                let feed_dir = format!("data/leaders/{chain_label}");
+                                let mut logged_opp = log_accepted_opportunity(
+                                    chain_label, "backrun",
+                                    &format!("{}", pending.from),
+                                    &format!("{}", pending.tx_hash),
+                                    path, _effective_usd,
+                                    sim.profit_bps, !dry_run);
+                                metrics::BACKRUN_SUBMITTED.inc();
                                 endpoint.bump_nonce();
                                 let matched_opp_ids: Vec<String> = matched
                                     .iter()
                                     .map(|(id, _)| id.clone())
                                     .collect();
+                                let mut matched_logged = Vec::new();
                                 if !matched.is_empty() {
                                     // A verified leader route matched this
                                     // victim and survived gate+probe to a
@@ -2541,6 +2581,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                             o.execution_status =
                                                 arb_core::opportunity::ExecutionStatus::Submitted;
                                             let _ = o.append_jsonl(&dir);
+                                            matched_logged.push(o);
                                         }
                                     }
                                 }
@@ -2560,7 +2601,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     .await;
                                 metrics::PENDING_TO_SUBMIT
                                     .observe(pending.seen_at.elapsed().as_secs_f64());
-                                if sub_results.is_empty() && bundle.victim_tx.is_some() {
+                                let no_results = sub_results.is_empty();
+                                if no_results && bundle.victim_tx.is_some() {
                                     metrics::BACKRUN_NO_VENUE.inc();
                                     warn!(
                                         "Backrun bundle dropped: no bundle-capable venue \
@@ -2568,9 +2610,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                          cannot order after a victim tx)"
                                     );
                                 }
+                                let mut any_accepted = false;
+                                let mut venue_rejected = false;
+                                let mut venue_errored = false;
+                                let mut settle_opp_ids = matched_opp_ids.clone();
+                                settle_opp_ids.push(logged_opp.opportunity_id.clone());
                                 for r in sub_results {
                                     match r.result {
                                         Ok(res) if res.success => {
+                                            any_accepted = true;
                                             metrics::BACKRUN_STAGES
                                                 .with_label_values(&["venue_accept"])
                                                 .inc();
@@ -2582,11 +2630,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                             spawn_settlement(
                                                 settle_ctx.clone(), r.venue,
                                                 res.bundle_hash.clone(), our_tx_hash,
-                                                matched_opp_ids.clone(),
+                                                settle_opp_ids.clone(),
                                                 Some((path.id, cb_tx.clone(), block_number)),
                                             );
                                         }
                                         Ok(res) => {
+                                            venue_rejected = true;
                                             metrics::BACKRUN_STAGES
                                                 .with_label_values(&["venue_reject"])
                                                 .inc();
@@ -2594,12 +2643,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                                 "Backrun rejected");
                                         }
                                         Err(e) => {
+                                            venue_errored = true;
                                             metrics::BACKRUN_STAGES
                                                 .with_label_values(&["venue_error"])
                                                 .inc();
                                             warn!(venue = r.venue, error = %e,
                                                 "Backrun venue error");
                                         }
+                                    }
+                                }
+                                if !any_accepted {
+                                    // Never reached a venue — the row must
+                                    // leave the actionable set, with the
+                                    // machine-readable reason it died.
+                                    let reason = if no_results { "no_venue" }
+                                        else if venue_rejected { "builder_reject" }
+                                        else if venue_errored { "venue_error" }
+                                        else { "no_venue" };
+                                    logged_opp.mark_rejected(reason, &feed_dir);
+                                    for mut o in matched_logged {
+                                        o.mark_rejected(reason, &feed_dir);
                                     }
                                 }
                             } else {

@@ -42,7 +42,7 @@ export default function Opportunities() {
   }, [cd, showRejected])
   const [sorted, th] = useSort(rows, ['allbright_net_usd', -1])
   const funnel = cd?.funnel || {}
-  const actionable = rows.filter(r => r.execution_status === 'ready')
+  const actionable = rows.filter(r => r.execution_status === 'ready' && !r.rejection_reason)
 
   return (
     <div className="grid">

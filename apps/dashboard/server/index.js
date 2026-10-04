@@ -1759,7 +1759,7 @@ app.get('/api/opportunities', async (req, res) => {
       decoded: rows.length,
       replay_attempts: rows.filter(o => o.simulation_status && o.simulation_status !== 'pending').length,
       replay_positive: rows.filter(o => o.simulation_status === 'pass').length,
-      actionable: rows.filter(o => o.execution_status === 'ready').length,
+      actionable: rows.filter(o => o.execution_status === 'ready' && !o.rejection_reason).length,
       matched_live: 0, submitted: 0,
     }
     for (const o of rows) {

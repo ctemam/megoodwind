@@ -86,7 +86,8 @@ pub struct ActionableOpportunity {
     /// Machine-readable rejection when not actionable
     /// (no_victim_context, route_untracked, state_stale,
     /// negative_net_after_gas, pool_quarantined, simulation_revert,
-    /// builder_reject, landed_revert, settlement_mismatch).
+    /// builder_reject, venue_error, no_venue, bundle_build_failed,
+    /// landed_revert, settlement_mismatch).
     #[serde(default)]
     pub rejection_reason: String,
     /// Realized P&L after settlement feedback, USD.
@@ -139,6 +140,21 @@ impl ActionableOpportunity {
         self.simulation_status == SimulationStatus::Pass
             && self.allbright_net_usd > 0.0
             && self.rejection_reason.is_empty()
+    }
+
+    /// Terminal update for a candidate that was logged while being evaluated
+    /// but then died before/at submission (exec probe, bundle build, venue).
+    /// Appending preserves the audit trail; `rejection_reason` removes it
+    /// from the actionable set — a row may claim "ready to execute" only
+    /// while every downstream gate still stands.
+    pub fn mark_rejected(&mut self, reason: &str, dir: &str) {
+        self.execution_status = ExecutionStatus::None;
+        self.rejection_reason = reason.to_string();
+        self.unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let _ = self.append_jsonl(dir);
     }
 
     /// Append one record to data/leaders/<chain>/_opportunities.jsonl.
