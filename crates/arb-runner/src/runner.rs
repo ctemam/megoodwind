@@ -1553,6 +1553,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         Address::ZERO
     });
     let dry_run = dry_run_override;
+    metrics::DRY_RUN.set(if dry_run { 1.0 } else { 0.0 });
 
     // Settlement context — realized-P&L tracking needs the executor address,
     // token prices/decimals, native price for gas, and the bundler URL for
@@ -1733,6 +1734,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 }
                 if decision.accept {
                     metrics::GATE_ACCEPTS.inc();
+                    metrics::ACCEPTED_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     let sym = token_syms
@@ -2188,6 +2190,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         let decision = profit_gate.should_submit(&sim, path);
                         if decision.accept {
                             metrics::GATE_ACCEPTS.inc();
+                            metrics::ACCEPTED_PROFIT_USD.inc_by(decision.effective_profit_usd);
                             metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
                             info!(
                                 path_id = path.id,

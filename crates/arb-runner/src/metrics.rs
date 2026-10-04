@@ -141,6 +141,20 @@ lazy_static::lazy_static! {
         "Profit-gate accepted candidates (resting + backrun)"
     ).unwrap();
 
+    /// Cumulative projected net USD of gate-accepted candidates — the
+    /// pipeline's projected P&L before execution, resting + backrun.
+    pub static ref ACCEPTED_PROFIT_USD: Counter = register_counter!(
+        "arb_accepted_profit_usd_total",
+        "Cumulative projected net USD of profit-gate accepted candidates"
+    ).unwrap();
+
+    /// 1 when the runner is in dry-run (measure mode: full pipeline, no
+    /// on-chain submission), 0 when live. Lets dashboards show the mode.
+    pub static ref DRY_RUN: Gauge = register_gauge!(
+        "arb_dry_run",
+        "1 = dry-run measure mode, 0 = live submission"
+    ).unwrap();
+
     pub static ref SPONSORSHIP_REJECTS: CounterVec = register_counter_vec!(
         "arb_sponsorship_rejects_total",
         "Sponsored UserOperation rejections by reason (gasless mode)",
@@ -194,6 +208,9 @@ pub fn start_metrics_server(port: u16) -> JoinHandle<()> {
     // series before the first event — dashboards rely on key presence.
     let _ = GROSS_PROFIT_USD.get();
     let _ = NET_PROFIT_USD.get();
+    let _ = GATE_ACCEPTS.get();
+    let _ = ACCEPTED_PROFIT_USD.get();
+    let _ = DRY_RUN.get();
     tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/metrics", axum::routing::get(metrics_handler))
