@@ -137,6 +137,7 @@ pub async fn build_bundle(
 
     Ok(Bundle {
         signed_txs: vec![buf],
+        victim_tx: None,
         target_block,
         chain_id,
         backrun_tx: None,

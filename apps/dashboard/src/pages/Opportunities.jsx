@@ -1,38 +1,103 @@
-import React from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useApp } from '../state.jsx'
+import { useSort } from '../Sortable.jsx'
+
+const D = '—' // missing values are never inferred
+const trunc = a => (a ? `${a.slice(0, 8)}…${a.slice(-4)}` : D)
+const usd = v => (v == null || v === 0 ? D : `$${v.toLocaleString(undefined, { maximumFractionDigits: 2 })}`)
+const bps = v => (v == null || v === 0 ? D : `${v.toFixed(0)}`)
+const ms = v => (v == null || v === 0 ? D : `${v}ms`)
+
+const SIM_STYLE = { pass: 'live', fail: '', pending: 'dry', unusable: '' }
+const EXEC_STYLE = {
+  none: '', ready: 'dry', submitted: 'dry',
+  landed: 'live', settled: 'live', reverted: '', dropped: '',
+}
+const STAGES = ['decoded', 'replay_attempts', 'replay_positive', 'actionable',
+  'matched_live', 'submitted', 'landed', 'settled']
 
 export default function Opportunities() {
-  const { all } = useApp()
-  const chains = all.chains || {}
-  const data = ['bsc', 'base'].map(c => ({
-    chain: c.toUpperCase(),
-    evaluated: chains[c]?.arb_paths_evaluated_total || 0,
-    profitable: chains[c]?.arb_profitable_found_total || 0,
-    backrun: chains[c]?.arb_backrun_candidates_total || 0,
-    suppressed: chains[c]?.arb_path_suppressed_total || 0,
-  }))
+  const { refreshMs } = useApp()
+  const [data, setData] = useState(null)
+  const [chain, setChain] = useState('bsc')
+  const [showRejected, setShowRejected] = useState(false)
+
+  useEffect(() => {
+    let dead = false
+    const tick = async () => {
+      try {
+        const r = await fetch('/api/opportunities')
+        if (r.ok && !dead) setData(await r.json())
+      } catch {}
+    }
+    tick(); const t = setInterval(tick, refreshMs || 10000)
+    return () => { dead = true; clearInterval(t) }
+  }, [refreshMs])
+
+  const chains = Object.keys(data?.chains || {})
+  const cd = data?.chains?.[chain]
+  const rows = useMemo(() => {
+    const r = cd?.rows || []
+    return showRejected ? r : r.filter(o => o.simulation_status === 'pass')
+  }, [cd, showRejected])
+  const [sorted, th] = useSort(rows, ['allbright_net_usd', -1])
+  const funnel = cd?.funnel || {}
+  const actionable = rows.filter(r => r.simulation_status === 'pass' && !r.rejection_reason)
+
   return (
     <div className="grid">
       <div className="grid cards">
-        {data.map(d => (
-          <React.Fragment key={d.chain}>
-            <div className="card"><div className="k">{d.chain} profitable</div><div className="v pos">{d.profitable.toLocaleString()}</div><div className="s">of {d.evaluated.toLocaleString()} evals ({d.evaluated ? (d.profitable / d.evaluated * 100).toFixed(3) : 0}%)</div></div>
-            <div className="card"><div className="k">{d.chain} backrun candidates</div><div className="v">{d.backrun.toLocaleString()}</div><div className="s">mempool-matched swaps</div></div>
-          </React.Fragment>
-        ))}
+        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s">sim-verified, no rejection</div></div>
+        <div className="card"><div className="k">Decoded routes</div><div className="v">{funnel.decoded ?? D}</div><div className="s">leader tx → route + victim</div></div>
+        <div className="card"><div className="k">Replay positive</div><div className="v">{funnel.replay_positive ?? D}</div><div className="s">of {funnel.replay_attempts ?? D} attempts</div></div>
+        <div className="card"><div className="k">Matched live</div><div className="v">{funnel.matched_live ?? D}</div><div className="s">victim touched a verified route</div></div>
+        <div className="card"><div className="k">Submitted</div><div className="v">{funnel.submitted ?? D}</div><div className="s">landed {funnel.landed ?? D} · settled {funnel.settled ?? D}</div></div>
       </div>
+
       <div className="panel">
-        <h3>Funnel — evaluated vs profitable vs suppressed</h3>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={data}>
-            <XAxis dataKey="chain" stroke="#8a93a6" /><YAxis stroke="#8a93a6" />
-            <Tooltip contentStyle={{ background: '#171d29', border: '1px solid #232a3a' }} />
-            <Bar dataKey="profitable" fill="#2fd17c" name="Profitable" />
-            <Bar dataKey="backrun" fill="#4f8cff" name="Backrun candidates" />
-            <Bar dataKey="suppressed" fill="#ff5c6c" name="Suppressed" />
-          </BarChart>
-        </ResponsiveContainer>
+        <div className="row" style={{ marginBottom: 8 }}>
+          <h3 style={{ margin: 0 }}>Actionable opportunities</h3>
+          <div className="tabs">
+            {chains.map(c => (
+              <button key={c} className={`tab${c === chain ? ' on' : ''}`} onClick={() => setChain(c)}>{c.toUpperCase()}</button>
+            ))}
+            <button className={`tab${showRejected ? ' on' : ''}`} onClick={() => setShowRejected(v => !v)}>
+              {showRejected ? 'all' : 'pass only'}
+            </button>
+          </div>
+        </div>
+        <div className="muted" style={{ marginBottom: 8 }}>
+          An opportunity is actionable only when our simulator reproduces positive net on live state — leader P&amp;L alone is evidence, never a signal.
+        </div>
+        <table className="tbl">
+          <thead><tr>
+            {th('rank', 'Rank')}{th('source_wallet', 'Source')}{th('victim_tx', 'Victim')}
+            {th('route_n', 'Route')}{th('leader_net_usd', 'Leader net')}{th('allbright_net_usd', 'Our net')}
+            {th('profit_bps', 'Bps')}{th('state_age_ms', 'State age')}{th('inclusion_deadline', 'Deadline')}
+            {th('simulation_status', 'Sim')}{th('execution_status', 'Exec')}{th('rejection_reason', 'Reject')}
+          </tr></thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr><td colSpan="12" className="muted">No {showRejected ? '' : 'passing '}opportunity records — run leader_scan + profit_profile to populate.</td></tr>
+            )}
+            {sorted.map((o, i) => (
+              <tr key={o.opportunity_id}>
+                <td className="muted">{i + 1}</td>
+                <td title={`${o.source_wallet} · ${o.source_tx}`}>{trunc(o.source_wallet)}</td>
+                <td title={o.victim_tx || 'no victim context'}>{trunc(o.victim_tx)}</td>
+                <td title={o.route_pools?.join('\n')}>{o.route_pools?.length || 0} pools</td>
+                <td className="num">{usd(o.leader_net_usd)}</td>
+                <td className="num pos">{usd(o.allbright_net_usd)}</td>
+                <td className="num">{bps(o.profit_bps)}</td>
+                <td className="num">{ms(o.state_age_ms)}</td>
+                <td className="num">{o.inclusion_deadline || D}</td>
+                <td><span className={`tag ${SIM_STYLE[o.simulation_status] || ''}`}>{o.simulation_status || D}</span></td>
+                <td><span className={`tag ${EXEC_STYLE[o.execution_status] || ''}`}>{o.execution_status || D}</span></td>
+                <td className="muted">{o.rejection_reason || D}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )

@@ -5,6 +5,7 @@ pub mod wombat;
 pub mod dodo;
 pub mod aerodrome;
 pub mod types;
+pub mod opportunity;
 
 use alloy_primitives::{Address, U256};
 use thiserror::Error;

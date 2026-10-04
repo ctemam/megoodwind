@@ -39,6 +39,9 @@ use crate::metrics;
 const CIRCUIT_BREAKER_MAX_REVERTS: u32 = 3;
 const CIRCUIT_BREAKER_SUPPRESS_BLOCKS: u64 = 30;
 const CIRCUIT_BREAKER_DECAY_BLOCKS: u64 = 100;
+/// A pool whose last successful state read is older than this is stale —
+/// candidate paths through it are suppressed before optimization.
+const STALE_STATE_MAX_AGE_MS: u64 = 90_000;
 
 mod quote_uni {
     alloy::sol! {
@@ -63,6 +66,9 @@ alloy::sol! {
 /// Aerodrome Slipstream QuoterV2 on Base.
 const UNI_QUOTER_BSC: Address = alloy_primitives::address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997");
 const UNI_QUOTER_BASE: Address = alloy_primitives::address!("3d4e44Eb1374240CE5F1B871ab261CD16335B76a");
+/// Canonical Uniswap V3 QuoterV2 — deterministic CREATE2 deployment, same
+/// address on Ethereum, Polygon and most UniV3 chains.
+const UNI_QUOTER_UNI: Address = alloy_primitives::address!("61fFE014bA17989E743c5F6cB21bF9697530B21e");
 const SLIP_QUOTER_BASE: Address = alloy_primitives::address!("254cF9E1E6e233aa1AC962CB9B05b2cfeAae15b0");
 
 /// A concentrated-liquidity pool can report `liquidity() > 0` while its
@@ -140,7 +146,8 @@ async fn probe_dead_v3_pools(
                 } else if chain_id == spec::BASE_CHAIN_ID {
                     UNI_QUOTER_BASE
                 } else {
-                    continue;
+                    // Other UniV3 chains share the canonical QuoterV2 deploy.
+                    UNI_QUOTER_UNI
                 };
                 (q, v3.fee)
             }
@@ -351,6 +358,15 @@ impl PathCircuitBreaker {
         s.total_successes += 1;
     }
 
+    /// Historical revert rate for a path (0.0 when never submitted) — used
+    /// as the revert-risk term in route_score ranking.
+    fn revert_rate(&self, path_id: u32) -> f64 {
+        self.stats
+            .get(&path_id)
+            .map(|s| s.total_reverts as f64 / s.total_submits.max(1) as f64)
+            .unwrap_or(0.0)
+    }
+
     fn suppressed_count(&self, current_block: u64) -> usize {
         self.stats.values().filter(|s| current_block < s.suppressed_until_block).count()
     }
@@ -387,6 +403,10 @@ struct TokenCircuitBreaker {
     suppression_blocks: u64,
     blacklist: HashSet<Address>,
     popular_intermediaries: HashSet<Address>,
+    /// Bait telemetry (stealth L4): pools repeatedly present in paths that
+    /// gate-pass then revert on exec-probe/submit are griefing or honeypot
+    /// signatures — flagged pools suppress candidate paths like tokens.
+    pool_stats: HashMap<Address, TokenBreakerStats>,
 }
 
 struct TokenBreakerStats {
@@ -403,6 +423,7 @@ impl TokenCircuitBreaker {
             suppression_blocks,
             blacklist: HashSet::new(),
             popular_intermediaries: HashSet::new(),
+            pool_stats: HashMap::new(),
         }
     }
 
@@ -438,15 +459,41 @@ impl TokenCircuitBreaker {
         }
     }
 
+    fn is_pool_bait_flagged(&self, pool: Address, current_block: u64) -> bool {
+        self.pool_stats
+            .get(&pool)
+            .map_or(false, |s| current_block < s.suppressed_until_block)
+    }
+
     fn is_path_token_suppressed(&self, path: &PathTemplate, current_block: u64) -> bool {
         path.hops.iter().any(|hop| {
             self.is_token_suppressed(hop.token_in, current_block)
                 || self.is_token_suppressed(hop.token_out, current_block)
+                || self.is_pool_bait_flagged(hop.pool, current_block)
         })
     }
 
     fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
         for hop in &path.hops {
+            // Pool-level bait accounting: same decay/threshold as tokens.
+            {
+                let s = self.pool_stats.entry(hop.pool).or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+                if block > s.last_revert_block + 200 {
+                    s.consecutive_reverts = 0;
+                }
+                s.consecutive_reverts += 1;
+                s.last_revert_block = block;
+                if s.consecutive_reverts >= self.revert_threshold {
+                    s.suppressed_until_block = block + self.suppression_blocks;
+                    metrics::BAIT_SUSPECT.inc();
+                    warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
+                        "Bait-suspect pool suppressed — repeated gate-pass-then-revert signature");
+                }
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if token == path.flash_token || self.popular_intermediaries.contains(&token) {
                     continue;
@@ -472,6 +519,10 @@ impl TokenCircuitBreaker {
 
     fn record_success_for_path(&mut self, path: &PathTemplate) {
         for hop in &path.hops {
+            if let Some(s) = self.pool_stats.get_mut(&hop.pool) {
+                s.consecutive_reverts = 0;
+                s.suppressed_until_block = 0;
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if let Some(s) = self.stats.get_mut(&token) {
                     s.consecutive_reverts = 0;
@@ -491,6 +542,7 @@ fn is_nonempty(s: &Option<String>) -> Option<&str> {
     s.as_deref().filter(|v| !v.is_empty())
 }
 
+#[derive(Clone, Copy)]
 enum TxOutcome { Success, Revert, Dropped }
 
 /// Track a submitted tx hash — poll for receipt, update metrics.
@@ -532,7 +584,343 @@ async fn track_tx(endpoint: Arc<Endpoint>, tx_hash: B256, deadline_blocks: u64) 
     TxOutcome::Dropped
 }
 
-/// Write status JSON snapshot for monitoring.
+// ===== Settlement feedback loop =====
+// submit -> receipt -> realized P&L -> opportunity record + strategy health.
+// For Pimlico venues the submit handle is a userOpHash — a plain
+// eth_getTransactionReceipt can never resolve it, so UserOps are tracked via
+// eth_getUserOperationReceipt on the bundler, which returns the nested tx
+// receipt with logs. All other venues are tracked on our own tx hash
+// (keccak256 of the signed envelope), independent of venue bundle ids.
+
+const TRANSFER_SIG: B256 = alloy_primitives::b256!(
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+);
+
+#[derive(Clone)]
+struct SettleCtx {
+    endpoint: Arc<Endpoint>,
+    /// Pimlico bundler URL — required to track UserOps.
+    bundler_url: Option<String>,
+    arb_contract: Address,
+    token_usd_prices: HashMap<Address, f64>,
+    token_decimals: HashMap<Address, u32>,
+    native_usd: f64,
+    chain: String,
+}
+
+#[derive(Clone, Copy)]
+struct SettleResult {
+    outcome: TxOutcome,
+    /// Priced token deltas to the executor contract minus gas, USD.
+    realized_usd: f64,
+    gas_usd: f64,
+    unpriced_tokens: usize,
+}
+
+/// (token, from, to, raw_amount) of each ERC-20 Transfer touching the
+/// executor, from a mined receipt's logs.
+fn flows_from_logs(
+    logs: &[alloy::rpc::types::Log],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = log.topics();
+        if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+            continue;
+        }
+        let from = Address::from_word(topics[1]);
+        let to = Address::from_word(topics[2]);
+        if from != target && to != target {
+            continue;
+        }
+        let raw = U256::from_be_slice(log.data().data.as_ref())
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((log.address(), from, to, raw));
+    }
+    out
+}
+
+fn flows_from_json_logs(
+    logs: &[serde_json::Value],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = match log["topics"].as_array() {
+            Some(t) if t.len() == 3 => t,
+            _ => continue,
+        };
+        let sig: B256 = match topics[0].as_str().and_then(|s| s.parse().ok()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if sig != TRANSFER_SIG {
+            continue;
+        }
+        let from: B256 = match topics[1].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let to: B256 = match topics[2].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let (from, to) = (Address::from_word(from), Address::from_word(to));
+        if from != target && to != target {
+            continue;
+        }
+        let token: Address = match log["address"].as_str().and_then(|s| s.parse().ok()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let raw = U256::from_str_radix(
+            log["data"].as_str().unwrap_or("0x0").trim_start_matches("0x"), 16)
+            .unwrap_or_default()
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((token, from, to, raw));
+    }
+    out
+}
+
+/// Price executor token deltas in USD; unpriced tokens are counted, not
+/// guessed — a partially-priced flow is reported as priced-only.
+fn settlement_pnl(
+    flows: &[(Address, Address, Address, f64)],
+    target: Address,
+    prices: &HashMap<Address, f64>,
+    decimals: &HashMap<Address, u32>,
+) -> (f64, usize) {
+    let mut usd = 0.0;
+    let mut unpriced: HashSet<Address> = HashSet::new();
+    for (token, from, to, raw) in flows {
+        let sign = if *to == target {
+            1.0
+        } else if *from == target {
+            -1.0
+        } else {
+            continue;
+        };
+        match prices.get(token) {
+            Some(p) => {
+                let d = decimals.get(token).copied().unwrap_or(18);
+                usd += sign * raw / 10f64.powi(d as i32) * p;
+            }
+            None => {
+                unpriced.insert(*token);
+            }
+        }
+    }
+    (usd, unpriced.len())
+}
+
+/// Poll the bundler for a UserOp receipt, then compute realized P&L from the
+/// nested tx receipt's Transfer logs. gas = actualGasCost (what the Pimlico
+/// account paid — our real cost even when sponsored).
+async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> SettleResult {
+    let dropped = SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    let Some(url) = ctx.bundler_url.clone() else {
+        metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+        return dropped;
+    };
+    let client = arb_submit::pimlico::PimlicoClient::new(&url);
+    let start_block = ctx.endpoint.block_number().await.unwrap_or(0);
+    let max_polls = (deadline_blocks * 4).max(8);
+    for _ in 0..max_polls {
+        match client.user_operation_receipt(op_hash).await {
+            Ok(Some(res)) => {
+                let success = res["success"].as_bool().unwrap_or(false);
+                let gas_native = res["actualGasCost"]
+                    .as_str()
+                    .and_then(|s| U256::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                    .map(|u| u.to_string().parse::<f64>().unwrap_or(0.0) / 1e18)
+                    .unwrap_or(0.0);
+                let gas_usd = gas_native * ctx.native_usd;
+                metrics::GAS_SPENT_WEI.inc_by(gas_native * 1e18);
+                let label = if success { "success" } else { "revert" };
+                metrics::SUBMIT_LANDED.with_label_values(&[label]).inc();
+                let logs = res
+                    .pointer("/receipt/logs")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let (usd, unpriced) = settlement_pnl(
+                    &flows_from_json_logs(&logs, ctx.arb_contract),
+                    ctx.arb_contract,
+                    &ctx.token_usd_prices,
+                    &ctx.token_decimals,
+                );
+                info!(
+                    op = op_hash, tx = %res.pointer("/receipt/transactionHash")
+                        .and_then(|v| v.as_str()).unwrap_or("?"),
+                    status = label, realized_usd = format!("{:.4}", usd - gas_usd),
+                    "UserOp settled"
+                );
+                return SettleResult {
+                    outcome: if success { TxOutcome::Success } else { TxOutcome::Revert },
+                    realized_usd: usd - gas_usd,
+                    gas_usd,
+                    unpriced_tokens: unpriced,
+                };
+            }
+            Ok(None) => {}
+            Err(e) => debug!(op = op_hash, error = %e, "UserOp receipt fetch error"),
+        }
+        if ctx.endpoint.block_number().await.unwrap_or(0) > start_block + deadline_blocks {
+            metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+            return dropped;
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+    metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+    dropped
+}
+
+/// Track a plain tx hash to receipt, then compute realized P&L from logs.
+async fn settle_tx(ctx: &SettleCtx, tx_hash: B256, deadline_blocks: u64) -> SettleResult {
+    let outcome = track_tx(ctx.endpoint.clone(), tx_hash, deadline_blocks).await;
+    if matches!(outcome, TxOutcome::Dropped) {
+        return SettleResult { outcome, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    }
+    let mut gas_usd = 0.0;
+    let mut usd = 0.0;
+    let mut unpriced = 0usize;
+    if let Ok(Some(receipt)) = ctx.endpoint.get_receipt(tx_hash).await {
+        gas_usd = receipt.gas_used as f64 * receipt.effective_gas_price as f64
+            / 1e18 * ctx.native_usd;
+        let (u, n) = settlement_pnl(
+            &flows_from_logs(receipt.inner.logs(), ctx.arb_contract),
+            ctx.arb_contract,
+            &ctx.token_usd_prices,
+            &ctx.token_decimals,
+        );
+        usd = u;
+        unpriced = n;
+    }
+    SettleResult { outcome, realized_usd: usd - gas_usd, gas_usd, unpriced_tokens: unpriced }
+}
+
+/// "<chain>/<wallet>/<class>/<tx>" -> "<wallet>/<class>".
+fn strategy_id_of(opp_id: &str) -> Option<String> {
+    let rest = opp_id.splitn(2, '/').nth(1)?;
+    rest.rsplitn(2, '/').nth(1).map(String::from)
+}
+
+/// Record a settled submission: metrics, audit log, opportunity records,
+/// strategy health. This is the loop's write-back — realized P&L is the only
+/// feedback that proves the pipeline earns.
+fn record_settlement(
+    ctx: &SettleCtx,
+    venue: &str,
+    submit_id: &str,
+    res: &SettleResult,
+    opp_ids: &[String],
+) {
+    let outcome_label = match res.outcome {
+        TxOutcome::Success => "settled",
+        TxOutcome::Revert => "revert",
+        TxOutcome::Dropped => "dropped",
+    };
+    metrics::SETTLEMENTS
+        .with_label_values(&[ctx.chain.as_str(), outcome_label])
+        .inc();
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        metrics::SETTLED_NET_USD
+            .with_label_values(&[ctx.chain.as_str()])
+            .add(res.realized_usd);
+    }
+    let dir = format!("data/leaders/{}", ctx.chain);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let audit = serde_json::json!({
+        "chain": ctx.chain, "venue": venue, "submit_id": submit_id,
+        "outcome": outcome_label, "realized_usd": res.realized_usd,
+        "gas_usd": res.gas_usd, "unpriced_tokens": res.unpriced_tokens,
+        "opportunities": opp_ids, "unix_ms": now_ms,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(format!("{dir}/_settlements.jsonl"))
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{audit}");
+    }
+    if opp_ids.is_empty() {
+        return;
+    }
+    // Opportunity records: submitted -> settled/reverted/dropped.
+    let opps = arb_core::opportunity::load_opportunities(&dir);
+    for id in opp_ids {
+        let Some(o) = opps.iter().find(|o| o.opportunity_id == *id) else {
+            continue;
+        };
+        let mut o = o.clone();
+        o.unix_ms = now_ms;
+        o.settled_net_usd = res.realized_usd;
+        o.execution_status = match res.outcome {
+            TxOutcome::Success => arb_core::opportunity::ExecutionStatus::Settled,
+            TxOutcome::Revert => arb_core::opportunity::ExecutionStatus::Reverted,
+            TxOutcome::Dropped => arb_core::opportunity::ExecutionStatus::Dropped,
+        };
+        let _ = o.append_jsonl(&dir);
+    }
+    // Strategy health: realized losses demote a BoundedLive strategy back to
+    // Shadow (re-verification required) — live results outrank sim evidence.
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        let mut strat = arb_leaders::StrategyRegistry::load(&ctx.chain, 20_000);
+        let mut dirty = false;
+        for id in opp_ids {
+            if let Some(sid) = strategy_id_of(id) {
+                if strat.mark_settled(&sid, res.realized_usd) {
+                    warn!(strategy = sid, realized_usd = res.realized_usd,
+                        "strategy demoted BoundedLive -> Shadow on realized losses");
+                    dirty = true;
+                } else if strat.records.contains_key(&sid) {
+                    dirty = true;
+                }
+            }
+        }
+        if dirty {
+            let _ = strat.save();
+        }
+    }
+}
+
+/// Spawn settlement tracking for one submitted result. Pimlico ops are
+/// resolved via the bundler; every other venue via our own tx hash
+/// (keccak256 of the last signed envelope — venue bundle ids are useless).
+fn spawn_settlement(
+    ctx: SettleCtx,
+    venue: &'static str,
+    submit_hash: Option<String>,
+    our_tx_hash: Option<B256>,
+    opp_ids: Vec<String>,
+    cb: Option<(u32, tokio::sync::mpsc::Sender<(u32, TxOutcome, u64)>, u64)>,
+) {
+    tokio::spawn(async move {
+        let res = if venue == "Pimlico_ERC4337" {
+            match submit_hash.as_deref() {
+                Some(h) => track_userop(&ctx, h, 12).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        } else {
+            match our_tx_hash {
+                Some(h) => settle_tx(&ctx, h, 5).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        };
+        if let Some((pid, sender, blk)) = cb {
+            let _ = sender.send((pid, res.outcome, blk)).await;
+        }
+        record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids);
+    });
+}
 fn write_status_json(
     chain_name: &str,
     started: &chrono::DateTime<chrono::Utc>,
@@ -591,8 +979,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let pk_env = &cfg.wallet.private_key_env;
     let private_key = std::env::var(pk_env)
         .map_err(|_| anyhow::anyhow!("Missing env var {pk_env}"))?;
-    let signer: PrivateKeySigner = private_key.parse()?;
-    info!(address = %signer.address(), "Wallet loaded");
+    let mut signers: Vec<PrivateKeySigner> = vec![private_key.parse()?];
+    if let Some(extra) = &cfg.wallet.private_key_envs {
+        for env_name in extra {
+            let Ok(pk) = std::env::var(env_name) else {
+                warn!(env = %env_name, "signer rotation: env var unset — skipped");
+                continue;
+            };
+            match pk.parse::<PrivateKeySigner>() {
+                Ok(s) => signers.push(s),
+                Err(e) => warn!(env = %env_name, error = %e, "signer rotation: bad key — skipped"),
+            }
+        }
+    }
+    let signer: PrivateKeySigner = signers[0].clone();
+    let signer_rot = std::sync::atomic::AtomicUsize::new(0);
+    if signers.len() > 1 {
+        info!(n = signers.len(), "Signer rotation pool loaded — submit calls round-robin EOAs");
+    } else {
+        info!(address = %signer.address(), "Wallet loaded");
+    }
 
     let trader_url = cfg.chain.trader_rpc.as_deref();
     let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
@@ -802,9 +1208,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
     }
 
+    let pool_fee_bps: HashMap<Address, u32> =
+        pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
     let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
+    let refresher = match cfg.chain.call_deadline_ms {
+        Some(ms) => refresher.with_call_deadline(ms),
+        None => refresher,
+    };
 
     let (count, elapsed) = refresher.refresh(&store).await?;
     info!(pools = count, elapsed_ms = elapsed.as_millis(), "Initial state refresh complete");
@@ -844,6 +1256,21 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         .filter_map(|(name, bounds)| tokens.get(name).map(|&addr| (addr, (U256::from(bounds.min), U256::from(bounds.max)))))
         .collect();
 
+    // Index: unordered token pair -> configured pools on that pair (with fee for
+    // V3-tier disambiguation). Locates the pool(s) a pending swap will move.
+    let mut pair_to_pools: HashMap<(Address, Address), Vec<(Address, u32)>> = HashMap::new();
+    for p in &pool_infos {
+        let key = if p.token0 < p.token1 { (p.token0, p.token1) } else { (p.token1, p.token0) };
+        let fee_bps = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
+        pair_to_pools.entry(key).or_default().push((p.address, fee_bps));
+    }
+    let pool_tokens: HashMap<Address, (Address, Address)> = pool_infos
+        .iter()
+        .map(|p| (p.address, (p.token0, p.token1)))
+        .collect();
+    let mut quarantined: std::collections::HashSet<Address> =
+        std::collections::HashSet::new();
+
     let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
         .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
     let paths = enumerator.enumerate();
@@ -851,18 +1278,58 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
     let presign_pool = PresignPool::new(&paths, cfg.chain.chain_id);
 
-    // Build index: (token_in, token_out) -> vec of path indices that touch that pair.
+    // Build index: pool address -> vec of path indices that traverse that pool.
     // Used for fast backrun lookups when a pending swap is detected.
-    let mut token_pair_to_paths: HashMap<(Address, Address), Vec<usize>> = HashMap::new();
+    let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
     for (idx, path) in paths.iter().enumerate() {
         for hop in &path.hops {
-            token_pair_to_paths.entry((hop.token_in, hop.token_out)).or_default().push(idx);
+            pool_to_paths.entry(hop.pool).or_default().push(idx);
         }
     }
 
     // ===== Submitters =====
     let mut submitters: Vec<Box<dyn Submitter>> = Vec::new();
-    let chain_label: &'static str = if cfg.chain.chain_id == spec::BASE_CHAIN_ID { "Base" } else { "BSC" };
+    let chain_label: &'static str = Box::leak(cfg.chain.name.clone().into_boxed_str());
+
+    // Leader Wallet Intelligence (Phase 0/1): observation only — registered
+    // wallets' pending swaps are recorded to data/leaders/<chain>/*.jsonl.
+    // Empty/disabled registry = no-op. Nothing is ever copied or submitted.
+    let leader_observer = {
+        let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
+        registry.should_observe(&cfg.leaders).then(|| {
+            let obs = arb_leaders::LeaderObserver::new(
+                registry,
+                std::path::PathBuf::from("data/leaders"),
+                cfg.chain.name.clone(),
+                &cfg.leaders,
+            );
+            info!(chain = chain_label, wallets = obs.wallet_count(), discover = cfg.leaders.discover, "leader wallet intelligence enabled");
+            obs
+        })
+    };
+
+    // Opportunity bridge (Commander directive): sim-verified leader route
+    // templates feed live evaluation. Only route geometry crosses — never
+    // leader calldata/recipients/nonces. A template is READY when our own
+    // simulator reproduced positive net through its route pools.
+    let ready_templates: Vec<(String, std::collections::HashSet<Address>)> = {
+        let dir = format!("data/leaders/{chain_label}");
+        arb_core::opportunity::load_opportunities(&dir)
+            .into_iter()
+            .filter(|o| o.is_actionable()
+                || o.execution_status == arb_core::opportunity::ExecutionStatus::Ready)
+            .map(|o| (
+                o.opportunity_id.clone(),
+                o.route_pools.iter().filter_map(|p| p.parse::<Address>().ok())
+                    .collect::<std::collections::HashSet<Address>>(),
+            ))
+            .filter(|(_, s)| !s.is_empty())
+            .collect()
+    };
+    if !ready_templates.is_empty() {
+        info!(chain = chain_label, templates = ready_templates.len(),
+            "opportunity bridge armed — verified leader routes feed live evaluation");
+    }
 
     if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         if let Some(url) = is_nonempty(&cfg.submission.puissant_url) {
@@ -955,8 +1422,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // venue ordering by measured health, 60s bench on repeated misses.
     let (submit_budget_ms, slot_budget_ms) = if cfg.chain.chain_id == spec::BASE_CHAIN_ID {
         (spec::BASE_SUBMIT_TIMEOUT_MS, spec::BASE_SLOT_BUDGET_MS)
-    } else {
+    } else if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         (spec::BSC_MEV_SUBMIT_TIMEOUT_MS, spec::BSC_SLOT_BUDGET_MS)
+    } else {
+        // Generic chains: scale budgets off the configured block cadence.
+        let bt = cfg.chain.block_time_ms.max(500);
+        ((bt / 6).clamp(50, 250), bt * 4 / 5)
     };
     let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
     info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
@@ -1014,8 +1485,29 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let sub = ws_provider.subscribe_blocks().await?;
     let mut block_stream = sub.into_stream();
 
-    let arb_contract: Address = cfg.chain.arb_contract.parse()?;
+    let arb_contract: Address = cfg.chain.arb_contract.parse().unwrap_or_else(|_| {
+        warn!(chain = %cfg.chain.name, "arb_contract unset/invalid — executor calls will revert; scan-only mode");
+        Address::ZERO
+    });
     let dry_run = dry_run_override;
+
+    // Settlement context — realized-P&L tracking needs the executor address,
+    // token prices/decimals, native price for gas, and the bundler URL for
+    // UserOp receipts.
+    let native_usd = ["WBNB", "WETH", "WPOL", "ETH"]
+        .iter()
+        .find_map(|s| tokens.get(*s))
+        .and_then(|a| token_usd_prices.get(a).copied())
+        .unwrap_or(0.0);
+    let settle_ctx = SettleCtx {
+        endpoint: endpoint.clone(),
+        bundler_url: cfg.submission.pimlico_bundler_url.clone(),
+        arb_contract,
+        token_usd_prices: token_usd_prices.clone(),
+        token_decimals: token_decimals.clone(),
+        native_usd,
+        chain: chain_name.clone(),
+    };
 
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
         paths = paths.len(), dry_run, "Scanner loop starting");
@@ -1067,6 +1559,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             Ok((count, elapsed)) => {
                 metrics::STATE_REFRESH_LATENCY.observe(elapsed.as_secs_f64());
                 debug!(block = block_number, pools = count, refresh_ms = elapsed.as_millis(), "State refreshed");
+                // Quarantine pools whose implied price diverges >3x from
+                // same-pair peers — broken/exhausted state fabricates
+                // phantom arb legs on otherwise-real pending swaps.
+                quarantined = arb_mempool::impact::quarantine_outlier_pools(
+                    &store, &pair_to_pools, &pool_tokens, 3.0);
             }
             Err(e) => {
                 warn!(block = block_number, error = %e, "State refresh failed");
@@ -1087,11 +1584,27 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         let pass1_count = initial_results.len();
         metrics::PATHS_EVALUATED.inc_by(paths.len() as f64);
 
-        let candidates: Vec<_> = initial_results.into_iter()
+        // Stale-state filter: pools whose refresh keeps failing (timeouts,
+        // RPC blacklists) hold old ticks that fabricate spreads — paths
+        // through them are phantom candidates that the exec probe then has
+        // to reject on-chain. Skip them before optimization.
+        let stale_filtered = initial_results.into_iter()
             .filter(|r| r.profit_bps >= min_initial_bps)
             .filter(|r| !circuit_breaker.is_suppressed(r.path_id, block_number))
             .filter(|r| !token_breaker.is_path_token_suppressed(&paths[r.path_id as usize], block_number))
-            .collect();
+            .collect::<Vec<_>>();
+        let (stale_hit, candidates): (Vec<_>, Vec<_>) = stale_filtered
+            .into_iter()
+            .partition(|r| {
+                paths[r.path_id as usize]
+                    .hops
+                    .iter()
+                    .any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS))
+            });
+        if !stale_hit.is_empty() {
+            metrics::STALE_SUPPRESSED.inc_by(stale_hit.len() as f64);
+            debug!(skipped = stale_hit.len(), "candidate paths skipped — stale pool state");
+        }
 
         if !candidates.is_empty() {
             metrics::PROFITABLE_FOUND.inc_by(candidates.len() as f64);
@@ -1161,10 +1674,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             }
 
             if let Some((best, effective_usd)) = best_result {
+                let hop_pools: Vec<String> = paths[best_path_idx]
+                    .hops
+                    .iter()
+                    .map(|h| format!("{}", h.pool))
+                    .collect();
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
                     gross_profit = %best.gross_profit, flash_amount = %best.flash_amount,
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
-                    candidates = candidates.len(), optimized = optimized_count, "Optimized path");
+                    candidates = candidates.len(), optimized = optimized_count,
+                    hops = ?hop_pools, "Optimized path");
 
                 if !dry_run && executor_broken {
                     // Skip — the executor reverts in simulation; nothing lands.
@@ -1172,8 +1691,11 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     let optimized_path = &paths[best_path_idx];
 
                     let target_block = block_number + 3;
+                    let submit_signer = &signers[signer_rot
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        % signers.len()];
                     match presign_pool.build_fast(
-                        best.path_id, best.flash_amount, &endpoint, arb_contract, &signer, target_block,
+                        best.path_id, best.flash_amount, &endpoint, arb_contract, submit_signer, target_block,
                     ).await {
                         Ok(bundle) => {
                             // On-chain exec probe: simulate the exact
@@ -1193,8 +1715,22 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 if let (Some(account), Some(call)) =
                                     (smart_account, bundle.call.as_ref())
                                 {
+                                    // The tx sender depends on venue mix:
+                                    // EOA-signed builder bundles are sent
+                                    // FROM submit_signer (onlyOwner on the
+                                    // executor contract), UserOps execute
+                                    // as the smart account. Probe the
+                                    // identity that will actually send —
+                                    // probing the wrong sender always
+                                    // reverts onlyOwner and suppresses
+                                    // every candidate.
+                                    let probe_from = if cfg.submission.strict_4337 {
+                                        account
+                                    } else {
+                                        submit_signer.address()
+                                    };
                                     let probe = alloy::rpc::types::TransactionRequest::default()
-                                        .from(account)
+                                        .from(probe_from)
                                         .to(call.to)
                                         .input(call.data.clone().into());
                                     match endpoint.provider().call(probe).await {
@@ -1262,16 +1798,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     metrics::WARP_SPEND_USD.inc_by(0.15);
                                 }
                             }
-                            let mut any_hash = None;
+                            let our_tx_hash = bundle
+                                .signed_txs
+                                .last()
+                                .map(|t| alloy_primitives::keccak256(t));
+                            let mut any_hash: Option<(String, &'static str)> = None;
                             let mut builder_sim_rejected = false;
                             for arb_submit::router::RoutedSubmit { venue, tier, result, .. } in sub_results {
                                 match result {
                                     Ok(r) if r.success => {
                                         info!(venue, tier = ?tier, hash = ?r.bundle_hash, "Submitted");
                                         if any_hash.is_none() {
-                                            if let Some(h) = &r.bundle_hash {
-                                                any_hash = h.parse::<B256>().ok();
-                                            }
+                                            any_hash = r.bundle_hash.clone().map(|h| (h, venue));
                                         }
                                     }
                                     Ok(r) => {
@@ -1345,16 +1883,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                             }
 
-                            // Track receipt — sync in smoke test, async otherwise
-                            if let Some(hash) = any_hash {
+                            // Track receipt + settle — sync in smoke test,
+                            // async otherwise. UserOps resolve through the
+                            // bundler; plain venues via our own tx hash.
+                            if let Some((hash, hash_venue)) = any_hash {
                                 if smoke_test {
                                     info!("Waiting for receipt...");
-                                    let outcome = track_tx(endpoint.clone(), hash, 10).await;
-                                    match outcome {
+                                    let res = if hash_venue == "Pimlico_ERC4337" {
+                                        track_userop(&settle_ctx, &hash, 10).await
+                                    } else {
+                                        match our_tx_hash {
+                                            Some(h) => settle_tx(&settle_ctx, h, 10).await,
+                                            None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+                                        }
+                                    };
+                                    match res.outcome {
                                         TxOutcome::Success => circuit_breaker.record_success(best.path_id),
                                         TxOutcome::Revert => circuit_breaker.record_revert(best.path_id, block_number),
                                         TxOutcome::Dropped => {}
                                     }
+                                    record_settlement(&settle_ctx, hash_venue, &hash, &res, &[]);
                                     let landed_ok = metrics::SUBMIT_LANDED.with_label_values(&["success"]).get() as u64;
                                     let landed_revert = metrics::SUBMIT_LANDED.with_label_values(&["revert"]).get() as u64;
                                     let status = if landed_ok > 0 { "SUCCESS" } else if landed_revert > 0 { "REVERT" } else { "DROPPED" };
@@ -1372,18 +1920,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     println!("effective_usd:    ${:.4}", effective_usd);
                                     println!("tx_hash:          {hash}");
                                     println!("on_chain_status:  {status}");
+                                    println!("realized_usd:     ${:.4}", res.realized_usd);
                                     println!("gas_spent_wei:    {:.0}", metrics::GAS_SPENT_WEI.get());
                                     println!("=================================\n");
                                     return Ok(());
                                 } else {
-                                    let ep = endpoint.clone();
-                                    let cb_sender = cb_tx.clone();
-                                    let pid = best.path_id;
-                                    let blk = block_number;
-                                    tokio::spawn(async move {
-                                        let outcome = track_tx(ep, hash, 5).await;
-                                        let _ = cb_sender.send((pid, outcome, blk)).await;
-                                    });
+                                    spawn_settlement(
+                                        settle_ctx.clone(), hash_venue, Some(hash),
+                                        our_tx_hash, Vec::new(),
+                                        Some((best.path_id, cb_tx.clone(), block_number)),
+                                    );
                                 }
                             }
                         }
@@ -1398,9 +1944,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     // if a policy is set, sign it, and log the wire JSON.
                     if let Some(pimlico) = &pimlico_venue {
                         let target_block = block_number + 3;
+                        let submit_signer = &signers[signer_rot
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                            % signers.len()];
                         match presign_pool
                             .build_fast(best.path_id, best.flash_amount, &endpoint,
-                                arb_contract, &signer, target_block)
+                                arb_contract, submit_signer, target_block)
                             .await
                         {
                             Ok(bundle) => match pimlico.preview(&bundle).await {
@@ -1419,81 +1968,330 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
         // Process pending mempool swaps for backrun opportunities
         while let Ok(pending) = mempool_rx.try_recv() {
-            if let (Some(token_in), Some(token_out), Some(_amount_in)) =
-                (pending.decoded.token_in, pending.decoded.token_out, pending.decoded.amount_in)
+            if let Some(obs) = &leader_observer {
+                obs.observe(&pending);
+            }
+            // Direct pool calls carry no input amount in calldata (it's
+            // recovered inside projection); router decodes need one.
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => continue,
+            };
+
+            // Project every hop of the pending swap's path onto the tracked
+            // pools it touches: the resting state has no spread — the pending
+            // swap creates one. Later hops of a multi-hop victim move our
+            // pools too, not just the first.
+            let Some((projected, hit_pools, victim_usd)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
+
+            let mut candidate_ids: Vec<usize> = Vec::new();
+            for pool_addr in &hit_pools {
+                if quarantined.contains(pool_addr) { continue; }
+                if let Some(ids) = pool_to_paths.get(pool_addr) {
+                    candidate_ids.extend_from_slice(ids);
+                }
+            }
+            if candidate_ids.is_empty() { continue; }
+            candidate_ids.sort_unstable();
+            candidate_ids.dedup();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
+            let stale_n = candidate_ids.len();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
+            let dropped_stale = stale_n - candidate_ids.len();
+            if dropped_stale > 0 {
+                metrics::STALE_SUPPRESSED.inc_by(dropped_stale as f64);
+                debug!(skipped = dropped_stale, "backrun candidates skipped — stale pool state");
+            }
+            if candidate_ids.is_empty() { continue; }
+            metrics::BACKRUN_CANDIDATES.inc();
+            // Phase-1 latency budget: how long from seeing the victim to
+            // starting candidate evaluation — this is the race window.
+            metrics::PENDING_TO_EVAL.observe(pending.seen_at.elapsed().as_secs_f64());
+
             {
-                let affected_paths = token_pair_to_paths.get(&(token_in, token_out));
-                if let Some(path_ids) = affected_paths {
-                    if path_ids.is_empty() { continue; }
-                    metrics::BACKRUN_CANDIDATES.inc();
+                // Rank candidates by cheap single-point profit so the 20
+                // full optimizations go to the most promising routes,
+                // not the first 20 by path index.
+                let mut screened: Vec<(usize, U256)> = candidate_ids
+                    .iter()
+                    .map(|&i| {
+                        let p = &paths[i];
+                        let min_a = flash_bounds
+                            .get(&p.flash_token)
+                            .map(|b| b.0)
+                            .unwrap_or(p.flash_amount);
+                        let hi_probe = (min_a * U256::from(10u32))
+                            .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                                .unwrap_or(p.flash_amount * U256::from(10u32)));
+                        let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                            .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                        (i, s)
+                    })
+                    .collect();
+                screened.sort_by(|a, b| b.1.cmp(&a.1));
 
-                    // Project post-swap state for affected pools
-                    for &pidx in path_ids.iter().take(20) {
-                        let path = &paths[pidx];
-                        if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
+                // Opportunity bridge: a pending victim touching a sim-verified
+                // leader route template gets template-overlapping paths
+                // evaluated first — the leader's proven geometry takes the
+                // limited optimization slots over generic enumeration.
+                let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                    ready_templates.iter()
+                        .filter(|(_, pools)| hit_pools.iter().any(|p| pools.contains(p)))
+                        .collect();
+                if !matched.is_empty() {
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[chain_label, "matched_live"])
+                        .inc();
+                    // Template overlap first, sim-probe score breaks ties.
+                    screened.sort_by(|a, b| {
+                        let ov = |i: usize| paths[i].hops.iter()
+                            .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                            .count();
+                        ov(b.0).cmp(&ov(a.0)).then(b.1.cmp(&a.1))
+                    });
+                    debug!(
+                        victim = %pending.tx_hash,
+                        templates = matched.len(),
+                        "OPPORTUNITY_MATCH victim touches verified leader route"
+                    );
+                }
+                // Evaluate all screened candidates first — gate-passers are
+                // ranked by route_score (leader-template overlap, freshness
+                // decay, breaker revert history) before we spend the
+                // re-verify RPC call and a submission on any of them.
+                let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
+                for &(pidx, _) in screened.iter().take(20) {
+                    let path = &paths[pidx];
+                    if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
 
-                        // Evaluate the path with current state (the pending swap hasn't
-                        // landed yet — its impact creates a bigger spread for us).
-                        // The actual backrun bundle would include the pending tx first.
-                        let profit = arb_sim::optimize::find_optimal_amount(
-                            path, &store, 
-                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
-                            {
-                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
-                                    .unwrap_or(path.flash_amount * U256::from(10u32));
-                                let liq_max = arb_sim::optimize::path_max_flash(path, &store, 0.05, token_max);
-                                token_max.min(liq_max)
-                            },
-                            optimization_iterations,
-                        );
+                    // Evaluate against the projected post-swap state — that is
+                    // the state our tx would see if it lands right after the
+                    // pending swap in the same block.
+                    let profit = arb_sim::optimize::find_optimal_amount(
+                        path, &projected,
+                        flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
+                        {
+                            let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
+                                .unwrap_or(path.flash_amount * U256::from(10u32));
+                            let liq_max = arb_sim::optimize::path_max_flash(path, &projected, 0.05, token_max);
+                            token_max.min(liq_max)
+                        },
+                        optimization_iterations,
+                    );
 
-                        if let Some((opt_amount, opt_profit)) = profit {
-                            let profit_bps: u32 = if !opt_amount.is_zero() {
-                                ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
-                            } else { 0 };
+                    if let Some((opt_amount, opt_profit)) = profit {
+                        let profit_bps: u32 = if !opt_amount.is_zero() {
+                            ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
+                        } else { 0 };
 
-                            let sim = arb_sim::SimResult {
-                                path_id: path.id,
-                                flash_token: path.flash_token,
-                                flash_amount: opt_amount,
-                                final_amount: opt_amount + opt_profit,
-                                gross_profit: opt_profit,
-                                profit_bps,
+                        let sim = arb_sim::SimResult {
+                            path_id: path.id,
+                            flash_token: path.flash_token,
+                            flash_amount: opt_amount,
+                            final_amount: opt_amount + opt_profit,
+                            gross_profit: opt_profit,
+                            profit_bps,
+                        };
+
+                        let decision = profit_gate.should_submit(&sim, path);
+                        // A backrun extracts value from the dislocation the
+                        // victim creates — it cannot exceed the victim's own
+                        // input value. Larger "profits" mean the projection
+                        // model overshot (e.g., a same-tick V3 estimate or an
+                        // ambiguous same-pair match).
+                        if decision.accept {
+                            if victim_usd.map_or(false, |v| v > 1e8) {
+                                debug!(victim_usd, "Backrun dropped: implausible decoded victim size");
+                                continue;
+                            }
+                            if let Some(vusd) = victim_usd {
+                                if decision.effective_profit_usd > vusd {
+                                    debug!(
+                                        path_id = path.id,
+                                        profit_usd = decision.effective_profit_usd,
+                                        victim_usd = vusd,
+                                        "Backrun candidate dropped: profit exceeds victim size"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                        if decision.accept && !dry_run {
+                            // reproduction_precision: share of OUR hops that
+                            // sit inside a matched leader route's pool set —
+                            // 1.0 when no template matched (nothing to
+                            // reproduce against).
+                            let overlap = path.hops.iter()
+                                .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                                .count();
+                            let repro = if matched.is_empty() { 1.0 } else {
+                                overlap as f64 / path.hops.len().max(1) as f64
                             };
+                            // route_confidence: leader-verified geometry is
+                            // stronger evidence than generic enumeration.
+                            let confidence = if matched.is_empty() { 0.7 }
+                                else if overlap > 0 { 1.0 } else { 0.5 };
+                            // No gas model yet — gas_risk 0 (constant term
+                            // would not change the ordering anyway).
+                            // revert_risk: this path's realized revert rate
+                            // applied to the stake at risk.
+                            let score = arb_core::opportunity::route_score(
+                                decision.effective_profit_usd, repro, 1.0,
+                                pending.seen_at.elapsed().as_millis() as u64,
+                                confidence, 0.0,
+                                circuit_breaker.revert_rate(path.id)
+                                    * decision.effective_profit_usd,
+                            );
+                            scored.push((pidx, opt_amount, sim,
+                                decision.effective_profit_usd, score));
+                        }
+                    }
+                }
+                // Highest route_score first; stale-victim and revert-prone
+                // candidates sink automatically.
+                scored.sort_by(|a, b| {
+                    b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
+                });
 
-                            let decision = profit_gate.should_submit(&sim, path);
-                            if decision.accept && !dry_run {
-                                info!(
-                                    path_id = path.id, profit_bps,
-                                    pending_router = pending.decoded.router,
-                                    pending_tx = %pending.tx_hash,
-                                    "Backrun candidate found"
-                                );
-                                metrics::BACKRUN_SUBMITTED.inc();
+                // Re-verify + submit in score order; a stale edge falls
+                // through to the next-best candidate (same as before).
+                for (pidx, opt_amount, sim, _effective_usd, _score) in scored {
+                    let path = &paths[pidx];
+                    {
+                            // The projected state is approximate — before
+                            // spending a submission, re-read the pools the
+                            // pending tx touches, re-project, and re-verify
+                            // the edge is still there.
+                            if refresher.refresh(&store).await.is_ok() {
+                                let verified = arb_mempool::impact::project_pending_path(
+                                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                                    &token_usd_prices, &token_decimals,
+                                ).and_then(|(reprojected, _, _)| {
+                                    arb_sim::optimize::find_optimal_amount(
+                                        path, &reprojected,
+                                        flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                            .unwrap_or(path.flash_amount),
+                                        {
+                                            let token_max = flash_bounds.get(&path.flash_token)
+                                                .map(|b| b.1)
+                                                .unwrap_or(path.flash_amount * U256::from(10u32));
+                                            let liq_max = arb_sim::optimize::path_max_flash(
+                                                path, &reprojected, 0.05, token_max);
+                                            token_max.min(liq_max)
+                                        },
+                                        optimization_iterations,
+                                    )
+                                });
+                                match verified {
+                                    Some((_, reprofit)) if !reprofit.is_zero() => {}
+                                    _ => {
+                                        debug!(path_id = path.id, "Backrun edge gone on re-check");
+                                        continue;
+                                    }
+                                }
+                            }
 
-                                // Build and submit as regular (non-bundle) for now.
-                                // True 2-tx backrun bundles require target tx raw bytes
-                                // which we don't always have from the watcher.
-                                let target_block = block_number + 1;
-                                if let Ok(bundle) = presign_pool.build_fast(
-                                    path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
-                                ).await {
-                                    endpoint.bump_nonce();
-                                    let sub_results = router
-                                        .submit_all(&bundle, false, scan_start.elapsed())
-                                        .await;
-                                    for r in sub_results {
-                                        match r.result {
-                                            Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
-                                            Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
-                                            Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
+                            info!(
+                                path_id = path.id, profit_bps = sim.profit_bps,
+                                route_score = _score,
+                                pending_router = pending.decoded.router,
+                                pending_tx = %pending.tx_hash,
+                                victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
+                                "Backrun candidate found"
+                            );
+                            metrics::BACKRUN_SUBMITTED.inc();
+
+                            // Build a true [victim, ours] ordered bundle: the
+                            // watcher streams full pending txs, so the victim's
+                            // signed bytes are available — bundle venues prepend
+                            // them and our tx lands immediately after the victim.
+                            let target_block = block_number + 1;
+                            let submit_signer = &signers[signer_rot
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                % signers.len()];
+                            if let Ok(mut bundle) = presign_pool.build_fast(
+                                path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
+                            ).await {
+                                if !pending.raw_tx.is_empty() {
+                                    bundle.victim_tx = Some(pending.raw_tx.clone());
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                }
+                                endpoint.bump_nonce();
+                                let matched_opp_ids: Vec<String> = matched
+                                    .iter()
+                                    .map(|(id, _)| id.clone())
+                                    .collect();
+                                if !matched.is_empty() {
+                                    // A verified leader route matched this
+                                    // victim and survived gate+probe to a
+                                    // real submission — count the capture
+                                    // and mark the records submitted so the
+                                    // settlement loop has something to close.
+                                    arb_leaders::OPPORTUNITY_TOTAL
+                                        .with_label_values(&[chain_label, "submitted"])
+                                        .inc();
+                                    let dir = format!("data/leaders/{chain_label}");
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    for o in arb_core::opportunity::load_opportunities(&dir) {
+                                        if matched_opp_ids.contains(&o.opportunity_id) {
+                                            let mut o = o;
+                                            o.unix_ms = now_ms;
+                                            o.execution_status =
+                                                arb_core::opportunity::ExecutionStatus::Submitted;
+                                            let _ = o.append_jsonl(&dir);
                                         }
                                     }
                                 }
-                                break;
+                                let our_tx_hash = bundle
+                                    .signed_txs
+                                    .last()
+                                    .map(|t| alloy_primitives::keccak256(t));
+                                let sub_results = router
+                                    .submit_all(&bundle, false, scan_start.elapsed())
+                                    .await;
+                                metrics::PENDING_TO_SUBMIT
+                                    .observe(pending.seen_at.elapsed().as_secs_f64());
+                                if sub_results.is_empty() && bundle.victim_tx.is_some() {
+                                    metrics::BACKRUN_NO_VENUE.inc();
+                                    warn!(
+                                        "Backrun bundle dropped: no bundle-capable venue \
+                                         (strict_4337 leaves only the UserOp bundler, which \
+                                         cannot order after a victim tx)"
+                                    );
+                                }
+                                for r in sub_results {
+                                    match r.result {
+                                        Ok(res) if res.success => {
+                                            debug!(venue = r.venue, "Backrun submitted");
+                                            // Settlement: realized P&L feeds
+                                            // the opportunity record +
+                                            // strategy health. Backrun txs
+                                            // also feed the circuit breaker.
+                                            spawn_settlement(
+                                                settle_ctx.clone(), r.venue,
+                                                res.bundle_hash.clone(), our_tx_hash,
+                                                matched_opp_ids.clone(),
+                                                Some((path.id, cb_tx.clone(), block_number)),
+                                            );
+                                        }
+                                        Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
+                                        Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
+                                    }
+                                }
                             }
+                            break;
                         }
-                    }
                 }
             }
         }

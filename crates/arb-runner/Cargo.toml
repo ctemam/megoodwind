@@ -38,6 +38,7 @@ arb-paths = { workspace = true }
 arb-sim = { workspace = true }
 arb-submit = { workspace = true }
 arb-mempool = { workspace = true }
+arb-leaders = { workspace = true }
 arb-rpc = { workspace = true }
 arb-discovery = { workspace = true }
 alloy = { workspace = true }

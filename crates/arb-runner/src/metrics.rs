@@ -1,6 +1,6 @@
 use prometheus::{
-    register_counter, register_counter_vec, register_gauge, register_histogram,
-    Counter, CounterVec, Gauge, Histogram, Encoder, TextEncoder,
+    register_counter, register_counter_vec, register_gauge, register_gauge_vec, register_histogram,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram, Encoder, TextEncoder,
 };
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -72,6 +72,21 @@ lazy_static::lazy_static! {
         vec![0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5]
     ).unwrap();
 
+    /// Phase-1 latency budget: pending-swap receipt → first candidate
+    /// evaluation, and pending receipt → bundle submit. These are the two
+    /// numbers that decide whether we win the same-block backrun race.
+    pub static ref PENDING_TO_EVAL: Histogram = register_histogram!(
+        "arb_pending_to_eval_seconds",
+        "Pending-swap receive to candidate evaluation latency in seconds",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    ).unwrap();
+
+    pub static ref PENDING_TO_SUBMIT: Histogram = register_histogram!(
+        "arb_pending_to_submit_seconds",
+        "Pending-swap receive to backrun bundle submit latency in seconds",
+        vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+    ).unwrap();
+
     pub static ref CURRENT_BLOCK: Gauge = register_gauge!(
         "arb_current_block",
         "Latest block number processed"
@@ -90,6 +105,16 @@ lazy_static::lazy_static! {
     pub static ref PATH_SUPPRESSED: Counter = register_counter!(
         "arb_path_suppressed_total",
         "Paths suppressed by circuit breaker"
+    ).unwrap();
+
+    pub static ref BAIT_SUSPECT: Counter = register_counter!(
+        "arb_bait_suspect_total",
+        "Pools suppressed by bait telemetry (repeated gate-pass-then-revert signature)"
+    ).unwrap();
+
+    pub static ref STALE_SUPPRESSED: Counter = register_counter!(
+        "arb_stale_suppressed_total",
+        "Candidate paths suppressed for containing pools whose state refresh is stale"
     ).unwrap();
 
     pub static ref BUILDER_SIM_REJECT: Counter = register_counter!(
@@ -120,9 +145,33 @@ lazy_static::lazy_static! {
         "Pending swaps matched for backrun evaluation"
     ).unwrap();
 
+    /// Backrun bundles that found no ordering-aware venue to carry them
+    /// (e.g. strict_4337 leaves only the UserOp bundler, which cannot order
+    /// after a victim tx).
+    pub static ref BACKRUN_NO_VENUE: Counter = register_counter!(
+        "arb_backrun_no_venue_total",
+        "Backrun bundles dropped: no bundle-capable submit venue configured"
+    ).unwrap();
+
     pub static ref BACKRUN_SUBMITTED: Counter = register_counter!(
         "arb_backrun_submitted_total",
         "Backrun bundles submitted"
+    ).unwrap();
+
+    /// Settlement feedback: submissions tracked to an on-chain outcome,
+    /// labeled by realized result (settled/revert/dropped).
+    pub static ref SETTLEMENTS: CounterVec = register_counter_vec!(
+        "arb_settlements_total",
+        "Submissions settled on-chain by outcome",
+        &["chain", "outcome"]
+    ).unwrap();
+
+    /// Cumulative realized P&L after gas, USD. A gauge because realized
+    /// losses decrement it — this is the number the whole engine exists for.
+    pub static ref SETTLED_NET_USD: GaugeVec = register_gauge_vec!(
+        "arb_settled_net_usd",
+        "Cumulative realized net P&L after gas, USD",
+        &["chain"]
     ).unwrap();
 }
 

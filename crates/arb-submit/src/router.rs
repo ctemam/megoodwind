@@ -116,13 +116,21 @@ impl VenueRouter {
             return Vec::new();
         }
 
+        let needs_bundle_ordering = bundle.victim_tx.is_some();
         let route = self.order();
         let futures: Vec<_> = route
             .iter()
             .copied()
             .filter(|&i| {
-                let t = self.venues[i].tier();
-                t == SubmitTier::AlwaysOn || (t == SubmitTier::HighEvOnly && use_high_ev)
+                let s = &self.venues[i];
+                let t = s.tier();
+                // A backrun only profits if it lands immediately after the
+                // victim tx — single-tx/public/UserOp venues give no ordering
+                // guarantee and would just burn gas on a state-dependent call.
+                let can_carry = !needs_bundle_ordering || s.is_bundle_venue();
+                can_carry
+                    && (t == SubmitTier::AlwaysOn
+                        || (t == SubmitTier::HighEvOnly && use_high_ev))
             })
             .map(|i| {
                 let b = bundle.clone();

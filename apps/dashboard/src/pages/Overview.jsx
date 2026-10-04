@@ -2,13 +2,13 @@ import React from 'react'
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useApp, fmt } from '../state.jsx'
 
-const LABEL = { bsc: 'BNB Chain', base: 'Base' }
-const COLORS = ['#f0b90b', '#38b6ff']
+const LABEL = { bsc: 'BNB Chain', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
+const COLORS = ['#f0b90b', '#38b6ff', '#627eea', '#8247e5']
 
 export default function Overview() {
   const { all, currency, prices, history, profitPeriod } = useApp()
   const chains = all.chains || {}
-  const names = ['bsc', 'base']
+  const names = ['bsc', 'base', 'ethereum', 'polygon']
 
   const sum = (k) => names.reduce((s, c) => s + (chains[c]?.[k] || 0), 0)
   const totalGross = sum('arb_gross_profit_usd_total')

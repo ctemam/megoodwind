@@ -56,11 +56,22 @@ pub struct AppConfig {
     pub pools: Vec<PoolEntry>,
     pub tokens: HashMap<String, String>,
     pub token_usd_prices: HashMap<String, f64>,
+    /// `[leaders]` — optional leader-wallet observation registry
+    /// (arb-leaders Phase 0/1; absent or empty = feature off).
+    #[serde(default)]
+    pub leaders: arb_leaders::LeadersConfig,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WalletConfig {
     pub private_key_env: String,
+    /// Optional signer rotation pool (stealth L1): env var names holding
+    /// additional EOA keys. When set, submit calls round-robin across all
+    /// signers so no single address fingerprints the operation. Each EOA
+    /// must be funded independently — shared funding sources defeat the
+    /// rotation (see docs/research/STEALTH_OPSEC.md L0).
+    #[serde(default)]
+    pub private_key_envs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

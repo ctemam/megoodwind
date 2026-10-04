@@ -1,4 +1,5 @@
 use alloy::consensus::Transaction as TxTrait;
+use alloy::eips::Encodable2718;
 use alloy::network::TransactionResponse;
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy_primitives::Address;
@@ -25,6 +26,11 @@ pub struct PendingSwap {
     pub value: alloy_primitives::U256,
     pub decoded: DecodedSwap,
     pub raw_input: Vec<u8>,
+    /// Full signed EIP-2718 bytes of the victim transaction — builders need
+    /// this to order our backrun immediately after it in the same block.
+    pub raw_tx: Vec<u8>,
+    /// WSS arrival timestamp — measures end-to-end detection→submit latency.
+    pub seen_at: Instant,
 }
 
 pub struct MempoolWatcher {
@@ -84,7 +90,7 @@ impl MempoolWatcher {
                 if input.len() < 4 {
                     continue;
                 }
-                let Some(decoded) = self.decoder.decode(to_addr, input) else {
+                let Some(decoded) = self.decoder.decode(to_addr, pending_tx.value(), input) else {
                     continue;
                 };
                 let swap = PendingSwap {
@@ -94,6 +100,8 @@ impl MempoolWatcher {
                     value: pending_tx.value(),
                     decoded,
                     raw_input: input.to_vec(),
+                    raw_tx: pending_tx.inner.encoded_2718(),
+                    seen_at: arrival,
                 };
 
                 // Bounded send: queue pressure >5ms = backpressure → cycle provider.

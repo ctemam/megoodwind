@@ -27,6 +27,104 @@ type HttpProvider = alloy::providers::fillers::FillProvider<
 /// Seconds an endpoint is benched after a transport failure (429/timeout/conn).
 const BLACKLIST_SECS: u64 = 60;
 
+/// Per-endpoint retry: alloy's standard `RetryBackoffLayer` retries rate-limit
+/// (429) and transient transport errors with exponential backoff + jitter
+/// before a failure ever reaches the pool-level failover. `RetryBackoffLayer::new`
+/// takes (max retries, initial backoff ms, compute units/sec).
+const RETRY_MAX: u32 = 2;
+const RETRY_INITIAL_BACKOFF_MS: u64 = 50;
+const RETRY_COMPUTE_UNITS_PER_SEC: u64 = 50;
+/// Per-endpoint rate cap: 5 requests per 5s (~1 rps sustained + burst of 5).
+/// Keeps failover bursts from tripping public endpoints' 429 thresholds;
+/// excess requests queue briefly rather than erroring.
+const RATE_LIMIT_REQS_PER_5S: u64 = 5;
+
+lazy_static::lazy_static! {
+    /// Physical HTTP attempts per endpoint — counts each retry round-trip,
+    /// not just the logical call (layers are stacked with this innermost).
+    static ref RPC_HTTP_ATTEMPTS: prometheus::CounterVec = prometheus::register_counter_vec!(
+        "arb_rpc_http_attempts_total",
+        "Physical HTTP RPC attempts per endpoint (each retry counts)",
+        &["endpoint", "outcome"]
+    ).unwrap();
+}
+
+/// Tower layer that counts every physical request round-trip per endpoint.
+#[derive(Debug, Clone)]
+struct MetricsLayer {
+    endpoint: String,
+}
+
+impl<S> tower::Layer<S> for MetricsLayer {
+    type Service = MetricsService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        MetricsService { inner, endpoint: self.endpoint.clone() }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MetricsService<S> {
+    inner: S,
+    endpoint: String,
+}
+
+impl<S> tower::Service<alloy::rpc::json_rpc::RequestPacket> for MetricsService<S>
+where
+    S: tower::Service<
+            alloy::rpc::json_rpc::RequestPacket,
+            Response = alloy::rpc::json_rpc::ResponsePacket,
+            Error = alloy::transports::TransportError,
+            Future = alloy::transports::TransportFut<'static>,
+        > + Send,
+{
+    type Response = alloy::rpc::json_rpc::ResponsePacket;
+    type Error = alloy::transports::TransportError;
+    type Future = alloy::transports::TransportFut<'static>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: alloy::rpc::json_rpc::RequestPacket) -> Self::Future {
+        let fut = self.inner.call(req);
+        let endpoint = self.endpoint.clone();
+        Box::pin(async move {
+            let result = fut.await;
+            RPC_HTTP_ATTEMPTS
+                .with_label_values(&[
+                    &endpoint,
+                    if result.is_ok() { "ok" } else { "err" },
+                ])
+                .inc();
+            result
+        })
+    }
+}
+
+/// HTTP provider with the standard retry/backoff transport layer applied.
+/// Stack order (outermost→innermost): retry → throttle → metrics → HTTP,
+/// so every physical attempt is throttled and counted.
+fn retry_http_provider(url: url::Url) -> HttpProvider {
+    let client = alloy::rpc::client::ClientBuilder::default()
+        .layer(MetricsLayer {
+            endpoint: url.to_string(),
+        })
+        .layer(alloy::transports::layers::ThrottleLayer::new(
+            RATE_LIMIT_REQS_PER_5S as u32 / 5,
+        ))
+        .layer(alloy::transports::layers::RetryBackoffLayer::new(
+            RETRY_MAX,
+            RETRY_INITIAL_BACKOFF_MS,
+            RETRY_COMPUTE_UNITS_PER_SEC,
+        ))
+        .http(url);
+    ProviderBuilder::new().connect_client(client)
+}
+
 struct PoolState {
     /// Per-endpoint: instant until which it is blacklisted.
     blacklist_until: Vec<Option<Instant>>,
@@ -126,7 +224,7 @@ impl Endpoint {
                 async move {
                     match url.parse() {
                         Ok(parsed) => {
-                            let provider = ProviderBuilder::new().connect_http(parsed);
+                            let provider = retry_http_provider(parsed);
                             let result = tokio::time::timeout(
                                 Duration::from_secs(5),
                                 provider.get_chain_id(),
@@ -161,8 +259,7 @@ impl Endpoint {
                 info!("No trader endpoint configured, will use read endpoint for tx submission");
                 None
             } else {
-                let tp = ProviderBuilder::new()
-                    .connect_http(turl.parse()?);
+                let tp = retry_http_provider(turl.parse()?);
                 let trader_chain = tp.get_chain_id().await?;
                 if trader_chain != chain_id {
                     anyhow::bail!(
@@ -360,6 +457,68 @@ impl Endpoint {
         Ok(self
             .with_failover(|p| async move { p.get_transaction_receipt(tx_hash).await })
             .await?)
+    }
+
+    /// All receipts for one block in a single call (eth_getBlockReceipts) —
+    /// outcome attribution scans use this to rank senders by realized P&L.
+    pub async fn get_block_receipts(
+        &self,
+        block: u64,
+    ) -> Result<Option<Vec<alloy::rpc::types::TransactionReceipt>>> {
+        Ok(self
+            .with_failover(|p| async move { p.get_block_receipts(block.into()).await })
+            .await?)
+    }
+
+    /// Lenient `eth_getBlockReceipts`: skips receipts the typed decoder rejects
+    /// (e.g. Polygon bor state-sync pseudo-receipts with tx type 0x7f) instead
+    /// of failing the whole block. Returns the decodable receipts plus the
+    /// number skipped.
+    pub async fn get_block_receipts_lenient(
+        &self,
+        block: u64,
+    ) -> Result<(Vec<alloy::rpc::types::TransactionReceipt>, u64)> {
+        let raw: Option<serde_json::Value> = self
+            .with_failover(|p| async move {
+                p.raw_request(
+                    "eth_getBlockReceipts".into(),
+                    (format!("0x{block:x}"),),
+                )
+                .await
+            })
+            .await?;
+        let Some(raw) = raw else { return Ok((vec![], 0)) };
+        let arr = raw.as_array().cloned().unwrap_or_default();
+        let mut out = Vec::with_capacity(arr.len());
+        let mut skipped = 0u64;
+        for v in arr {
+            match serde_json::from_value::<alloy::rpc::types::TransactionReceipt>(v) {
+                Ok(r) => out.push(r),
+                Err(_) => skipped += 1,
+            }
+        }
+        Ok((out, skipped))
+    }
+
+    /// Tx hash at `index` in `block` — used to identify the victim/orderflow
+    /// tx a leader backran (the sibling at index-1 in the same block).
+    pub async fn get_tx_hash_at_index(
+        &self,
+        block: u64,
+        index: u64,
+    ) -> Result<Option<alloy_primitives::B256>> {
+        let raw: Option<serde_json::Value> = self
+            .with_failover(|p| async move {
+                p.raw_request(
+                    "eth_getTransactionByBlockNumberAndIndex".into(),
+                    (format!("0x{block:x}"), format!("0x{index:x}")),
+                )
+                .await
+            })
+            .await?;
+        Ok(raw
+            .and_then(|v| v.get("hash").and_then(|h| h.as_str()).map(String::from))
+            .and_then(|h| h.parse().ok()))
     }
 
     /// Get native balance from the read pool.

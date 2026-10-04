@@ -22,4 +22,8 @@ pub struct ChainConfig {
     pub state_reader: String,
     pub block_time_ms: u64,
     pub scan_budget_ms: u64,
+    /// Per-read RPC deadline (state refresh / probes). Default 400ms — raise
+    /// for chains whose public endpoints answer batches slower (ETH/Polygon).
+    #[serde(default)]
+    pub call_deadline_ms: Option<u64>,
 }

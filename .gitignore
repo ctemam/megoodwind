@@ -95,3 +95,4 @@ apps/dashboard/server/.config-drafts.json
 apps/dashboard/server/.config-audit.json
 apps/dashboard/server/.wallet-nicknames.json
 apps/dashboard/server/.wallet-accounts.json
+data/

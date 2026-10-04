@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react'
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { useApp, fmt } from '../state.jsx'
 import Collap from '../Collap.jsx'
+import { useSort } from '../Sortable.jsx'
 
-const LABEL = { bsc: 'BNB Chain', base: 'Base' }
-const COLOR = { bsc: '#f0b90b', base: '#38b6ff' }
+const LABEL = { bsc: 'BNB Chain', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
+const COLOR = { bsc: '#f0b90b', base: '#38b6ff', ethereum: '#627eea', polygon: '#8247e5' }
 const WINDOWS = [['1h', '1 hour'], ['6h', '6 hours'], ['24h', '24 hours'], ['7d', '7 days'], ['30d', '30 days'], ['all', 'All']]
 
 export default function Report() {
@@ -22,11 +23,18 @@ export default function Report() {
   }, [win, refreshMs])
 
   const chains = data?.chains || {}
-  const names = ['bsc', 'base'].filter(c => chains[c]?.online)
+  const names = ['bsc', 'base', 'ethereum', 'polygon'].filter(c => chains[c]?.online)
   const totGross = names.reduce((s, c) => s + chains[c].grossUsd, 0)
   const totEvals = names.reduce((s, c) => s + chains[c].evals, 0)
   const totHits = names.reduce((s, c) => s + chains[c].hits, 0)
   const totScans = names.reduce((s, c) => s + chains[c].scans, 0)
+
+  const [chainRows, thC] = useSort(
+    names.map(c => ({ c, ...chains[c] })), ['grossUsd', -1])
+  const [tokenRows, thT] = useSort(
+    (data?.tokens || []).map(t => ({
+      ...t, share: totGross ? t.profitUsd / totGross * 100 : 0,
+    })), ['profitUsd', -1])
 
   const chart = (data?.series || []).map(s => ({
     ...s,
@@ -102,13 +110,15 @@ export default function Report() {
       <Collap title="Per-chain analytics">
         <table>
           <thead><tr>
-            <th>Chain</th><th>Profit</th><th>$/h</th><th>Hits</th><th>Hits/h</th>
-            <th>Hit rate</th><th>Evals</th><th>Avg scan</th><th>Avg refresh</th>
-            <th>Backruns</th><th>Submits</th><th>Warp spend</th>
+            {thC('c', 'Chain')}{thC('grossUsd', 'Profit')}{thC('grossPerHour', '$/h')}
+            {thC('hits', 'Hits')}{thC('hitsPerHour', 'Hits/h')}{thC('hitRate', 'Hit rate')}
+            {thC('evals', 'Evals')}{thC('avgScanMs', 'Avg scan')}{thC('avgRefreshMs', 'Avg refresh')}
+            {thC('backruns', 'Backruns')}{thC('submits', 'Submits')}{thC('warpSpendUsd', 'Warp spend')}
           </tr></thead>
           <tbody>
-            {names.map(c => {
-              const m = chains[c]
+            {chainRows.map(row => {
+              const { c } = row
+              const m = row
               return (
                 <tr key={c}>
                   <td>{LABEL[c]}</td>
@@ -136,15 +146,15 @@ export default function Report() {
           <div className="dim" style={{ fontSize: 12.5 }}>No token-attributed profit in this window. Counters populate as profitable paths are evaluated.</div>
         ) : (
           <table>
-            <thead><tr><th>Token</th><th>Chain</th><th>Profitable paths</th><th>Profit</th><th>Share</th></tr></thead>
+            <thead><tr>{thT('token', 'Token')}{thT('chain', 'Chain')}{thT('hits', 'Profitable paths')}{thT('profitUsd', 'Profit')}{thT('share', 'Share')}</tr></thead>
             <tbody>
-              {data.tokens.map(t => (
+              {tokenRows.map(t => (
                 <tr key={`${t.chain}:${t.token}`}>
                   <td><b>{t.token}</b></td>
                   <td>{LABEL[t.chain] || t.chain}</td>
                   <td>{t.hits.toLocaleString()}</td>
                   <td className="pos">{fmt(t.profitUsd, currency, prices)}</td>
-                  <td className="mono">{totGross ? (t.profitUsd / totGross * 100).toFixed(1) : '0'}%</td>
+                  <td className="mono">{t.share.toFixed(1)}%</td>
                 </tr>
               ))}
             </tbody>

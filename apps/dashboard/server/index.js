@@ -19,6 +19,8 @@ const HOST = process.env.DASHBOARD_HOST || '127.0.0.1'
 const CHAINS = {
   bsc: { metrics: 'http://localhost:9100/metrics', rpc: 'https://bsc-rpc.publicnode.com', chainId: 56, label: 'BSC' },
   base: { metrics: 'http://localhost:9101/metrics', rpc: 'https://base-rpc.publicnode.com', chainId: 8453, label: 'Base' },
+  ethereum: { metrics: 'http://localhost:9102/metrics', rpc: 'https://ethereum-rpc.publicnode.com', chainId: 1, label: 'Ethereum' },
+  polygon: { metrics: 'http://localhost:9103/metrics', rpc: 'https://polygon-bor-rpc.publicnode.com', chainId: 137, label: 'Polygon' },
 }
 
 const ENV_PATH = path.join(REPO, '.env')
@@ -87,6 +89,85 @@ app.get('/api/metrics/all', async (_req, res) => {
     (s, m) => s + (m ? m['arb_gross_profit_usd_total'] || 0 : 0), 0)
   recordProfit(net)
   res.json({ live: isLive(), chains: out, profit: profitSummary(net), commit: BUILD_COMMIT })
+})
+
+// ── Canonical metrics contract ──────────────────────────────────────────
+// One normalized definition across API, UI and runner (improvement plan
+// Phase 3): net = gross − warp spend − gas. Pages should consume this
+// rather than interpreting raw Prometheus counters independently.
+const histP = (m, name, q) => {
+  const buckets = []
+  let count = null
+  for (const [k, v] of Object.entries(m)) {
+    const mm = k.match(new RegExp(`^${name}_bucket\\{le="([^"]+)"\\}$`))
+    if (mm) buckets.push([mm[1] === '+Inf' ? Infinity : +mm[1], v])
+    if (k === `${name}_count`) count = v
+  }
+  if (!count || !buckets.length) return null
+  buckets.sort((a, b) => a[0] - b[0])
+  const target = count * q
+  const hit = buckets.find(b => b[1] >= target)
+  if (!hit) return null
+  // +Inf means the quantile exceeds the highest finite bucket — report the
+  // top finite edge (a lower bound) rather than JSON-stringifying Infinity
+  // into a misleading null.
+  if (hit[0] === Infinity)
+    return buckets.filter(b => isFinite(b[0])).pop()?.[0] ?? null
+  return hit[0]
+}
+const histAvg = (m, name) => {
+  const s = m[`${name}_sum`], c = m[`${name}_count`]
+  return (s != null && c) ? s / c : null
+}
+
+app.get('/api/metrics/canonical', async (req, res) => {
+  const out = { live: isLive(), sampled_at: new Date().toISOString(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    let m = null
+    try { m = await fetchMetrics(c) } catch {}
+    if (!m) { out.chains[c] = null; continue }
+    // Gas USD uses the engine's own configured native-token price — the
+    // same assumption the profit gate makes, not an external oracle.
+    let nativeUsd = null
+    try {
+      nativeUsd = +(tomlScalar(tomlSection(readToml(c), 'token_usd_prices'), 'WBNB')
+        || tomlScalar(tomlSection(readToml(c), 'token_usd_prices'), 'ETH') || 0) || null
+    } catch {}
+    const gasUsd = nativeUsd != null
+      ? (m['arb_gas_spent_wei_total'] || 0) / 1e18 * nativeUsd : null
+    const landed = k => {
+      for (const [key, v] of Object.entries(m))
+        if (key === `arb_submit_landed_total{status="${k}"}`) return v
+      return 0
+    }
+    out.chains[c] = {
+      gross_usd: m['arb_gross_profit_usd_total'] ?? null,
+      warp_spend_usd: m['arb_warp_spend_usd_total'] ?? null,
+      gas_usd: gasUsd,
+      net_usd: m['arb_net_profit_usd_total'] ?? null,
+      paths_evaluated: m['arb_paths_evaluated_total'] ?? null,
+      profitable_paths: m['arb_profitable_found_total'] ?? null,
+      backrun_candidates: m['arb_backrun_candidates_total'] ?? null,
+      submit_attempts: m['arb_submit_attempts_total'] ?? null,
+      landed_success: landed('success'),
+      landed_revert: landed('revert'),
+      landed_dropped: landed('dropped'),
+      scan_latency_avg_ms: (() => { const v = histAvg(m, 'arb_scan_latency_seconds'); return v == null ? null : v * 1000 })(),
+      scan_latency_p95_ms: (() => { const v = histP(m, 'arb_scan_latency_seconds', 0.95); return v == null ? null : v * 1000 })(),
+      state_refresh_avg_ms: (() => { const v = histAvg(m, 'arb_state_refresh_seconds'); return v == null ? null : v * 1000 })(),
+      pending_to_eval_p50_ms: (() => { const v = histP(m, 'arb_pending_to_eval_seconds', 0.5); return v == null ? null : v * 1000 })(),
+      pending_to_submit_p95_ms: (() => { const v = histP(m, 'arb_pending_to_submit_seconds', 0.95); return v == null ? null : v * 1000 })(),
+      leader_observe_p99_us: (() => { const v = histP(m, 'arb_leader_observe_seconds', 0.99); return v == null ? null : v * 1e6 })(),
+      // Counter registers lazily on first drop — absent means zero drops.
+      leader_queue_dropped: (() => {
+        for (const [k, v] of Object.entries(m))
+          if (k.startsWith('arb_leader_queue_dropped_total')) return v
+        return 0
+      })(),
+      current_block: m['arb_current_block'] ?? null,
+    }
+  }
+  res.json(out)
 })
 
 // Rolling profit history — the UI's "last 24h" mode needs a baseline from
@@ -634,7 +715,7 @@ app.post('/api/withdraw', async (req, res) => {
 // Guarded Draft → Validate → Simulate → Apply workflow. Validation and
 // simulation probe the live chain; apply writes the TOML atomically and
 // restarts only the affected runner. Every step lands in the audit log.
-const CONFIG_FILES = { bsc: 'config/bsc.toml', base: 'config/base.toml' }
+const CONFIG_FILES = { bsc: 'config/bsc.toml', base: 'config/base.toml', ethereum: 'config/ethereum.toml', polygon: 'config/polygon.toml' }
 const DRAFTS_LOG = path.join(__dirname, '.config-drafts.json')
 const AUDIT_LOG = path.join(__dirname, '.config-audit.json')
 let drafts = []
@@ -972,7 +1053,7 @@ async function fleetBrief() {
           ? +(((m['arb_scan_latency_seconds_sum'] || 0) / m['arb_scan_latency_seconds_count']) * 1000).toFixed(1) : 0,
         evals: m.arb_paths_evaluated_total || 0, hits: m.arb_profitable_found_total || 0,
         gross: m.arb_gross_profit_usd_total || 0, net: m.arb_net_profit_usd_total || 0,
-        pools: m.arb_pools_total || 0 })
+        pools: m.arb_pool_count || 0 })
     }
     const snaps = histLog.filter(s => s.t >= Date.now() - 3600e3)
     if (snaps.length) {
@@ -1496,6 +1577,198 @@ direct_fallback = false
 })
 
 app.get('/api/config/audit', (_req, res) => res.json(auditLog.slice(-100).reverse()))
+
+// ── Wallet Intelligence ────────────────────────────────────────────────
+// Aggregates the leader-wallet pipeline: outcome scan (_scanned.jsonl),
+// strategy registry (_strategies.jsonl), discovery log (_discovered.jsonl),
+// scan cursor, per-wallet observation tails, plus live Prometheus counters.
+// Missing values are null — the page renders '—' and never infers.
+const readJsonl = p => {
+  try {
+    return fs.readFileSync(p, 'utf8').split('\n')
+      .map(l => { try { return JSON.parse(l) } catch { return null } })
+      .filter(Boolean)
+  } catch { return [] }
+}
+
+app.get('/api/wallet-intelligence', async (req, res) => {
+  const out = { live: isLive(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    const dir = path.join(REPO, 'data', 'leaders', cfg.label)
+    const scanned = readJsonl(path.join(dir, '_scanned.jsonl'))
+    const strategies = readJsonl(path.join(dir, '_strategies.jsonl'))
+    const discovered = readJsonl(path.join(dir, '_discovered.jsonl'))
+    let cursor = null, verify = null, scanmeta = null
+    try { cursor = JSON.parse(fs.readFileSync(path.join(dir, '_cursor.json'), 'utf8')) } catch {}
+    try { verify = JSON.parse(fs.readFileSync(path.join(dir, '_verify.json'), 'utf8')) } catch {}
+    try { scanmeta = JSON.parse(fs.readFileSync(path.join(dir, '_scanmeta.json'), 'utf8')) } catch {}
+    // Honest frequency: needs the real scan window + chain block time.
+    let blocksPerHour = null
+    try {
+      const bt = +(tomlScalar(readToml(c), 'block_time_ms') || 0)
+      if (bt > 0 && scanmeta?.scanned_blocks > 0)
+        blocksPerHour = 3600000 / bt / scanmeta.scanned_blocks
+    } catch {}
+    const freqPerHour = trades => (trades == null || blocksPerHour == null) ? null : trades * blocksPerHour
+    // Same composite as the client's forgeScore — emitted so ranking is a
+    // single source of truth (client falls back to local compute if absent).
+    const forgeScore = r => {
+      if (r.net_after_gas_usd == null) return 0
+      const wr = r.win_rate ?? 0
+      const freq = Math.min((r.trades ?? 0) / 20, 1)
+      const w = r.class === 'bundle_backrunner' ? 1 : r.class === 'atomic_arb' ? 0.8 : 0.4
+      return Math.log(1 + Math.max(0, r.net_after_gas_usd)) * (0.5 + 0.3 * wr + 0.2 * freq) * w
+    }
+    const forgeAction = r => {
+      if (r.state === 'expired') return 'expired'
+      if (r.state === 'bounded_live') return `live <$${r.max_notional_usd ?? '?'}`
+      if (r.state === 'shadow') return 'shadow'
+      if (r.sim_verified) return 'verified'
+      if (r.state === 'replay' && r.coverage != null && r.coverage < 1) return 'import route'
+      if (r.state === 'replay') return 'shadow-ready'
+      return 'hold'
+    }
+    const stratByWallet = {}
+    for (const s of strategies) stratByWallet[`${s.wallet}/${s.class}`] = s
+    const discSet = new Set(discovered.map(d => d.wallet))
+    const rows = []
+    const inRows = new Set()
+    for (const w of scanned) {
+      const strat = stratByWallet[`${w.address}/${w.class}`]
+        || strategies.find(s => s.wallet === w.address)
+      rows.push({
+        wallet: w.address, class: w.class,
+        state: strat?.state ?? 'observe',
+        trades: w.trade_txs ?? null, txs: w.txs ?? null,
+        win_rate: w.win_rate ?? null,
+        median_win_usd: w.median_win_usd ?? null,
+        net_after_gas_usd: w.net_after_gas_usd ?? null,
+        avg_profit_usd: (w.trade_txs > 0 && w.net_after_gas_usd != null)
+          ? w.net_after_gas_usd / w.trade_txs : null,
+        freq_per_hour: freqPerHour(w.trade_txs),
+        shadow_precision: null, revert_rate: null,
+        private_hits: w.private_hits ?? 0, atomic_txs: w.atomic_txs ?? 0,
+        coverage: strat?.coverage ?? null,
+        route_pools: strat?.route_pools ?? [],
+        executor_family: strat?.executor_family ?? null,
+        sim_verified: strat?.sim_verified ?? false,
+        verified_profit_usd: strat?.verified_profit_usd ?? null,
+        confidence: strat?.confidence ?? null,
+        last_seen_block: strat?.last_seen_block ?? null,
+        expires_at_block: strat?.expires_at_block ?? null,
+        max_notional_usd: strat?.max_notional_usd ?? null,
+        discovered_pending: discSet.has(w.address),
+        best_tx: w.best_tx ?? null,
+      })
+      rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
+      rows[rows.length - 1].forge_score = forgeScore(rows[rows.length - 1])
+      inRows.add(`${w.address}/${w.class}`)
+    }
+    // Registry strategies with no scan row (expired-visibility preserved).
+    for (const s of strategies) {
+      if (inRows.has(`${s.wallet}/${s.class}`)) continue
+      rows.push({
+        wallet: s.wallet, class: s.class, state: s.state,
+        trades: s.sample_trades ?? null, txs: null,
+        win_rate: s.win_rate ?? null,
+        median_win_usd: s.median_profit_usd ?? null,
+        net_after_gas_usd: s.net_pnl_usd ?? null,
+        avg_profit_usd: (s.sample_trades > 0 && s.net_pnl_usd != null)
+          ? s.net_pnl_usd / s.sample_trades : null,
+        freq_per_hour: freqPerHour(s.sample_trades),
+        shadow_precision: null, revert_rate: null,
+        private_hits: 0, atomic_txs: 0,
+        coverage: s.coverage ?? null, route_pools: s.route_pools ?? [],
+        executor_family: s.executor_family ?? null,
+        sim_verified: s.sim_verified ?? false,
+        verified_profit_usd: s.verified_profit_usd ?? null,
+        confidence: s.confidence ?? null,
+        last_seen_block: s.last_seen_block ?? null,
+        expires_at_block: s.expires_at_block ?? null,
+        max_notional_usd: s.max_notional_usd ?? null,
+        discovered_pending: discSet.has(s.wallet), best_tx: null,
+      })
+      rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
+      rows[rows.length - 1].forge_score = forgeScore(rows[rows.length - 1])
+    }
+    // Observation tails for the detail drawer (last 5 per wallet on demand —
+    // cheap: files are bounded and only present for observed wallets).
+    const obsTails = {}
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (!/^0x[0-9a-fA-F]{40}\.jsonl$/.test(f)) continue
+        const wallet = f.slice(0, -6)
+        if (!rows.some(r => r.wallet === wallet)) continue
+        const obs = readJsonl(path.join(dir, f))
+        obsTails[wallet] = { count: obs.length, tail: obs.slice(-5) }
+      }
+    } catch {}
+    // Live counters relevant to execution risk.
+    let counters = {}
+    try {
+      const m = await fetchMetrics(c)
+      counters = {
+        bait_suspect: m['arb_bait_suspect_total'] ?? 0,
+        submit_attempts: m['arb_submit_attempts_total'] ?? 0,
+        builder_sim_rejects: m['arb_builder_sim_reject_total'] ?? 0,
+        path_suppressed: m['arb_path_suppressed_total'] ?? 0,
+        current_block: m['arb_current_block'] ?? null,
+      }
+    } catch { counters = null }
+    out.chains[c] = {
+      online: counters != null, cursor_block: cursor?.last_scanned_block ?? null,
+      scanned_wallets: scanned.length, strategies: strategies.length,
+      verify,
+      rows, obs_tails: obsTails, counters,
+    }
+  }
+  res.json(out)
+})
+
+// Actionable opportunities — the intelligence product per Commander directive:
+// executable records (route + victim + sim outcome), not wallet statistics.
+// Reads data/leaders/<chain>/_opportunities.jsonl, dedupes by id keeping the
+// latest record, plus the live arb_opportunity_* funnel counters.
+app.get('/api/opportunities', async (req, res) => {
+  const out = { live: isLive(), chains: {} }
+  for (const [c, cfg] of Object.entries(CHAINS)) {
+    const dir = path.join(REPO, 'data', 'leaders', cfg.label)
+    const byId = {}
+    for (const o of readJsonl(path.join(dir, '_opportunities.jsonl'))) {
+      if (o?.opportunity_id) byId[o.opportunity_id] = o
+    }
+    const rows = Object.values(byId)
+      .sort((a, b) => (b.allbright_net_usd || 0) - (a.allbright_net_usd || 0)
+        || (b.unix_ms || 0) - (a.unix_ms || 0))
+    // Funnel derived from the records (scan/profiler write the JSONL, not the
+    // runner's metric registry). Live counters merge on top for matched_live /
+    // submitted which only the runner emits.
+    const funnel = {
+      decoded: rows.length,
+      replay_attempts: rows.filter(o => o.simulation_status && o.simulation_status !== 'pending').length,
+      replay_positive: rows.filter(o => o.simulation_status === 'pass').length,
+      actionable: rows.filter(o => o.simulation_status === 'pass' && (o.allbright_net_usd || 0) > 0 && !o.rejection_reason).length,
+      matched_live: 0, submitted: 0,
+    }
+    for (const o of rows) {
+      if (o.rejection_reason) funnel[`rejected_${o.rejection_reason}`] = (funnel[`rejected_${o.rejection_reason}`] || 0) + 1
+    }
+    let online = false
+    try {
+      const m = await fetchMetrics(c)
+      online = true
+      for (const [k, v] of Object.entries(m)) {
+        if (k.startsWith('arb_opportunity_total{')) {
+          const stage = k.match(/stage="([^"]+)"/)?.[1]
+          if (stage && (stage === 'matched_live' || stage === 'submitted' || stage === 'landed' || stage === 'settled'))
+            funnel[stage] = (funnel[stage] || 0) + v
+        }
+      }
+    } catch { /* runner offline — record-derived funnel still shown */ }
+    out.chains[c] = { online, funnel, rows }
+  }
+  res.json(out)
+})
 
 app.use(express.static(path.join(__dirname, '../dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../dist/index.html')))

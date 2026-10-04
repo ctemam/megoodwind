@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { useApp, fmt } from './state.jsx'
 import Overview from './pages/Overview.jsx'
@@ -9,6 +9,7 @@ import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
 import ChainConfig from './pages/ChainConfig.jsx'
+import WalletIntelligence from './pages/WalletIntelligence.jsx'
 import AgentPanel from './AgentPanel.jsx'
 
 const NAV = [
@@ -18,6 +19,7 @@ const NAV = [
   ['/wallet', '◉', 'Wallet'],
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
+  ['/intel', '◈', 'Wallet Intelligence'],
   ['/infra', '⛓', 'Infrastructure'],
   ['/config', '⚙', 'Chain Config'],
 ]
@@ -26,6 +28,11 @@ export default function App() {
   const { refreshMs, setRefreshMs, currency, setCurrency, profitPeriod, setProfitPeriod, prices, all, history } = useApp()
   const [collapsed, setCollapsed] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  const [theme, setTheme] = useState(() => localStorage.getItem('ab-theme') || 'dark')
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('ab-theme', theme)
+  }, [theme])
   const net = (profitPeriod === 'day' ? all.profit?.day : all.profit?.lifetime)
     ?? (history.length ? history[history.length - 1].net : 0)
   const online = Object.values(all.chains || {}).filter(Boolean).length
@@ -65,6 +72,10 @@ export default function App() {
             <div><b>{online === 2 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/2 runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
           </div>
           <button className={`agent-btn ${agentOpen ? 'on' : ''}`} onClick={() => setAgentOpen(o => !o)} title="Ops Copilot">◆</button>
+          <button className="theme-btn" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? 'Day mode' : 'Night mode'}>
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
           <div className="ctl">
             <select value={currency} onChange={e => setCurrency(e.target.value)}>
               {['USD', 'ETH', 'USDT'].map(c => <option key={c}>{c}</option>)}
@@ -83,6 +94,7 @@ export default function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />
+          <Route path="/intel" element={<WalletIntelligence />} />
           <Route path="/infra" element={<Infra />} />
           <Route path="/config" element={<ChainConfig />} />
         </Routes>

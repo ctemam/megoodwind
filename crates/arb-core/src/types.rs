@@ -43,7 +43,20 @@ impl Protocol {
                     panic!("PCS Stable/Wombat/DODO are not supported on Base (chain 8453)")
                 }
             },
-            _ => panic!("Unknown chain_id {chain_id} for protocol enum mapping"),
+            // Generic Uni-family mapping for chains without a dedicated
+            // executor contract (scan/measure mode). The enum encoding only
+            // reaches the wire when an executor contract is deployed; until
+            // then Multicall3 reads and quoters use these standard indices.
+            _ => match self {
+                Self::UniswapV3 => 0,
+                Self::UniswapV4 => 1,
+                Self::UniswapV2 => 2,
+                Self::Algebra => 5,
+                Self::PancakeStable | Self::Wombat | Self::DodoV2
+                | Self::AerodromeV2 | Self::AerodromeSlipstream => {
+                    panic!("{self:?} has no executor mapping on chain {chain_id}")
+                }
+            },
         }
     }
 }
