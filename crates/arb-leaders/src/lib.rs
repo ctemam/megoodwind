@@ -84,6 +84,14 @@ lazy_static! {
         &["chain"]
     )
     .unwrap();
+    /// Discovered candidates auto-promoted to live copy tier by
+    /// copy_promote_score — these wallets now submit real copies.
+    pub static ref LEADER_LIVE: IntCounterVec = register_int_counter_vec!(
+        "arb_leader_live_total",
+        "Discovered wallets auto-promoted to live copy tier",
+        &["chain"]
+    )
+    .unwrap();
     /// Observations dropped because the async writer queue was full — the
     /// execution path always wins: intelligence telemetry is shed first.
     pub static ref LEADER_QUEUE_DROPPED: IntCounterVec = register_int_counter_vec!(
@@ -248,6 +256,14 @@ pub struct LeadersConfig {
     /// Per-swap deadline offset in seconds. Default 120.
     #[serde(default = "default_copy_deadline")]
     pub copy_deadline_secs: u64,
+    /// Auto-promote: a discovered wallet whose decayed score crosses this
+    /// threshold is upgraded straight to risk_tier="live" with its copy
+    /// notional capped at copy_usd. 0 (default) disables — candidates
+    /// stay candidates until edited by hand. Set above
+    /// discover_min_score; the live bar should be meaningfully higher
+    /// than the candidate bar (e.g. 40 vs 15).
+    #[serde(default)]
+    pub copy_promote_score: f64,
 }
 
 fn default_min_score() -> f64 { 15.0 }
@@ -323,6 +339,37 @@ impl LeaderRegistry {
         map.insert(addr, wallet);
         self.discovered.lock().unwrap().insert(addr);
         true
+    }
+
+    /// True when addr is an auto-discovered wallet still at candidate
+    /// tier — the only shape eligible for auto-promotion to live.
+    pub fn is_discovered_candidate(&self, addr: &Address) -> bool {
+        self.discovered.lock().unwrap().contains(addr)
+            && self
+                .wallets
+                .read()
+                .unwrap()
+                .get(addr)
+                .map(|w| w.risk_tier == "candidate")
+                .unwrap_or(false)
+    }
+
+    /// Upgrade a discovered candidate to risk_tier="live" with a copy
+    /// notional cap. Returns true only when an upgrade happened — manual
+    /// entries and already-live wallets are untouched.
+    pub fn escalate_discovered(&self, addr: &Address, notional_usd: f64) -> bool {
+        if !self.discovered.lock().unwrap().contains(addr) {
+            return false;
+        }
+        let mut map = self.wallets.write().unwrap();
+        match map.get_mut(addr) {
+            Some(w) if w.risk_tier == "candidate" => {
+                w.risk_tier = "live".to_string();
+                w.max_copied_notional_usd = notional_usd;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Evict the lowest-priority discovered wallet (caller decides which —
@@ -573,6 +620,8 @@ impl LeaderObserver {
                 discover_cfg.discover_max_wallets,
                 discover_cfg.discover_halflife_secs,
                 discover_cfg.discover_require_block_confirmation,
+                discover_cfg.copy_promote_score,
+                discover_cfg.copy_usd,
             )
         });
         Self { registry, discoverer, writer_tx, depth, chain }
@@ -769,6 +818,11 @@ pub struct LeaderDiscoverer {
     halflife_secs: f64,
     /// See LeadersConfig::discover_require_block_confirmation.
     require_block_confirmation: bool,
+    /// Score at which a discovered candidate escalates to live copy tier
+    /// (0 = never auto-promote). See LeadersConfig::copy_promote_score.
+    promote_score: f64,
+    /// Copy notional cap stamped onto auto-promoted wallets (= copy_usd).
+    promote_notional: f64,
 }
 
 /// Hard caps keep discovery maps bounded — once full, new senders/pairs
@@ -797,6 +851,8 @@ impl LeaderDiscoverer {
         max_wallets: usize,
         halflife_secs: f64,
         require_block_confirmation: bool,
+        promote_score: f64,
+        promote_notional: f64,
     ) -> Self {
         Self {
             registry,
@@ -809,6 +865,8 @@ impl LeaderDiscoverer {
             max_wallets,
             halflife_secs,
             require_block_confirmation,
+            promote_score,
+            promote_notional,
         }
     }
 
@@ -820,7 +878,9 @@ impl LeaderDiscoverer {
 
     fn track(&self, pending: &PendingSwap) {
         let from = pending.from;
-        if self.registry.contains(&from) {
+        if self.registry.contains(&from)
+            && !(self.promote_score > 0.0 && self.registry.is_discovered_candidate(&from))
+        {
             return; // already a leader — no re-scoring needed
         }
         let class = classify(pending, !pending.decoded.pools_touched.is_empty());
@@ -912,6 +972,15 @@ impl LeaderDiscoverer {
     }
 
     fn promote(&self, addr: Address, score: f64, observations: u32, dominant: &'static str) {
+        let goes_live =
+            self.promote_score > 0.0 && score >= self.promote_score;
+        // Already a candidate and crossed the live bar — upgrade in place.
+        if goes_live && self.registry.escalate_discovered(&addr, self.promote_notional) {
+            LEADER_LIVE.with_label_values(&[&self.chain]).inc();
+            self.emit(addr, score, observations, dominant,
+                "candidate score crossed live threshold — promoted to live copy tier");
+            return;
+        }
         // Evict weakest discovered wallet when at cap — manual entries safe.
         if self.registry.discovered_count() >= self.max_wallets {
             if let Some(victim) = self.weakest_discovered() {
@@ -924,14 +993,26 @@ impl LeaderDiscoverer {
             address: format!("{addr:#x}"),
             label: "auto-discovered".to_string(),
             strategy_hypothesis: dominant.to_string(),
-            risk_tier: "candidate".to_string(),
-            max_copied_notional_usd: 0.0,
+            risk_tier: if goes_live { "live".to_string() } else { "candidate".to_string() },
+            max_copied_notional_usd: if goes_live { self.promote_notional } else { 0.0 },
             enabled: true,
         };
         if !self.registry.insert_discovered(addr, wallet) {
             return;
         }
         LEADER_DISCOVERED.with_label_values(&[&self.chain]).inc();
+        if goes_live {
+            LEADER_LIVE.with_label_values(&[&self.chain]).inc();
+        }
+        self.emit(addr, score, observations, dominant,
+            if goes_live {
+                "bot-signal score crossed live threshold — promoted straight to live copy tier"
+            } else {
+                "bot-signal score crossed threshold in live pending stream"
+            });
+    }
+
+    fn emit(&self, addr: Address, score: f64, observations: u32, dominant: &'static str, reason: &'static str) {
         let ev = DiscoveryEvent {
             chain: self.chain.clone(),
             wallet: format!("{addr:#x}"),
@@ -942,7 +1023,7 @@ impl LeaderDiscoverer {
             score,
             observations,
             dominant_class: dominant.to_string(),
-            reason: "bot-signal score crossed threshold in live pending stream".to_string(),
+            reason: reason.to_string(),
         };
         match self.writer_tx.try_send(WriterJob::DiscoveryEvent(Box::new(ev))) {
             Ok(()) => {}
