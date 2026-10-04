@@ -58,6 +58,7 @@ reqwest = { workspace = true }
 toml = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
+rayon = { workspace = true }
 prometheus = { workspace = true }
 dashmap = { workspace = true }
 lazy_static = "1"
