@@ -76,6 +76,9 @@ async fn main() -> Result<()> {
                 token0: dp.token0.clone(),
                 token1: dp.token1.clone(),
                 fee_bps: dp.fee_bps,
+                fee_pips: None,
+                tick_spacing: None,
+                hooks: None,
             }
             .parse_protocol();
             pool_infos.push(PoolInfo {

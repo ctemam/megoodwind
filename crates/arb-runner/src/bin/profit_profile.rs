@@ -204,25 +204,25 @@ async fn main() -> Result<()> {
     let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().expect("bad pool addr"),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| PoolConfig {
+            address,
             protocol: p.parse_protocol(),
             fee_bps: p.fee_bps,
             token0: tokens.get(&p.token0).copied(),
             token1: tokens.get(&p.token1).copied(),
-        })
+        }))
         .collect();
 
     let mut pool_infos: Vec<arb_paths::enumerate::PoolInfo> = cfg
         .pools
         .iter()
-        .map(|p| arb_paths::enumerate::PoolInfo {
-            address: p.address.parse().expect("bad pool addr"),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| arb_paths::enumerate::PoolInfo {
+            address,
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
-                liquidity_hint: 0.0,
-        })
+            liquidity_hint: 0.0,
+        }))
         .collect();
 
     // Same boot normalization the runner applies: Uniswap-family token0 <
@@ -253,6 +253,14 @@ async fn main() -> Result<()> {
         println!("PROFILER normalized_flipped_pools={normalized}");
     }
 
+    let (v4_specs, _, invalid_v4) = config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
+    pool_infos.retain(|pi| !invalid_v4.contains(&pi.address));
+
     let pool_fee_bps: HashMap<Address, u32> =
         pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
@@ -262,7 +270,8 @@ async fn main() -> Result<()> {
         state_reader,
         pool_configs,
         cfg.chain.chain_id,
-    );
+    )
+    .with_v4_pools(v4_specs);
 
     let flash_tokens: Vec<Address> = cfg.scanner.flash_tokens.iter().map(|n| tokens[n]).collect();
     let flash_amounts: HashMap<Address, U256> = cfg
@@ -562,10 +571,20 @@ async fn main() -> Result<()> {
         if wss_urls.is_empty() {
             wss_urls.push(cfg.chain.rpc_wss.clone());
         }
+        let mut wss_sources: Vec<arb_mempool::WssSource> = wss_urls
+            .into_iter()
+            .map(arb_mempool::WssSource::public)
+            .collect();
+        for url in &cfg.chain.private_mempool_wss {
+            wss_sources.push(arb_mempool::WssSource {
+                url: url.clone(),
+                auth: cfg.chain.private_mempool_auth.clone(),
+            });
+        }
         let (tx, mut rx) = mpsc::channel(1000);
         let cid = cfg.chain.chain_id;
         tokio::spawn(async move {
-            let watcher = MempoolWatcher::new(&wss_urls, cid);
+            let watcher = MempoolWatcher::with_sources(wss_sources, cid);
             let _ = watcher.start(tx).await;
         });
 

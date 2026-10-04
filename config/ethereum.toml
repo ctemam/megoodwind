@@ -14,6 +14,10 @@ rpc_wss_pool = [
 ]
 trader_rpc = ""
 # No executor/reader deployed on Ethereum — scan/measure mode.
+# UniV4 PoolManager on Ethereum mainnet. Required by protocol="v4"
+# [[pools]] entries (address = 32-byte poolId, + tick_spacing/fee_pips).
+# The deployed arb contract must expose executeV4Arbitrage on this chain.
+# v4_pool_manager = "0x000000000004444c5dc75cB358380D2e3dE08A90"
 arb_contract = "0x70DD16A8dA1639fc734d3AA0765436D8dBaeccC3"
 state_reader = "0x0000000000000000000000000000000000000000"
 block_time_ms = 12000

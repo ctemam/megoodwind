@@ -7,6 +7,7 @@ use alloy_sol_types::SolCall;
 use anyhow::Result;
 
 use arb_core::types::Protocol;
+use arb_paths::template::V4Key;
 use arb_paths::PathTemplate;
 use arb_rpc::Endpoint;
 
@@ -40,31 +41,52 @@ pub struct PresignPool {
 
 impl PresignPool {
     pub fn new(paths: &[PathTemplate], chain_id: u64) -> Self {
-        let mut templates = HashMap::new();
-        for path in paths {
-            let has_v4_hop = path.hops.iter().any(|h| h.protocol == Protocol::UniswapV4);
-            if has_v4_hop {
-                continue;
-            }
+        Self::new_with_v4(paths, chain_id, &HashMap::new())
+    }
 
-            let swap_instructions: Vec<SwapInstruction> = path
-                .hops
-                .iter()
-                .map(|hop| SwapInstruction {
-                    protocol: hop.protocol.to_contract_enum(chain_id),
-                    pool: hop.pool,
-                    poolKey: PoolKey {
+    /// Presign paths that may include UniswapV4 hops: `v4_keys` maps each
+    /// V4 hop's pseudo pool address to its PoolKey. A path whose V4 hop has
+    /// no key is skipped — shipping a zeroed key would revert on-chain and
+    /// the exec probe would waste a round-trip killing it anyway.
+    pub fn new_with_v4(
+        paths: &[PathTemplate],
+        chain_id: u64,
+        v4_keys: &HashMap<Address, V4Key>,
+    ) -> Self {
+        let mut templates = HashMap::new();
+        'paths: for path in paths {
+            let mut swap_instructions = Vec::with_capacity(path.hops.len());
+            for hop in &path.hops {
+                let pool_key = if hop.protocol == Protocol::UniswapV4 {
+                    let Some(k) = v4_keys.get(&hop.pool) else {
+                        continue 'paths;
+                    };
+                    PoolKey {
+                        currency0: k.currency0,
+                        currency1: k.currency1,
+                        fee: alloy_primitives::Uint::from(k.fee),
+                        tickSpacing: alloy_primitives::Signed::<24, 1>::try_from(k.tick_spacing)
+                            .unwrap_or_default(),
+                        hooks: k.hooks,
+                    }
+                } else {
+                    PoolKey {
                         currency0: Address::ZERO,
                         currency1: Address::ZERO,
                         fee: alloy_primitives::Uint::from(0u32),
                         tickSpacing: alloy_primitives::Signed::ZERO,
                         hooks: Address::ZERO,
-                    },
+                    }
+                };
+                swap_instructions.push(SwapInstruction {
+                    protocol: hop.protocol.to_contract_enum(chain_id),
+                    pool: hop.pool,
+                    poolKey: pool_key,
                     tokenIn: hop.token_in,
                     tokenOut: hop.token_out,
                     minOut: U256::ZERO,
-                })
-                .collect();
+                });
+            }
 
             let gas_limit: u64 = 80_000 + path.hops.iter()
                 .map(|h| gas_for_protocol(h.protocol))
@@ -310,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn test_presign_pool_skips_v4() {
+    fn test_presign_pool_skips_v4_without_key() {
         let paths = vec![PathTemplate {
             id: 0,
             flash_token: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -322,7 +344,40 @@ mod tests {
                 token_out: address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             }],
         }];
+        // A V4 hop with no PoolKey in the map must be skipped, not sent with
+        // a zeroed key.
         let pool = PresignPool::new(&paths, 56);
         assert!(pool.templates.is_empty());
+    }
+
+    #[test]
+    fn test_presign_pool_includes_v4_with_key() {
+        use arb_paths::template::V4Key;
+        let v4_pool = address!("9999999999999999999999999999999999999999");
+        let paths = vec![PathTemplate {
+            id: 0,
+            flash_token: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            flash_amount: U256::from(1000u32),
+            hops: vec![HopTemplate {
+                protocol: Protocol::UniswapV4,
+                pool: v4_pool,
+                token_in: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                token_out: address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            }],
+        }];
+        let mut keys = HashMap::new();
+        keys.insert(v4_pool, V4Key {
+            currency0: address!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            currency1: address!("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            fee: 3000,
+            tick_spacing: 60,
+            hooks: Address::ZERO,
+        });
+        let pool = PresignPool::new_with_v4(&paths, 56, &keys);
+        let tpl = pool.templates.get(&0).unwrap();
+        let instr = &tpl.swap_instructions[0];
+        assert_eq!(instr.poolKey.fee, alloy_primitives::Uint::from(3000u32));
+        assert_eq!(instr.poolKey.tickSpacing, alloy_primitives::Signed::<24, 1>::try_from(60).unwrap());
+        assert_eq!(tpl.gas_limit, 80_000 + 300_000);
     }
 }

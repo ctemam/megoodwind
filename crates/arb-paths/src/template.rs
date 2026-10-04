@@ -2,6 +2,21 @@ use alloy_primitives::Address;
 use arb_core::types::Protocol;
 use serde::{Deserialize, Serialize};
 
+/// Uniswap V4 PoolKey — a V4 pool is not a contract; it is identified inside
+/// the PoolManager singleton by (currency0, currency1, fee, tickSpacing,
+/// hooks). The executor needs the whole key for `PoolManager.swap`. Hops are
+/// keyed by a pseudo address (last 20 bytes of the poolId) stored in
+/// `hop.pool` — the contract ignores that field for V4 and uses the key.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct V4Key {
+    pub currency0: Address,
+    pub currency1: Address,
+    /// LP fee in pips (same units as Uniswap V3 fee — 3000 = 0.3%).
+    pub fee: u32,
+    pub tick_spacing: i32,
+    pub hooks: Address,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HopTemplate {
     pub protocol: Protocol,

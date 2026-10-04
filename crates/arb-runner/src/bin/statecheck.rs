@@ -44,13 +44,13 @@ async fn main() -> Result<()> {
     let mut pool_infos: Vec<PoolInfo> = cfg
         .pools
         .iter()
-        .map(|p| PoolInfo {
-            address: p.address.parse().unwrap(),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| PoolInfo {
+            address,
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
-                liquidity_hint: 0.0,
-        })
+            liquidity_hint: 0.0,
+        }))
         .collect();
 
     let toml_addrs: std::collections::HashSet<Address> =
@@ -72,6 +72,9 @@ async fn main() -> Result<()> {
                 token0: dp.token0.clone(),
                 token1: dp.token1.clone(),
                 fee_bps: dp.fee_bps,
+                fee_pips: None,
+                tick_spacing: None,
+                hooks: None,
             }
             .parse_protocol();
             pool_infos.push(PoolInfo { address: addr, protocol, token0: t0, token1: t1, liquidity_hint: dp.liquidity_usd });
@@ -89,16 +92,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    let pool_configs: Vec<PoolConfig> = cfg
+    let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().unwrap(),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| PoolConfig {
+            address,
             protocol: p.parse_protocol(),
             fee_bps: p.fee_bps,
             token0: tokens.get(&p.token0).copied(),
             token1: tokens.get(&p.token1).copied(),
-        })
+        }))
         .collect();
 
     let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
@@ -109,7 +112,14 @@ async fn main() -> Result<()> {
         Endpoint::new_pooled(&read_urls, &cfg.chain.rpc_wss, None, cfg.chain.chain_id).await?,
     );
     let state_reader: Address = cfg.chain.state_reader.parse().unwrap_or(Address::ZERO);
-    let refresher = StateRefresher::new(endpoint, state_reader, pool_configs, cfg.chain.chain_id);
+    let (v4_specs, _, invalid_v4) = config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
+    let refresher = StateRefresher::new(endpoint, state_reader, pool_configs, cfg.chain.chain_id)
+        .with_v4_pools(v4_specs);
     let store = PoolStore::new();
     let (updated, dur) = refresher.refresh(&store).await?;
     println!("refreshed pools={updated} in {dur:?}");

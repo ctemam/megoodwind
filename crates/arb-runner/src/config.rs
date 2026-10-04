@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use alloy_primitives::{Address, B256};
 use anyhow::Result;
 use serde::Deserialize;
 
 use arb_core::types::Protocol;
+use arb_paths::template::V4Key;
 use arb_rpc::ChainConfig;
 
 /// Compile-time spec primitives (docs/AGENTS_SPEC.md §2 + scoring matrix).
@@ -181,17 +183,136 @@ fn default_optimization_iterations() -> usize { 30 }
 pub struct PoolEntry {
     #[allow(dead_code)]
     pub name: String,
+    /// Pool contract address. For `v4` pools this is the 32-byte poolId
+    /// (`0x` + 64 hex chars) — the pool is state inside the PoolManager
+    /// singleton, not a contract. A 20-byte value here means the entry
+    /// cannot be read or executed and is skipped.
     pub address: String,
     pub protocol: String,
     pub token0: String,
     pub token1: String,
+    /// LP fee in bps for known pools — V4 uses the same field
+    /// (converted to pips in the PoolKey) unless `fee_pips` overrides it.
     pub fee_bps: u32,
+    /// V4 only: LP fee in pips (1 pip = 0.01 bps). Needed for sub-bps
+    /// fees — e.g. the BSC USDT/USDC pool at fee=1 pip.
+    pub fee_pips: Option<u32>,
+    /// V4 only: tickSpacing of the PoolKey (required for v4 entries).
+    pub tick_spacing: Option<i32>,
+    /// V4 only: hook contract address (defaults to zero address).
+    pub hooks: Option<String>,
 }
 
 impl PoolEntry {
     pub fn parse_protocol(&self) -> Protocol {
         parse_protocol_name(&self.protocol)
     }
+
+    /// Pseudo address used as the bookkeeping key everywhere a pool
+    /// `Address` is expected (PoolStore key, hop.pool, PoolConfig.address).
+    /// For V4 this is the last 20 bytes of the poolId; for everything else
+    /// it is the pool contract address.
+    pub fn pseudo_address(&self) -> Result<Address> {
+        if self.parse_protocol() == Protocol::UniswapV4 {
+            let id: B256 = self.address.parse()
+                .map_err(|e| anyhow::anyhow!("v4 pool `{}`: address must be the 32-byte poolId, got `{}`: {}", self.name, self.address, e))?;
+            Ok(Address::from_slice(&id[12..32]))
+        } else {
+            self.address.parse().map_err(Into::into)
+        }
+    }
+
+    /// V4 PoolKey for this entry, or None for non-V4 protocols. `tokens`
+    /// maps config token symbols to contract addresses (same map used for
+    /// token0/token1 resolution). currency0/currency1 are sorted as the
+    /// PoolKey requires.
+    pub fn v4_key(
+        &self,
+        token0: Address,
+        token1: Address,
+    ) -> Result<Option<V4Key>> {
+        if self.parse_protocol() != Protocol::UniswapV4 {
+            return Ok(None);
+        }
+        let tick_spacing = self.tick_spacing.ok_or_else(|| {
+            anyhow::anyhow!("v4 pool `{}` needs tick_spacing", self.name)
+        })?;
+        let hooks: Address = match &self.hooks {
+            Some(h) => h.parse().map_err(|e| anyhow::anyhow!("v4 pool `{}` hooks: {}", self.name, e))?,
+            None => Address::ZERO,
+        };
+        let (currency0, currency1) = if token0 < token1 { (token0, token1) } else { (token1, token0) };
+        Ok(Some(V4Key {
+            currency0,
+            currency1,
+            fee: self.fee_pips.unwrap_or_else(|| self.fee_bps.saturating_mul(100)),
+            tick_spacing,
+            hooks,
+        }))
+    }
+
+    /// V4 poolId (the full 32-byte `address` field). Errors when the entry
+    /// is V4 and the field isn't a 32-byte value.
+    pub fn v4_pool_id(&self) -> Result<Option<B256>> {
+        if self.parse_protocol() != Protocol::UniswapV4 {
+            return Ok(None);
+        }
+        self.address.parse::<B256>().map(Some).map_err(|e| {
+            anyhow::anyhow!("v4 pool `{}`: address must be the 32-byte poolId, got `{}`: {}", self.name, self.address, e)
+        })
+    }
+}
+
+/// Resolve all `v4` pool entries into the three artifacts the pipeline
+/// needs: PoolManager specs for state reads (refresher), PoolKeys by
+/// pseudo address for execution (presign), and the pseudo addrs of entries
+/// that failed validation so the caller can drop them from the graph.
+/// An entry missing tick_spacing, declared tokens, a 32-byte poolId, or a
+/// chain-level `v4_pool_manager` lands in the invalid set — a keyless V4
+/// pool can neither quote nor execute.
+pub fn resolve_v4(
+    pools: &[PoolEntry],
+    tokens: &HashMap<String, Address>,
+    v4_pool_manager: Option<Address>,
+) -> (
+    Vec<arb_state::refresher::V4PoolSpec>,
+    HashMap<Address, V4Key>,
+    HashSet<Address>,
+) {
+    let mut keys = HashMap::new();
+    let mut specs = Vec::new();
+    let mut invalid = HashSet::new();
+    for p in pools {
+        if p.parse_protocol() != Protocol::UniswapV4 {
+            continue;
+        }
+        let Some(pool_id) = p.v4_pool_id().ok().flatten() else {
+            tracing::warn!(pool = %p.name, "v4 entry dropped — address must be the 32-byte poolId");
+            continue;
+        };
+        let pseudo = Address::from_slice(&pool_id[12..32]);
+        let (Some(t0), Some(t1)) = (tokens.get(&p.token0), tokens.get(&p.token1)) else {
+            tracing::warn!(pool = %p.name, "v4 entry dropped — token0/token1 must be declared tokens");
+            invalid.insert(pseudo);
+            continue;
+        };
+        match (p.v4_key(*t0, *t1), v4_pool_manager) {
+            (Ok(Some(key)), Some(manager)) => {
+                keys.insert(pseudo, key);
+                specs.push(arb_state::refresher::V4PoolSpec { address: pseudo, pool_id, manager });
+            }
+            _ => {
+                tracing::warn!(
+                    pool = %p.name,
+                    has_manager = v4_pool_manager.is_some(),
+                    has_tick_spacing = p.tick_spacing.is_some(),
+                    "v4 entry dropped — needs tick_spacing + [chain] v4_pool_manager"
+                );
+                invalid.insert(pseudo);
+            }
+        }
+    }
+    (specs, keys, invalid)
 }
 
 /// Protocol-name string -> Protocol (config key space, e.g. "v3", "pcs_stable").

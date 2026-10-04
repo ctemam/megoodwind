@@ -63,9 +63,9 @@ impl PathEnumerator {
 
         let mut adjacency: HashMap<Address, Vec<(usize, Address)>> = HashMap::new();
         for (idx, pool) in self.pools.iter().enumerate() {
-            if pool.protocol == Protocol::UniswapV4 {
-                continue;
-            }
+            // UniswapV4 pools DO take part in enumeration — the caller feeds
+            // only V4 entries that carry complete PoolKey metadata, and the
+            // executor resolves the pseudo `hop.pool` back to a PoolKey.
             adjacency
                 .entry(pool.token0)
                 .or_default()
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enumerate_skips_v4_pools() {
+    fn test_enumerate_includes_v4_pools() {
         let pools = vec![
             PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
             PoolInfo { address: addr(11), protocol: Protocol::UniswapV4, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
@@ -387,14 +387,12 @@ mod tests {
         let enumerator = PathEnumerator::new(pools, vec![addr(1)], amounts);
         let paths = enumerator.enumerate();
 
-        for path in &paths {
-            for hop in &path.hops {
-                assert_ne!(hop.protocol, Protocol::UniswapV4, "V4 pools must be skipped");
-            }
-        }
+        // V4 pools participate in enumeration like any other edge — the
+        // 3-hop triangle through the V4 pool must exist.
         assert!(
-            !paths.iter().any(|p| p.num_hops() == 3),
-            "the 3-hop triangle through V4 should not exist"
+            paths.iter().any(|p| p.num_hops() == 3
+                && p.hops.iter().any(|h| h.protocol == Protocol::UniswapV4)),
+            "the 3-hop triangle through V4 should be enumerated"
         );
     }
 

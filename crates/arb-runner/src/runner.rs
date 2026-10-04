@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use arb_discovery::store::DiscoveryStore;
-use arb_mempool::MempoolWatcher;
+use arb_mempool::{MempoolWatcher, WssSource};
 use arb_core::types::Protocol;
 use arb_paths::enumerate::{PathEnumerator, PoolInfo};
 use arb_paths::PathTemplate;
@@ -1027,26 +1027,51 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().expect("Invalid pool address"),
-            protocol: p.parse_protocol(),
-            fee_bps: p.fee_bps,
-            token0: tokens.get(&p.token0).copied(),
-            token1: tokens.get(&p.token1).copied(),
+        .filter_map(|p| match p.pseudo_address() {
+            Ok(address) => Some(PoolConfig {
+                address,
+                protocol: p.parse_protocol(),
+                fee_bps: p.fee_bps,
+                token0: tokens.get(&p.token0).copied(),
+                token1: tokens.get(&p.token1).copied(),
+            }),
+            Err(e) => {
+                warn!(pool = %p.name, error = %e, "pool entry dropped — bad address/poolId");
+                None
+            }
         })
         .collect();
 
     let mut pool_infos: Vec<PoolInfo> = cfg
         .pools
         .iter()
-        .map(|p| PoolInfo {
-            address: p.address.parse().expect("Invalid pool address"),
-            protocol: p.parse_protocol(),
-            token0: tokens[&p.token0],
-            token1: tokens[&p.token1],
+        .filter_map(|p| match p.pseudo_address() {
+            Ok(address) => Some(PoolInfo {
+                address,
+                protocol: p.parse_protocol(),
+                token0: tokens[&p.token0],
+                token1: tokens[&p.token1],
                 liquidity_hint: 0.0,
+            }),
+            Err(_) => None, // warned in the pool_configs pass above
         })
         .collect();
+
+    // V4 pool metadata: a v4 entry's `address` field is the 32-byte poolId.
+    // The pseudo address (its last 20 bytes) keys the store/hops; the
+    // PoolKey is what the executor passes to PoolManager.swap; the spec is
+    // what the refresher reads via getSlot0/getLiquidity. An entry missing
+    // tick_spacing or a chain-level v4_pool_manager is dropped from the
+    // graph entirely — a keyless V4 pool can neither quote nor execute.
+    let (v4_specs, v4_keys, invalid_v4) = crate::config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    if !invalid_v4.is_empty() {
+        pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
+        pool_infos.retain(|pi| !invalid_v4.contains(&pi.address));
+    }
 
     let token_syms: HashMap<Address, String> = tokens
         .iter()
@@ -1100,8 +1125,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 token0: dp.token0.clone(),
                 token1: dp.token1.clone(),
                 fee_bps: dp.fee_bps,
+                fee_pips: None,
+                tick_spacing: None,
+                hooks: None,
             }
             .parse_protocol();
+            // Discovery can never produce a V4 PoolKey (no poolId/hooks/
+            // tickSpacing in the universe files) — a merged "v4" entry
+            // would only burn enumeration edges it can't execute.
+            if protocol == Protocol::UniswapV4 {
+                continue;
+            }
 
             pool_configs.push(PoolConfig {
                 address: addr,
@@ -1214,7 +1248,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
-    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
+    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id)
+        .with_v4_pools(v4_specs);
     let refresher = match cfg.chain.call_deadline_ms {
         Some(ms) => refresher.with_call_deadline(ms),
         None => refresher,
@@ -1278,7 +1313,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let paths = enumerator.enumerate();
     info!(total_paths = paths.len(), max_hops = spec::MAX_PATH_HOPS, "Path enumeration complete");
 
-    let presign_pool = PresignPool::new(&paths, cfg.chain.chain_id);
+    let presign_pool = PresignPool::new_with_v4(&paths, cfg.chain.chain_id, &v4_keys);
 
     // Build index: pool address -> vec of path indices that traverse that pool.
     // Used for fast backrun lookups when a pending swap is detected.
@@ -1486,10 +1521,22 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     if wss_urls.is_empty() {
         wss_urls.push(cfg.chain.rpc_wss.clone());
     }
+    // Public endpoints + private orderflow feeds share one rotating source
+    // list — same newPendingTransactions protocol, different headers.
+    let mut wss_sources: Vec<WssSource> = wss_urls
+        .into_iter()
+        .map(WssSource::public)
+        .collect();
+    for url in &cfg.chain.private_mempool_wss {
+        wss_sources.push(WssSource {
+            url: url.clone(),
+            auth: cfg.chain.private_mempool_auth.clone(),
+        });
+    }
     let mempool_chain_id = cfg.chain.chain_id;
-    info!(providers = wss_urls.len(), "Mempool WSS provider pool");
+    info!(providers = wss_sources.len(), private = cfg.chain.private_mempool_wss.len(), "Mempool WSS provider pool");
     tokio::spawn(async move {
-        let watcher = MempoolWatcher::new(&wss_urls, mempool_chain_id);
+        let watcher = MempoolWatcher::with_sources(wss_sources, mempool_chain_id);
         if let Err(e) = watcher.start(mempool_tx).await {
             error!(error = %e, "Mempool watcher failed");
         }

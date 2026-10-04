@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use alloy::sol;
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use anyhow::Result;
 use tracing::{debug, warn};
 
@@ -188,6 +188,14 @@ sol! {
     interface IERC20 {
         function decimals() external view returns (uint8);
     }
+
+    #[sol(rpc)]
+    interface IExtsload {
+        // UniV4 PoolManager exposes NO view getters — pool state is read
+        // through EIP-1153-style raw slot access (verified live: getSlot0
+        // reverts on the BSC PoolManager 0x28e2ea09...9df, extsload works).
+        function extsload(bytes32[] calldata slots) external view returns (bytes32[] memory);
+    }
 }
 
 lazy_static::lazy_static! {
@@ -247,6 +255,32 @@ pub struct PoolConfig {
     pub fee_bps: u32,
     pub token0: Option<Address>,
     pub token1: Option<Address>,
+}
+
+/// A V4 pool's identity inside the PoolManager singleton. `address` is the
+/// pseudo address (last 20 bytes of `pool_id`) used as the PoolStore/hop
+/// key; `pool_id` derives the state slots read via `extsload` on `manager`.
+/// There is deliberately no reader method — V4 always reads through the
+/// deployless Multicall3 path.
+pub struct V4PoolSpec {
+    pub address: Address,
+    pub pool_id: B256,
+    pub manager: Address,
+}
+
+impl V4PoolSpec {
+    /// v4-core Pool.POOLS_SLOT = 6: the _pools mapping lives at slot 6, so
+    /// Pool.State sits at keccak256(poolId ++ 6). Slot0 at +0, liquidity +3.
+    pub fn pool_slot(&self) -> B256 {
+        let mut buf = [0u8; 64];
+        buf[..32].copy_from_slice(self.pool_id.as_slice());
+        buf[63] = 6;
+        alloy_primitives::keccak256(buf)
+    }
+
+    pub fn liquidity_slot(&self) -> B256 {
+        B256::from(U256::from_be_bytes::<32>(*self.pool_slot()) + U256::from(3u64))
+    }
 }
 
 /// Curated factory-address → default fee table. Used when the on-chain reader
@@ -362,6 +396,9 @@ pub struct StateRefresher {
     endpoint: Arc<Endpoint>,
     state_reader_addr: Address,
     pool_configs: Vec<PoolConfig>,
+    /// V4 pool identities (pseudo addr → poolId + PoolManager). Kept off
+    /// pool_configs so the protocol partition and its tests are untouched.
+    v4_pools: Vec<V4PoolSpec>,
     chain_id: u64,
     call_deadline: std::time::Duration,
     reader_breaker: MethodCircuitBreaker,
@@ -397,6 +434,7 @@ impl StateRefresher {
             endpoint,
             state_reader_addr,
             pool_configs,
+            v4_pools: Vec::new(),
             chain_id,
             call_deadline: Self::CALL_DEADLINE,
             reader_breaker: MethodCircuitBreaker::default(),
@@ -410,6 +448,14 @@ impl StateRefresher {
     /// Polygon) need more slack or every refresh batch is benched.
     pub fn with_call_deadline(mut self, deadline_ms: u64) -> Self {
         self.call_deadline = std::time::Duration::from_millis(deadline_ms);
+        self
+    }
+
+    /// Attach the V4 pool identities for this chain ([chain] v4_pool_manager
+    /// + [[pools]] v4 entries). V4 state is read via getSlot0/getLiquidity
+    /// on the PoolManager — no bespoke reader involvement.
+    pub fn with_v4_pools(mut self, specs: Vec<V4PoolSpec>) -> Self {
+        self.v4_pools = specs;
         self
     }
 
@@ -792,6 +838,62 @@ impl StateRefresher {
             let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
             Some((p, sqrt_p, tick, liq, fee.to::<u32>(), token0, token1))
         }));
+        out
+    }
+
+    /// Multicall3 read for V4 pools: one extsload([slot0, liquidity]) call
+    /// per spec against its PoolManager — the ONLY V4 read path (UniV4's
+    /// manager has no view getters; verified live on BSC). slot0 packs
+    /// sqrtPriceX96(160)|tick(i24)|protocolFee(u24)|lpFee(u24); the lpFee is
+    /// authoritative (dynamic-fee pools report the resolved fee there).
+    /// Tokens still come from config (PoolConfig keyed by pseudo addr).
+    /// Returns (pseudo_addr, sqrt_price_x96, tick, liquidity, lp_fee).
+    async fn multicall_v4(
+        &self,
+        specs: &[V4PoolSpec],
+    ) -> Vec<(Address, U256, i32, u128, u32)> {
+        use alloy_sol_types::SolCall;
+        let mut out = Vec::with_capacity(specs.len());
+        let calls: Vec<IMulticall3::Call3> = specs
+            .iter()
+            .map(|sp| {
+                let slot0 = sp.pool_slot();
+                let liq = sp.liquidity_slot();
+                IMulticall3::Call3 {
+                    target: sp.manager,
+                    allowFailure: true,
+                    callData: IExtsload::extsloadCall::new((vec![slot0, liq],))
+                        .abi_encode()
+                        .into(),
+                }
+            })
+            .collect();
+        let results = self.multicall_aggregate3(calls).await;
+        let _dt = self.decode_timer("mc_v4");
+        if results.len() != specs.len() {
+            return out;
+        }
+        for (i, sp) in specs.iter().enumerate() {
+            let r = &results[i];
+            if !r.success {
+                continue;
+            }
+            let Ok(words) = IExtsload::extsloadCall::abi_decode_returns(&r.returnData[..]) else {
+                continue;
+            };
+            if words.len() != 2 {
+                continue;
+            }
+            // slot0 packing (v4-core Slot0): sqrtPriceX96 @bits 0-159,
+            // tick @160-183, protocolFee @184-207, lpFee @208-231.
+            let w = U256::from_be_bytes(*words[0]);
+            let sqrt_p = w & ((U256::from(1u64) << 160) - U256::from(1u64));
+            let t = ((w >> 160usize) & U256::from(0xFFFFFFu32)).to::<u32>();
+            let tick = if t >= 0x800000 { t.wrapping_sub(0x1000000) as i32 } else { t as i32 };
+            let lp_fee = ((w >> 208usize) & U256::from(0xFFFFFFu32)).to::<u32>();
+            let liq = U256::from_be_bytes(*words[1]).to::<u128>();
+            out.push((sp.address, sqrt_p, tick, liq, lp_fee));
+        }
         out
     }
 
@@ -1225,6 +1327,7 @@ impl StateRefresher {
             v3_mc,
             algebra_mc,
             aero_mc,
+            v4_mc,
             block,
         ) = tokio::join!(
             async {
@@ -1557,6 +1660,14 @@ impl StateRefresher {
                 parts.concat()
             },
             async {
+                // V4 has no reader method — the Multicall3 path is the
+                // primary (and only) read, unconditional on reader health.
+                if self.v4_pools.is_empty() {
+                    return Vec::new();
+                }
+                self.multicall_v4(&self.v4_pools).await
+            },
+            async {
                 tokio::time::timeout(self.call_deadline, self.endpoint.block_number())
                     .await
                     .ok()
@@ -1717,7 +1828,7 @@ impl StateRefresher {
         }
 
         // Multicall3 results fetched inside the join (primary reader when the
-        // deployed reader's method is dead or unset).
+        // deployed reader's method is dead or unset; the only path for V4).
         for (pool, r0, r1, t0, t1) in &v2_mc {
             store.update(
                 *pool,
@@ -1783,6 +1894,32 @@ impl StateRefresher {
                     fee_bps: self.fee_for_pool(pool),
                     decimals0: *dec0,
                     decimals1: *dec1,
+                }),
+            );
+            updated += 1;
+        }
+
+        // V4 pools: token0/token1 always come from config — the PoolManager
+        // carries currencies but config order is the enumeration order, so
+        // an entry with no configured tokens drops out.
+        for (pool, sqrt_p, tick, liq, lp_fee) in &v4_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            let Some((t0, t1)) = self.pool_tokens(pool) else {
+                continue;
+            };
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: t0,
+                    token1: t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *lp_fee,
+                    fee_otz: None,
                 }),
             );
             updated += 1;
@@ -1997,7 +2134,7 @@ impl StateRefresher {
     /// path — one aggregate3 per protocol class, all concurrent. Used on the
     /// backrun critical path: a full refresh costs an RTT per protocol
     /// partition while a victim's handful of touched pools fits one batch
-    /// each. Protocols with no deployless fallback (Curve/Dodo/Wombat/V4)
+    /// each. Protocols with no deployless fallback (Curve/Dodo/Wombat)
     /// keep their previous state.
     pub async fn refresh_pools(&self, store: &PoolStore, addrs: &[Address]) -> usize {
         if addrs.is_empty() {
@@ -2011,17 +2148,27 @@ impl StateRefresher {
         let mut v3 = Vec::new();
         let mut algebra = Vec::new();
         let mut aero = Vec::new();
+        let mut v4 = Vec::new();
         for a in addrs {
             match self.pool_protocol(a) {
                 Some(Protocol::UniswapV2) => v2.push(*a),
                 Some(Protocol::UniswapV3) | Some(Protocol::AerodromeSlipstream) => v3.push(*a),
                 Some(Protocol::Algebra) => algebra.push(*a),
                 Some(Protocol::AerodromeV2) => aero.push(*a),
+                Some(Protocol::UniswapV4) => {
+                    if let Some(sp) = self.v4_pools.iter().find(|s| s.address == *a) {
+                        v4.push(V4PoolSpec {
+                            address: sp.address,
+                            pool_id: sp.pool_id,
+                            manager: sp.manager,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
 
-        let (v2_mc, v3_mc, algebra_mc, aero_mc) = tokio::join!(
+        let (v2_mc, v3_mc, algebra_mc, aero_mc, v4_mc) = tokio::join!(
             async {
                 if v2.is_empty() {
                     Vec::new()
@@ -2067,6 +2214,13 @@ impl StateRefresher {
                     )
                     .await
                     .concat()
+                }
+            },
+            async {
+                if v4.is_empty() {
+                    Vec::new()
+                } else {
+                    self.multicall_v4(&v4).await
                 }
             },
         );
@@ -2137,6 +2291,28 @@ impl StateRefresher {
                     fee_bps: self.fee_for_pool(pool),
                     decimals0: *dec0,
                     decimals1: *dec1,
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, sqrt_p, tick, liq, lp_fee) in &v4_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            let Some((t0, t1)) = self.pool_tokens(pool) else {
+                continue;
+            };
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: t0,
+                    token1: t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *lp_fee,
+                    fee_otz: None,
                 }),
             );
             updated += 1;

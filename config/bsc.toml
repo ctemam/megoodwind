@@ -33,8 +33,20 @@ rpc_wss_pool = [
     "wss://bsc.publicnode.com",
     "wss://bsc.drpc.org",
 ]
+# Private-orderflow pending-tx feeds (bloXroute BDN, Eden, proprietary
+# relays). Same newPendingTransactions protocol; the watcher rotates these
+# alongside the public pool. Uncomment + set BSC_MEMPOOL_WSS / BSC_MEMPOOL_AUTH
+# in the environment — never commit a live key.
+# private_mempool_wss = ["${BSC_MEMPOOL_WSS}"]
+# private_mempool_auth = "${BSC_MEMPOOL_AUTH}"
 
 trader_rpc = "${BSC_TRADER_NODE}"   # Warp-enabled, $0.15/call — ONLY for tx submission
+# Uniswap V4 PoolManager on BSC — the arb contract's deployed immutable
+# (verified on-chain: POOL_MANAGER() = 0x28e2...e9df). Required for [[pools]]
+# v4 entries; also the PCS Infinity CLPoolManager is 0xa0FfB9c1CE1Fe56963B
+# 0321B32E7A0302114058b (different singleton — swap/settle split with its
+# Vault, NOT UniV4-monolithic, so do not point the contract's interface at it).
+v4_pool_manager = "0x28e2Ea090877bF75740558f6BFB36A5fFee9e9dF"
 arb_contract = "${BSC_ARB_CONTRACT}"
 state_reader = "${BSC_STATE_READER}"
 block_time_ms = 3000
@@ -1040,6 +1052,58 @@ protocol = "algebra"
 token0 = "ETH"
 token1 = "BTCB"
 fee_bps = 30
+
+
+# ---------------------------------------------------------------------------
+# UniV4 pools (verified live 2026-10-04 via extsload on the BSC PoolManager
+# 0x28e2ea09...9df — real slot0 + liquidity). `address` = 32-byte poolId,
+# not a contract; the pseudo addr (last 20 bytes) keys internal state.
+# tick_spacing + hooks complete the PoolKey for executeV4Arbitrage.
+# fee_pips is exact (1 pip = 0.01 bps) for sub-bps fees like the 0.01% pool.
+
+# USDT/USDC UniV4 — main stable pool, L=5.29e29, fee=1 pip, ts=1
+[[pools]]
+name = "UNIV4_USDT_USDC_1PIP"
+address = "0x8321c1f53959b14ece4b5400e60aeac59e7b6b8bac446f2f0a89b9e84e68a08a"
+protocol = "v4"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 0
+fee_pips = 1
+tick_spacing = 1
+
+# USDT/USDC UniV4 — 0.01% pool, L=2.64e27, fee=100 pips, ts=1
+[[pools]]
+name = "UNIV4_USDT_USDC_100"
+address = "0x89676efcfab64c52ae3ad0d38bc7c524fc195d6e697fc4890478e5e9f623a727"
+protocol = "v4"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 0
+fee_pips = 100
+tick_spacing = 1
+
+# USDT/USDC UniV4 — 0.05% pool, L=1.97e27, fee=500 pips, ts=10
+[[pools]]
+name = "UNIV4_USDT_USDC_500"
+address = "0x6bf623acbbb89ef90a8055e7f304a4c691407e470265e8c246eca9d39f04075a"
+protocol = "v4"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 0
+fee_pips = 500
+tick_spacing = 10
+
+# USDT/USDC UniV4 — 0.3% pool, L=1.99e22, fee=3000 pips, ts=60
+[[pools]]
+name = "UNIV4_USDT_USDC_3000"
+address = "0x50bb16358a4a34c9769fd982d8fd98d22cd85e742eedc9dd4fb251948165fd91"
+protocol = "v4"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 0
+fee_pips = 3000
+tick_spacing = 60
 
 
 # Wallet intelligence: real-time top-wallet discovery (observation only).
