@@ -35,6 +35,7 @@ export default function App() {
   }, [theme])
   const net = (profitPeriod === 'day' ? all.profit?.day : all.profit?.lifetime)
     ?? (history.length ? history[history.length - 1].net : 0)
+  const chainCount = Object.keys(all.chains || {}).length
   const online = Object.values(all.chains || {}).filter(Boolean).length
 
   return (
@@ -68,8 +69,8 @@ export default function App() {
             </select>
           </div>
           <div className="status-pill">
-            <div className="sd" style={online < 2 ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
-            <div><b>{online === 2 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/2 runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
+            <div className="sd" style={online < chainCount ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
+            <div><b>{online === chainCount && chainCount > 0 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/{chainCount} runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
           </div>
           <button className={`agent-btn ${agentOpen ? 'on' : ''}`} onClick={() => setAgentOpen(o => !o)} title="Ops Copilot">◆</button>
           <button className="theme-btn" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}

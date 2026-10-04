@@ -30,7 +30,7 @@ export default function Overview() {
         <div className="card"><div className="k">Hit rate</div><div className="v">{successRate.toFixed(2)}%</div><div className="s">{totalFound.toLocaleString()} / {totalEval.toLocaleString()}</div></div>
         <div className="card"><div className="k">Avg scan latency</div><div className="v">{avgLatMs.toFixed(0)}ms</div><div className="s">per-block state refresh+scan</div></div>
         <div className="card"><div className="k">Paths evaluated</div><div className="v">{(totalEval / 1e6).toFixed(2)}M</div><div className="s">math kernel evals</div></div>
-        <div className="card"><div className="k">Active runners</div><div className="v">{online}/2</div><div className="s">{all.live ? 'LIVE' : 'dry-run'} fleet</div></div>
+        <div className="card"><div className="k">Active runners</div><div className="v">{online}/{names.length}</div><div className="s">{all.live ? 'LIVE' : 'dry-run'} fleet</div></div>
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: '1.6fr 1fr' }}>

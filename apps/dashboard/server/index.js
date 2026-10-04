@@ -18,7 +18,8 @@ const HOST = process.env.DASHBOARD_HOST || '127.0.0.1'
 
 const CHAINS = {
   bsc: { metrics: 'http://localhost:9100/metrics', rpc: 'https://bsc-rpc.publicnode.com', chainId: 56, label: 'BSC' },
-  base: { metrics: 'http://localhost:9101/metrics', rpc: 'https://base-rpc.publicnode.com', chainId: 8453, label: 'Base' },
+  // base has a config (config/base.toml, port 9101) but no runner in the
+  // ecosystem fleet — re-enable here when a Base runner is deployed.
   ethereum: { metrics: 'http://localhost:9102/metrics', rpc: 'https://ethereum-rpc.publicnode.com', chainId: 1, label: 'Ethereum' },
   polygon: { metrics: 'http://localhost:9103/metrics', rpc: 'https://polygon-bor-rpc.publicnode.com', chainId: 137, label: 'Polygon' },
 }
