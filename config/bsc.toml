@@ -25,6 +25,8 @@ rpc_https_pool = [
     "https://bsc-dataseed1.ninicoin.io",
     "https://bsc-dataseed3.defibit.io",
     "https://bsc-dataseed2.defibit.io",
+    "https://bsc.blockrazor.xyz",
+    "https://rpc.48.club",
 ]
 rpc_wss = "wss://bsc-rpc.publicnode.com"
 # Read deadline per multicall batch. Public BSC endpoints regularly exceed
@@ -441,6 +443,16 @@ TK_0xd75a0cc8614b7c8cac56f5af39d73491c2ea7777 = "0xd75a0cc8614b7c8cac56f5af39d73
 TK_0xda033999bb6165e64db01bd9be14b40f5653092e = "0xda033999bb6165e64db01bd9be14b40f5653092e"
 TK_0xf08d1886e2a69dfabd22a45eed8e1407b338b97e = "0xf08d1886e2a69dfabd22a45eed8e1407b338b97e"
 TK_0xf43db8c8760cb2cf47e42a76be60e7865bc57777 = "0xf43db8c8760cb2cf47e42a76be60e7865bc57777"
+TK_0x23f72a3db61d6cb8abe5d9af1ac4b6c99327bfee = "0x23f72a3db61d6cb8abe5d9af1ac4b6c99327bfee"
+TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47 = "0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+TK_0x51363f073b1e4920fda7aa9e9d84ba97ede1560e = "0x51363f073b1e4920fda7aa9e9d84ba97ede1560e"
+TK_0x7565c95fdb85777c01abe34558f7ba4590de7777 = "0x7565c95fdb85777c01abe34558f7ba4590de7777"
+TK_0x75a5863a19af60ec0098d62ed8c34cc594fb470f = "0x75a5863a19af60ec0098d62ed8c34cc594fb470f"
+TK_0x7f0172b75d3823d8af04fee3a3f6a14abd68efe1 = "0x7f0172b75d3823d8af04fee3a3f6a14abd68efe1"
+TK_0x86fa03945646a99a03543e7e0036361ffadc73e6 = "0x86fa03945646a99a03543e7e0036361ffadc73e6"
+TK_0x8b9ee39195ea99d6ddd68030f44131116bc218f6 = "0x8b9ee39195ea99d6ddd68030f44131116bc218f6"
+TK_0xa71add46ea4fbf0058b36e6baa39530f8e48b103 = "0xa71add46ea4fbf0058b36e6baa39530f8e48b103"
+TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e = "0xfb5b838b6cfeedc2873ab27866079ac55363d37e"
 [[pools]]
 name = "PCS_USDT_WBNB"
 address = "0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE"
@@ -1409,6 +1421,168 @@ address = "0xb720ea2a201c03578cca05191e8b4ab859704cfe"
 protocol = "v2"
 token0 = "USDT"
 token1 = "TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x23f72a3db61d6cb8abe5d9af1ac4b6c99327bfee_WBNB_5"
+address = "0x45ac9af57a43f48407ec8636bdf2a99df5399904"
+protocol = "v3"
+token0 = "TK_0x23f72a3db61d6cb8abe5d9af1ac4b6c99327bfee"
+token1 = "WBNB"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436_USDT_100"
+address = "0x18d52270d09ab842c87acd45977dcf64a82fa4ad"
+protocol = "v3"
+token0 = "TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436"
+token1 = "USDT"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x51363f073b1e4920fda7aa9e9d84ba97ede1560e_WBNB_25"
+address = "0x3c79593e01a7f7fed5d0735b16621e2d52a6bc58"
+protocol = "v2"
+token0 = "TK_0x51363f073b1e4920fda7aa9e9d84ba97ede1560e"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_WBNB_25"
+address = "0x40d4543887e4170a1a40cd8db15a6b297c812cb1"
+protocol = "v2"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_WBNB_25"
+address = "0x673516e510d702ab5f2bbf0c6b545111a85f7ea7"
+protocol = "v3"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_WBNB_25"
+address = "0x8860922eb2795ab0d57363653dd7ebf18d7c0a42"
+protocol = "v2"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDT_USDC_0"
+address = "0x46ee2c5f2b9de7c6e08ffe3bde8dd88a46d6f568"
+protocol = "v3"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 0
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0x8b9ee39195ea99d6ddd68030f44131116bc218f6_1"
+address = "0x83a9fd66c9515536d630cf818c41190b0372c6f6"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0x8b9ee39195ea99d6ddd68030f44131116bc218f6"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e_25"
+address = "0xadbfe34e35edb3d31f4bd1af5a513f4c57cdc5e9"
+protocol = "v2"
+token0 = "WBNB"
+token1 = "TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_USDT_25"
+address = "0x29c5ba7dbb67a4af999a28cc380ad234fe7c1b86"
+protocol = "v3"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_BTCB_5"
+address = "0xb3d40d30a66131eb85a8943fab32af89b27379bb"
+protocol = "v3"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "BTCB"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e_25"
+address = "0x231d9e7181e8479a8b40930961e93e7ed798542c"
+protocol = "v2"
+token0 = "WBNB"
+token1 = "TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e_25"
+address = "0xacc22e0ff64e788e6ad569a57d130b9d957494dc"
+protocol = "v2"
+token0 = "WBNB"
+token1 = "TK_0xfb5b838b6cfeedc2873ab27866079ac55363d37e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x7f0172b75d3823d8af04fee3a3f6a14abd68efe1_TK_0x86fa03945646a99a03543e7e0036361ffadc73e6_25"
+address = "0xff1513e452a6033e2d9601a4559bf273f83d5470"
+protocol = "v2"
+token0 = "TK_0x7f0172b75d3823d8af04fee3a3f6a14abd68efe1"
+token1 = "TK_0x86fa03945646a99a03543e7e0036361ffadc73e6"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x75a5863a19af60ec0098d62ed8c34cc594fb470f_USDC_1"
+address = "0xcacd3583c7ef55126099be733b12672c60e2ab23"
+protocol = "v3"
+token0 = "TK_0x75a5863a19af60ec0098d62ed8c34cc594fb470f"
+token1 = "USDC"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47_WBNB_25"
+address = "0x28415ff2c35b65b9e5c7de82126b4015ab9d031f"
+protocol = "v2"
+token0 = "TK_0x3ee2200efb3400fabb9aacf31297cbdd1d435d47"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x4902c5ebc598265ed2212b559b042de8a5eeec3f_WBNB_1"
+address = "0xfc58462502b7c47f166292df6e6b11e1ae41f314"
+protocol = "v3"
+token0 = "TK_0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
+token1 = "WBNB"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0xa71add46ea4fbf0058b36e6baa39530f8e48b103_25"
+address = "0xb9fe6c82a37a5fee8b67906a09650883953c114e"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xa71add46ea4fbf0058b36e6baa39530f8e48b103"
 fee_bps = 25
 
 

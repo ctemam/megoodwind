@@ -6,6 +6,8 @@ rpc_https_pool = [
     "https://ethereum-rpc.publicnode.com",
     "https://eth.drpc.org",
     "https://rpc.mevblocker.io",
+    "https://eth.blockrazor.xyz",
+    "https://eth-protect.rpc.blxrbdn.com",
 ]
 rpc_wss = "wss://eth.drpc.org"
 rpc_wss_pool = [
@@ -141,6 +143,15 @@ TK_0xd533a949740bb3306d119cc777fa900ba034cd52 = "0xd533a949740bb3306d119cc777fa9
 TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f = "0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
 TK_0xdfc5964141c018485b4d017634660f85aa667714 = "0xdfc5964141c018485b4d017634660f85aa667714"
 TK_0xf3b9569f82b18aef890de263b84189bd33ebe452 = "0xf3b9569f82b18aef890de263b84189bd33ebe452"
+TK_0x28d38df637db75533bd3f71426f3410a82041544 = "0x28d38df637db75533bd3f71426f3410a82041544"
+TK_0x643c4e15d7d62ad0abec4a9bd4b001aa3ef52d66 = "0x643c4e15d7d62ad0abec4a9bd4b001aa3ef52d66"
+TK_0x6894d4afe41f1135d36232d10603d7052c286436 = "0x6894d4afe41f1135d36232d10603d7052c286436"
+TK_0x6b35bbf5056c8ff0d46fcc991a906d361c6fa686 = "0x6b35bbf5056c8ff0d46fcc991a906d361c6fa686"
+TK_0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3 = "0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3"
+TK_0xaaaaaa20d9e0e2461697782ef11675f668207961 = "0xaaaaaa20d9e0e2461697782ef11675f668207961"
+TK_0xb197e02499e6502733c6bce2eb39013c39a03147 = "0xb197e02499e6502733c6bce2eb39013c39a03147"
+TK_0xb67718b98d52318240c52e71a898335da4a28c42 = "0xb67718b98d52318240c52e71a898335da4a28c42"
+TK_0xd13cfd3133239a3c73a9e535a5c4dadee36b395c = "0xd13cfd3133239a3c73a9e535a5c4dadee36b395c"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -4748,3 +4759,102 @@ protocol = "v3"
 token0 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
 token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
 fee_bps = 30
+[[pools]]
+name = "AUTO_TK_0x28d38df637db75533bd3f71426f3410a82041544_USDC_30"
+address = "0xf7fd0860922bd3352e2dbaf725a182b74bf7a2e1"
+protocol = "v3"
+token0 = "TK_0x28d38df637db75533bd3f71426f3410a82041544"
+token1 = "USDC"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3_USDC_25"
+address = "0x06cd6245156c3608ae67d690c125e86a8bc6a88c"
+protocol = "v2"
+token0 = "TK_0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3"
+token1 = "USDC"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0xb67718b98d52318240c52e71a898335da4a28c42_USDT_1"
+address = "0x8c837bc7f7d06c28f92838a5389cacb786b231f5"
+protocol = "v3"
+token0 = "TK_0xb67718b98d52318240c52e71a898335da4a28c42"
+token1 = "USDT"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x6b35bbf5056c8ff0d46fcc991a906d361c6fa686_WETH_25"
+address = "0x17386648c56cd2a50055af1eba29b3a1b2fa7f9b"
+protocol = "v2"
+token0 = "TK_0x6b35bbf5056c8ff0d46fcc991a906d361c6fa686"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3_WETH_25"
+address = "0x1cd160109f840a3736edda15299087b6faef795f"
+protocol = "v2"
+token0 = "TK_0x9e18d5bab2fa94a6a95f509ecb38f8f68322abd3"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_WETH_25"
+address = "0x4ab6702b3ed3877e9b1f203f90cbef13d663b0e8"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xd13cfd3133239a3c73a9e535a5c4dadee36b395c_25"
+address = "0xaf95d3a7a25f831dc2b9a6704554435957b51ec2"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xd13cfd3133239a3c73a9e535a5c4dadee36b395c"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x643c4e15d7d62ad0abec4a9bd4b001aa3ef52d66_WETH_100"
+address = "0x27941a235804f33d81adabb2d56589c5f6ea6556"
+protocol = "v3"
+token0 = "TK_0x643c4e15d7d62ad0abec4a9bd4b001aa3ef52d66"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x6894d4afe41f1135d36232d10603d7052c286436_WETH_25"
+address = "0x1be4274161346547d6eb1c5e5072cfdaf1a0f9e8"
+protocol = "v2"
+token0 = "TK_0x6894d4afe41f1135d36232d10603d7052c286436"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0xb197e02499e6502733c6bce2eb39013c39a03147_1"
+address = "0xb1b645dfaa869a778b03f8eacff481c62a821642"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xb197e02499e6502733c6bce2eb39013c39a03147"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0xaaaaaa20d9e0e2461697782ef11675f668207961_WETH_25"
+address = "0x629d22e6eeac46a11dbc96be93b90aee9309be4c"
+protocol = "v2"
+token0 = "TK_0xaaaaaa20d9e0e2461697782ef11675f668207961"
+token1 = "WETH"
+fee_bps = 25
+
+
