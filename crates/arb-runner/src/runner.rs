@@ -1803,7 +1803,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 ));
                             }
                             let sub_results = router
-                                .submit_all(&bundle, use_high_ev, scan_start.elapsed())
+                                .submit_all(
+                                    &bundle, use_high_ev,
+                                    // Under strict_4337 the bundler controls
+                                    // inclusion — the builder slot deadline
+                                    // does not apply and must not gate.
+                                    if cfg.submission.strict_4337 {
+                                        Duration::ZERO
+                                    } else {
+                                        scan_start.elapsed()
+                                    },
+                                )
                                 .await;
                             for r in &sub_results {
                                 metrics::SUBMIT_ATTEMPTS.inc();
@@ -2236,9 +2246,76 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             if let Ok(mut bundle) = presign_pool.build_fast(
                                 path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
                             ).await {
-                                if !pending.raw_tx.is_empty() {
+                                if cfg.submission.strict_4337 {
+                                    // No bundle-capable venue exists under
+                                    // strict_4337 (the executor's onlyOwner
+                                    // is the Pimlico smart account) and
+                                    // UserOps cannot be ordered after a
+                                    // victim tx anyway. Submit as a
+                                    // standalone sponsored op: it lands
+                                    // next-block on post-victim state —
+                                    // the dislocations this path targets
+                                    // persist >=1 block. backrun_tx stays
+                                    // for settlement linkage only.
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                } else if !pending.raw_tx.is_empty() {
                                     bundle.victim_tx = Some(pending.raw_tx.clone());
                                     bundle.backrun_tx = Some(pending.tx_hash);
+                                }
+
+                                // Exec-probe (strict_4337): meaningful
+                                // only once the victim has landed, when
+                                // current state includes its impact. While
+                                // the victim is still pending the
+                                // projected state is the operative one,
+                                // and the bundler drops reverting ops at
+                                // no on-chain cost — skip the probe then.
+                                if cfg.submission.strict_4337 {
+                                    let victim_landed = endpoint
+                                        .get_receipt(pending.tx_hash)
+                                        .await
+                                        .ok()
+                                        .flatten()
+                                        .is_some();
+                                    if victim_landed {
+                                        if let Some(venue) = &pimlico_venue {
+                                            if smart_account.is_none() {
+                                                smart_account = venue.account().await.ok();
+                                            }
+                                        }
+                                        if let (Some(account), Some(call)) =
+                                            (smart_account, bundle.call.as_ref())
+                                        {
+                                            let probe = alloy::rpc::types::TransactionRequest::default()
+                                                .from(account)
+                                                .to(call.to)
+                                                .input(call.data.clone().into());
+                                            match endpoint.provider().call(probe).await {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    if e.as_error_resp().is_some() {
+                                                        let reason = classify_exec_probe_revert(
+                                                            &format!("{e:?}")
+                                                        );
+                                                        warn!(
+                                                            path_id = path.id, reason,
+                                                            error = %e,
+                                                            "exec probe reverted — backrun suppressed"
+                                                        );
+                                                        circuit_breaker.record_revert(
+                                                            path.id, block_number,
+                                                        );
+                                                    } else {
+                                                        warn!(
+                                                            path_id = path.id, error = %e,
+                                                            "exec probe transport error — backrun skipped"
+                                                        );
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 endpoint.bump_nonce();
                                 let matched_opp_ids: Vec<String> = matched
@@ -2274,7 +2351,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     .last()
                                     .map(|t| alloy_primitives::keccak256(t));
                                 let sub_results = router
-                                    .submit_all(&bundle, false, scan_start.elapsed())
+                                    .submit_all(
+                                        &bundle, false,
+                                        if cfg.submission.strict_4337 {
+                                            Duration::ZERO
+                                        } else {
+                                            scan_start.elapsed()
+                                        },
+                                    )
                                     .await;
                                 metrics::PENDING_TO_SUBMIT
                                     .observe(pending.seen_at.elapsed().as_secs_f64());
