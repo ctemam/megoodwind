@@ -223,6 +223,31 @@ pub struct LeadersConfig {
     /// restores counting every pending sighting.
     #[serde(default = "default_true")]
     pub discover_require_block_confirmation: bool,
+
+    // ─── Wallet-copy execution lane ───
+    /// Lane mode: "off" (default) | "shadow" | "live". "shadow" runs the
+    /// full guard+size+simulate pipeline and records the decision without
+    /// submitting; "live" submits a real copy swap through the 4337 venue
+    /// for wallets whose risk_tier is "live". "paper" behaves as shadow.
+    #[serde(default = "default_copy_mode")]
+    pub copy_mode: String,
+    /// Fixed USD notional spent per copied swap. 0 disables execution.
+    #[serde(default)]
+    pub copy_usd: f64,
+    /// Slippage bound applied to the simulated output, in bps. Default 300.
+    #[serde(default = "default_copy_slippage")]
+    pub copy_slippage_bps: u64,
+    /// V2-style routers the lane may copy through — copies always rebuild
+    /// calldata with the fee-on-transfer-safe selector, never the leader's.
+    #[serde(default)]
+    pub copy_v2_routers: Vec<String>,
+    /// Tokens the lane may spend from the smart account (the token_in side
+    /// of the leader swap). Default: any token with a USD price.
+    #[serde(default)]
+    pub copy_spend_tokens: Vec<String>,
+    /// Per-swap deadline offset in seconds. Default 120.
+    #[serde(default = "default_copy_deadline")]
+    pub copy_deadline_secs: u64,
 }
 
 fn default_min_score() -> f64 { 15.0 }
@@ -230,6 +255,9 @@ fn default_min_obs() -> u32 { 3 }
 fn default_max_wallets() -> usize { 50 }
 fn default_halflife() -> f64 { 300.0 }
 fn default_true() -> bool { true }
+fn default_copy_mode() -> String { "off".to_string() }
+fn default_copy_slippage() -> u64 { 300 }
+fn default_copy_deadline() -> u64 { 120 }
 
 /// Parsed, enabled wallets keyed by address. Interior mutability because
     /// real-time discovery promotes new wallets while the stream is live.
@@ -575,6 +603,12 @@ impl LeaderObserver {
     /// Flush + stop the writer thread (tests and clean shutdown).
     pub fn shutdown_writer(&self) {
         let _ = self.writer_tx.try_send(WriterJob::Shutdown);
+    }
+
+    /// Shared handle on the underlying registry — used by the copy lane
+    /// to resolve senders without duplicating the watchlist.
+    pub fn registry(&self) -> std::sync::Arc<LeaderRegistry> {
+        std::sync::Arc::clone(&self.registry)
     }
 
     /// Returns configured+discovered wallet count.

@@ -55,6 +55,31 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
+    // ─── Wallet-copy lane ───
+    pub static ref COPY_SIGNALS: CounterVec = register_counter_vec!(
+        "arb_copy_signals_total",
+        "Copy-eligible leader swaps seen by the copy lane",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_REJECTS: CounterVec = register_counter_vec!(
+        "arb_copy_rejects_total",
+        "Copy lane rejections by stage",
+        &["chain", "reason"]
+    ).unwrap();
+
+    pub static ref COPY_SUBMITTED: CounterVec = register_counter_vec!(
+        "arb_copy_submitted_total",
+        "Copy swaps submitted to the 4337 venue",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_APPROVALS: CounterVec = register_counter_vec!(
+        "arb_copy_approvals_total",
+        "Smart-account token approvals submitted by the copy lane",
+        &["chain"]
+    ).unwrap();
+
     pub static ref WARP_SPEND_USD: Counter = register_counter!(
         "arb_warp_spend_usd_total",
         "Total USD spent on Warp/Trader calls at $0.15 each"
@@ -206,6 +231,14 @@ lazy_static::lazy_static! {
         "arb_settled_net_usd",
         "Cumulative realized net P&L after gas, USD",
         &["chain"]
+    ).unwrap();
+
+    /// Per-lane execution state: 0 = off, 1 = shadow/measure (records,
+    /// never submits), 2 = live submissions. lane ∈ classic, backrun, copy.
+    pub static ref LANE_STATE: GaugeVec = register_gauge_vec!(
+        "arb_lane_state",
+        "Execution state per lane (0=off, 1=shadow, 2=live)",
+        &["lane"]
     ).unwrap();
 }
 

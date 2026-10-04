@@ -367,16 +367,18 @@ app.get('/api/report', (req, res) => {
     const pt = { t: s.t }
     for (const c of Object.keys(CHAINS)) {
       const m = s.chains[c]
-      if (!m) { pt[`${c}_gross`] = pt[`${c}_hits`] = pt[`${c}_scan_ms`] = null; continue }
-      cum[c] = cum[c] || { gross: 0, hits: 0, evals: 0, prev: {} }
+      if (!m) { pt[`${c}_gross`] = pt[`${c}_hits`] = pt[`${c}_scan_ms`] = pt[`${c}_net`] = pt[`${c}_subs`] = null; continue }
+      cum[c] = cum[c] || { gross: 0, hits: 0, evals: 0, net: 0, subs: 0, prev: {} }
       const cc = cum[c]
-      for (const [k, nk] of [['arb_gross_profit_usd_total', 'gross'], ['arb_profitable_found_total', 'hits'], ['arb_paths_evaluated_total', 'evals']]) {
+      for (const [k, nk] of [['arb_gross_profit_usd_total', 'gross'], ['arb_profitable_found_total', 'hits'], ['arb_paths_evaluated_total', 'evals'], ['arb_net_profit_usd_total', 'net'], ['arb_submit_attempts_total', 'subs']]) {
         if (nk in cc.prev) cc[nk] += Math.max(0, (m[k] || 0) - cc.prev[nk])
         cc.prev[nk] = m[k] || 0
       }
       pt[`${c}_gross`] = cc.gross
       pt[`${c}_hits`] = cc.hits
       pt[`${c}_evals`] = cc.evals
+      pt[`${c}_net`] = cc.net
+      pt[`${c}_subs`] = cc.subs
       pt[`${c}_scan_ms`] = m.arb_scan_latency_seconds_count
         ? (m.arb_scan_latency_seconds_sum / m.arb_scan_latency_seconds_count) * 1000 : null
     }

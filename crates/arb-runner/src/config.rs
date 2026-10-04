@@ -62,6 +62,34 @@ pub struct AppConfig {
     /// (arb-leaders Phase 0/1; absent or empty = feature off).
     #[serde(default)]
     pub leaders: arb_leaders::LeadersConfig,
+    /// `[lanes]` — per-lane execution kill switches. Discovery,
+    /// evaluation and metrics keep running either way; a disabled lane
+    /// never builds or submits a bundle.
+    #[serde(default)]
+    pub lanes: LanesConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LanesConfig {
+    /// Classic resting-state imbalance arb submissions.
+    #[serde(default = "default_lane_on")]
+    pub classic_arb: bool,
+    /// Victim-triggered backrun bundle submissions.
+    #[serde(default = "default_lane_on")]
+    pub backrun: bool,
+}
+
+fn default_lane_on() -> bool {
+    true
+}
+
+impl Default for LanesConfig {
+    fn default() -> Self {
+        Self {
+            classic_arb: true,
+            backrun: true,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

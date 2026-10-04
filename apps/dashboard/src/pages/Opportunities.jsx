@@ -131,6 +131,18 @@ export default function Opportunities() {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr style={{ borderTop: '2px solid var(--line)', fontWeight: 600 }}>
+              <td>TOTAL</td>
+              <td className="dim">{rows.length} opportunities</td>
+              <td className="dim" colSpan={3}></td>
+              <td className={`num ${rows.reduce((s, o) => s + (o.edge || 0), 0) > 0 ? 'pos' : ''}`}>
+                {usd(rows.reduce((s, o) => s + (o.edge || 0), 0)) || '$0.00'}</td>
+              <td className="dim" colSpan={2}></td>
+              <td className="num">{funnel.submitted ?? 0} sub · {funnel.landed ?? 0} landed</td>
+              <td className="dim"></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>

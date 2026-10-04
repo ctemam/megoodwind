@@ -617,3 +617,20 @@ fee_bps = 100
 # Wallet intelligence: real-time top-wallet discovery (observation only).
 [leaders]
 discover = true
+# Wallet-copy execution lane — after-signal only, never front-running.
+copy_mode          = "live"
+copy_usd           = 50.0
+copy_slippage_bps  = 300
+copy_deadline_secs = 120
+# Uniswap V2 router
+copy_v2_routers    = ["0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"]
+# WETH, USDT, USDC
+copy_spend_tokens  = ["0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                      "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                      "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"]
+
+# Execution kill switches — wallet-copy is the only deployed lane;
+# arb/backrun discovery and metrics keep running but never submit.
+[lanes]
+classic_arb = false
+backrun     = false

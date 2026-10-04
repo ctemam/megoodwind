@@ -1240,14 +1240,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // GoPlus token-safety gate: drop pools whose tokens are flagged
     // (honeypot, sell-blocked, heavy transfer tax) BEFORE they enter the
     // execution graph. Fail-open on API outage — metadata must never
-    // kill the scanner.
+    // kill the scanner. `blocked` is hoisted — the copy lane reuses the
+    // same denylist when screening leader swaps.
+    let mut blocked: HashSet<Address> = HashSet::new();
     {
         let mut all_tokens: HashSet<Address> = HashSet::new();
         for pc in &pool_configs {
             all_tokens.extend(pc.token0.iter().copied());
             all_tokens.extend(pc.token1.iter().copied());
         }
-        let blocked = crate::token_safety::screen_tokens(cfg.chain.chain_id, &all_tokens).await;
+        blocked = crate::token_safety::screen_tokens(cfg.chain.chain_id, &all_tokens).await;
         if !blocked.is_empty() {
             let before = pool_configs.len();
             pool_configs.retain(|pc| {
@@ -1506,8 +1508,46 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         let bt = cfg.chain.block_time_ms.max(500);
         ((bt / 6).clamp(50, 250), bt * 4 / 5)
     };
-    let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
+    let router = Arc::new(arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms));
     info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
+
+    // Wallet-copy lane (arb-leaders Phase 2): a watchlisted wallet's
+    // pending swap is mirrored through the smart account — backrun
+    // semantics only, never front-running. Off unless [leaders]
+    // copy_mode = "shadow"|"live" and a watchlist exists.
+    let copy_account = match &pimlico_venue {
+        Some(v) => v.account().await.ok(),
+        None => None,
+    };
+    let copy_lane = leader_observer.as_ref().and_then(|obs| {
+        crate::copy_lane::CopyLane::new(
+            &cfg.leaders,
+            chain_label,
+            cfg.chain.chain_id,
+            obs.registry(),
+            Arc::clone(&store),
+            pair_to_pools.clone(),
+            blocked.clone(),
+            token_usd_prices.clone(),
+            token_decimals.clone(),
+            Arc::clone(&router),
+            copy_account,
+            endpoint.clone(),
+        )
+    });
+
+    // Lane state gauges: 0 = off, 1 = shadow/measure, 2 = live submits.
+    let lane_live = if smoke_test { true } else { !cfg.scanner.dry_run };
+    metrics::LANE_STATE.with_label_values(&["classic"])
+        .set(if cfg.lanes.classic_arb && lane_live { 2.0 } else if cfg.lanes.classic_arb { 1.0 } else { 0.0 });
+    metrics::LANE_STATE.with_label_values(&["backrun"])
+        .set(if cfg.lanes.backrun && lane_live { 2.0 } else if cfg.lanes.backrun { 1.0 } else { 0.0 });
+    metrics::LANE_STATE.with_label_values(&["copy"])
+        .set(match copy_lane.as_ref().map(|l| l.mode()) {
+            Some(crate::copy_lane::CopyMode::Live) => 2.0,
+            Some(crate::copy_lane::CopyMode::Shadow) => 1.0,
+            _ => 0.0,
+        });
 
     // Per-protocol extra margins from [gate.protocol_margins] — the
     // per-(chain,DEX) calibration slot; defaults preserve prior behavior.
@@ -1677,6 +1717,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             for pending in pending_events {
             if let Some(obs) = &leader_observer {
                 obs.observe(&pending);
+            }
+            if let Some(lane) = &copy_lane {
+                lane.on_swap(&pending);
             }
             // Direct pool calls carry no input amount in calldata (it's
             // recovered inside projection); router decodes need one.
@@ -2039,6 +2082,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             // watcher streams full pending txs, so the victim's
                             // signed bytes are available — bundle venues prepend
                             // them and our tx lands immediately after the victim.
+                            if !cfg.lanes.backrun {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["lane_disabled"])
+                                    .inc();
+                                continue;
+                            }
                             let target_block = block_number + 1;
                             let submit_signer = &signers[signer_rot
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -2432,7 +2481,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
 
                 if !dry_run && executor_broken {
                     // Skip — the executor reverts in simulation; nothing lands.
-                } else if !dry_run {
+                } else if !dry_run && cfg.lanes.classic_arb {
                     let optimized_path = &paths[best_path_idx];
 
                     let target_block = block_number + 3;

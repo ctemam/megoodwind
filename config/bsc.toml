@@ -1131,6 +1131,22 @@ tick_spacing = 60
 # Enabled 2026-10-04 per Commander order — BSC is the live trading chain.
 [leaders]
 discover = true
+# Wallet-copy execution lane — after-signal only, never front-running.
+# "live" still requires each wallet's risk_tier = "live"; discovered
+# wallets land at "observe" so nothing submits until a wallet is
+# promoted. copy_usd is the fixed notional per copy.
+copy_mode          = "live"
+copy_usd           = 50.0
+copy_slippage_bps  = 300
+copy_deadline_secs = 120
+# PancakeSwap V2 + V1 routers (calldata-verified V2 shapes)
+copy_v2_routers    = ["0x10ED43C718714eb63d5aA57B78B54704E256024E",
+                      "0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F"]
+# WBNB, USDT, USDC — priced spend tokens the lane can source
+copy_spend_tokens  = ["0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+                      "0x55d398326f99059fF775485246999027B3197955",
+                      "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"]
+
 [[pools]]
 name = "AUTO_USDT_TK_0x5dd1a7a369e8273371d2dbf9d83356057088082c_25"
 address = "0xe03f56945e086b467b19e4ecdbc54d591ca92094"
@@ -1238,4 +1254,8 @@ token0 = "USDT"
 token1 = "TK_0x59523e38727c2f4e6dabe89db938779058f2adaf"
 fee_bps = 25
 
-
+# Execution kill switches — wallet-copy is the only deployed lane;
+# arb/backrun discovery and metrics keep running but never submit.
+[lanes]
+classic_arb = false
+backrun     = false

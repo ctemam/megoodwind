@@ -522,6 +522,17 @@ fee_bps = 100
 # Wallet intelligence: real-time top-wallet discovery (observation only).
 [leaders]
 discover = true
+# Wallet-copy execution lane — after-signal only, never front-running.
+copy_mode          = "live"
+copy_usd           = 50.0
+copy_slippage_bps  = 300
+copy_deadline_secs = 120
+# QuickSwap V2 router
+copy_v2_routers    = ["0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"]
+# WMATIC, USDT, USDC
+copy_spend_tokens  = ["0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+                      "0xc2132D05D31c914a87C6611C10748AEb04B58e8F",
+                      "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"]
 
 # --- added 2026-10-03: QuickSwap factory-verified pairs + leader-route imports ---
 [[pools]]
@@ -845,4 +856,8 @@ token0 = "WPOL"
 token1 = "USDC"
 fee_bps = 5
 
-
+# Execution kill switches — wallet-copy is the only deployed lane;
+# arb/backrun discovery and metrics keep running but never submit.
+[lanes]
+classic_arb = false
+backrun     = false
