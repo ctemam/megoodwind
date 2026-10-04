@@ -1141,7 +1141,7 @@ copy_slippage_bps  = 300
 copy_deadline_secs = 120
 # Discovered wallet crossing this score auto-promotes to live tier
 # (candidate bar is discover_min_score=15; live bar set well above)
-copy_promote_score  = 25.0
+copy_promote_score  = 15.0
 # PancakeSwap V2 + V1 routers (calldata-verified V2 shapes)
 copy_v2_routers    = ["0x10ED43C718714eb63d5aA57B78B54704E256024E",
                       "0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F"]

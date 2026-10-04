@@ -529,7 +529,7 @@ copy_slippage_bps  = 300
 copy_deadline_secs = 120
 # Discovered wallet crossing this score auto-promotes to live tier
 # (candidate bar is discover_min_score=15; live bar set well above)
-copy_promote_score  = 25.0
+copy_promote_score  = 15.0
 # QuickSwap V2 router
 copy_v2_routers    = ["0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"]
 # WMATIC, USDT, USDC
