@@ -2187,35 +2187,52 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
                 });
 
+                // One fresh pool read per victim event, shared by the
+                // whole scored queue — a full refresh serialized per
+                // candidate (~1.3s each under RPC churn) had the queue
+                // tail reaching ~16s of victim age before the first
+                // submission attempt.
+                let _ = refresher.refresh(&store).await;
+                // If the victim already landed, the refreshed store IS
+                // the post-victim state — re-projecting the swap would
+                // double-count its impact. Re-project only while the
+                // victim is still pending.
+                let mut victim_landed = endpoint
+                    .get_receipt(pending.tx_hash)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some();
+                let verify_state = if victim_landed {
+                    None
+                } else {
+                    arb_mempool::impact::project_pending_path(
+                        &store, &pending.decoded, amount_in, &pair_to_pools,
+                        &token_usd_prices, &token_decimals,
+                    ).map(|(s, _, _)| s)
+                };
+
                 // Re-verify + submit in score order; a stale edge falls
                 // through to the next-best candidate (same as before).
                 for (pidx, opt_amount, sim, _effective_usd, _score) in scored {
                     let path = &paths[pidx];
                     {
-                            // The projected state is approximate — before
-                            // spending a submission, re-read the pools the
-                            // pending tx touches, re-project, and re-verify
-                            // the edge is still there.
-                            if refresher.refresh(&store).await.is_ok() {
-                                let verified = arb_mempool::impact::project_pending_path(
-                                    &store, &pending.decoded, amount_in, &pair_to_pools,
-                                    &token_usd_prices, &token_decimals,
-                                ).and_then(|(reprojected, _, _)| {
-                                    arb_sim::optimize::find_optimal_amount(
-                                        path, &reprojected,
-                                        flash_bounds.get(&path.flash_token).map(|b| b.0)
-                                            .unwrap_or(path.flash_amount),
-                                        {
-                                            let token_max = flash_bounds.get(&path.flash_token)
-                                                .map(|b| b.1)
-                                                .unwrap_or(path.flash_amount * U256::from(10u32));
-                                            let liq_max = arb_sim::optimize::path_max_flash(
-                                                path, &reprojected, 0.05, token_max);
-                                            token_max.min(liq_max)
-                                        },
-                                        optimization_iterations,
-                                    )
-                                });
+                            {
+                                let vstore = verify_state.as_ref().unwrap_or(&store);
+                                let verified = arb_sim::optimize::find_optimal_amount(
+                                    path, vstore,
+                                    flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                        .unwrap_or(path.flash_amount),
+                                    {
+                                        let token_max = flash_bounds.get(&path.flash_token)
+                                            .map(|b| b.1)
+                                            .unwrap_or(path.flash_amount * U256::from(10u32));
+                                        let liq_max = arb_sim::optimize::path_max_flash(
+                                            path, vstore, 0.05, token_max);
+                                        token_max.min(liq_max)
+                                    },
+                                    optimization_iterations,
+                                );
                                 match verified {
                                     Some((_, reprofit)) if !reprofit.is_zero() => {}
                                     _ => {
@@ -2271,12 +2288,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 // and the bundler drops reverting ops at
                                 // no on-chain cost — skip the probe then.
                                 if cfg.submission.strict_4337 {
-                                    let victim_landed = endpoint
-                                        .get_receipt(pending.tx_hash)
-                                        .await
-                                        .ok()
-                                        .flatten()
-                                        .is_some();
+                                    // Reuse the batch-level landing flag;
+                                    // re-check only while still pending —
+                                    // once landed, always landed.
+                                    if !victim_landed {
+                                        victim_landed = endpoint
+                                            .get_receipt(pending.tx_hash)
+                                            .await
+                                            .ok()
+                                            .flatten()
+                                            .is_some();
+                                    }
                                     if victim_landed {
                                         if let Some(venue) = &pimlico_venue {
                                             if smart_account.is_none() {
