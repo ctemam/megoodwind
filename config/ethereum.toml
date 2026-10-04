@@ -112,6 +112,35 @@ TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4 = "0x85f17cf997934a597031b2e18a9ab
 TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0 = "0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
 TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce = "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
 TK_0xe5acbb03d73267c03349c76ead672ee4d941f499 = "0xe5acbb03d73267c03349c76ead672ee4d941f499"
+TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef = "0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad = "0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+TK_0x104e072f3a7447e803e451b2aec296c73c5ce668 = "0x104e072f3a7447e803e451b2aec296c73c5ce668"
+TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04 = "0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+TK_0x18084fba666a33d37592fa2633fd49a74dd93a88 = "0x18084fba666a33d37592fa2633fd49a74dd93a88"
+TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39 = "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+TK_0x3472a5a71965499acd81997a54bba8d852c6e53d = "0x3472a5a71965499acd81997a54bba8d852c6e53d"
+TK_0x3845badade8e6dff049820680d1f14bd3903a5d0 = "0x3845badade8e6dff049820680d1f14bd3903a5d0"
+TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f = "0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+TK_0x45804880de22913dafe09f4980848ece6ecbaf78 = "0x45804880de22913dafe09f4980848ece6ecbaf78"
+TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1 = "0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+TK_0x5afe3855358e112b5647b952709e6165e1c1eeee = "0x5afe3855358e112b5647b952709e6165e1c1eeee"
+TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3 = "0x5f602133653237f362eb69826ba8237f4f7ab0c3"
+TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5 = "0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e = "0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e"
+TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0 = "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee = "0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c = "0xa21af1050f7b26e0cff45ee51548254c41ed6b5c"
+TK_0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91 = "0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91"
+TK_0xb2617246d0c6c0087f18703d576831899ca94f01 = "0xb2617246d0c6c0087f18703d576831899ca94f01"
+TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed = "0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+TK_0xc8bd181abf6835f88ff2fc52570402604425a702 = "0xc8bd181abf6835f88ff2fc52570402604425a702"
+TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766 = "0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e = "0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7 = "0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7"
+TK_0xd533a949740bb3306d119cc777fa900ba034cd52 = "0xd533a949740bb3306d119cc777fa900ba034cd52"
+TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f = "0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+TK_0xdfc5964141c018485b4d017634660f85aa667714 = "0xdfc5964141c018485b4d017634660f85aa667714"
+TK_0xf3b9569f82b18aef890de263b84189bd33ebe452 = "0xf3b9569f82b18aef890de263b84189bd33ebe452"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -634,6 +663,4088 @@ copy_spend_tokens  = ["0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 
 # Execution kill switches — wallet-copy is the only deployed lane;
 # arb/backrun discovery and metrics keep running but never submit.
+
+
 [lanes]
 classic_arb = false
 backrun     = false
+[[pools]]
+name = "AUTO_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_WETH_25"
+address = "0xc555d55279023e732ccd32d812114caf5838fd46"
+protocol = "v2"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_25"
+address = "0x89378c68af0f4c3f375bf8c7232fb72ae043aae8"
+protocol = "v2"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04_WETH_100"
+address = "0x7bd14d4230cca852e40d45537f58988314cfcbf1"
+protocol = "v3"
+token0 = "TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x00f3c42833c3170159af4e92dbb451fb3f708917_WETH_5"
+address = "0x4068038ab5490063a3ead93b3712ed082e62bd59"
+protocol = "v3"
+token0 = "TK_0x00f3c42833c3170159af4e92dbb451fb3f708917"
+token1 = "WETH"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_WETH_25"
+address = "0x97524f602706cdb64f9dfa71909ace06e98200b6"
+protocol = "v2"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_WETH_100"
+address = "0x82743c07bf3be4d55876f87bca6cce5f84429bd0"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c_25"
+address = "0x9ad3145dbdef0b214a62c0db06634122944848d9"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_USDT_5"
+address = "0x6ca298d2983ab03aa1da7679389d955a4efee15c"
+protocol = "v3"
+token0 = "WETH"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x5afe3855358e112b5647b952709e6165e1c1eeee_WETH_30"
+address = "0x000ba527862e5b82cff0f7c66b646af023274aa1"
+protocol = "v3"
+token0 = "TK_0x5afe3855358e112b5647b952709e6165e1c1eeee"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c_WETH_25"
+address = "0x05c024b441d2c288c2729b484bd4bcef3596aa51"
+protocol = "v2"
+token0 = "TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_WETH_25"
+address = "0x7dd3f5705504002dc946aeafe6629b9481b72272"
+protocol = "v2"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_25"
+address = "0xca7c2771d248dcbe09eabe0ce57a62e18da178c0"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WETH_25"
+address = "0xb6909b960dbbe7392d405429eb2b3649752b4838"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766_25"
+address = "0x311ce099976d72f9e093690fd1408a14ad4ed4da"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_25"
+address = "0x48d20b3e529fb3dd7d91293f80638df582ab2daa"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDT_5"
+address = "0x7cb85f75e61226060453a997a7733f76707df337"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDC_100"
+address = "0xa15cc73e881c06d8db06b50b7a3688b763c18350"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDC"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_25"
+address = "0xff64cb7ba5717a10dabc4be3a41acd2c2f95ee22"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_TK_0xdfc5964141c018485b4d017634660f85aa667714_25"
+address = "0x2808f174244d17f1878ec03fd111222a4e4e4892"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3_USDT_30"
+address = "0xd707961c88293d6efd29cf6f29983e74719f04db"
+protocol = "v3"
+token0 = "TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3"
+token1 = "USDT"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766_100"
+address = "0xac4fd96fcf729390a3c8044422a529028ec36751"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xc8bd181abf6835f88ff2fc52570402604425a702_25"
+address = "0x1f15b7ab0d4e5ae5f8fa456f215b0a186be10edc"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_30"
+address = "0x3bff1d56992702ecf7acb0d2a7f23eec459e8587"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC_25"
+address = "0x4cd36d6f32586177e36179a810595a33163a20bf"
+protocol = "v2"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xdfc5964141c018485b4d017634660f85aa667714_25"
+address = "0x3feb0845e90f49c010c7704e44af829acb9e61d1"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDC_WETH_1"
+address = "0x1445f32d1a74872ba41f3d8cf4022e9996120b31"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WETH"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_30"
+address = "0xd017617f6f0fd22796e137a8240cc38f52a147b2"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xdfc5964141c018485b4d017634660f85aa667714_25"
+address = "0x01dbaa18e86f65df04ce9f897d2cab22ef0c26cb"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_WBTC_1"
+address = "0x73a38006d23517a1d383c88929b2014f8835b38b"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "WBTC"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_USDC_30"
+address = "0x81aee07f99be78d88881fa6d98feff7555113635"
+protocol = "v3"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "USDC"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_WETH_100"
+address = "0x508acdc358be2ed126b1441f0cff853dec49d40f"
+protocol = "v3"
+token0 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_USDC_30"
+address = "0xee8aaa362a75fbf8e0a38a50ddc27f38551e16ea"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "USDC"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_WBTC_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_30"
+address = "0xe15e6583425700993bd08f51bf6e7b73cd5da91b"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_TK_0xdfc5964141c018485b4d017634660f85aa667714_25"
+address = "0xc0376b0cbc8e92bcc21e6b9a2f1a2351e714c6e6"
+protocol = "v2"
+token0 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e_WETH_1"
+address = "0xe12959c09e80f3228c52c517cf70ea6eb13d5e10"
+protocol = "v3"
+token0 = "TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e"
+token1 = "WETH"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_WETH_1"
+address = "0x109830a1aaad605bbf02a9dfa7b0b92ec2fb7daa"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "WETH"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_WETH_30"
+address = "0x15153da0e9e13cfc167b3d417d3721bf545479bb"
+protocol = "v3"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7_30"
+address = "0x894d4e6d3d2abc64fc0de0e4e2ea63a93bc9c520"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xc8bd181abf6835f88ff2fc52570402604425a702_25"
+address = "0x06fb12961489c34808e70e5b7bfce6ba43a3c0de"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e_USDC_1"
+address = "0x09c5f9b273de8d41e5dce0867ca67e78c92a3a32"
+protocol = "v3"
+token0 = "TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e"
+token1 = "USDC"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91_WETH_30"
+address = "0x86bc870520acf4e9c255270d7f51c814ad184960"
+protocol = "v3"
+token0 = "TK_0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_WETH_25"
+address = "0x3dd49f67e9d5bc4c5e6634b3f70bfd9dc1b6bd74"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_WETH_25"
+address = "0x9964b04176438d388365d06b19ea14bed7b8aa64"
+protocol = "v2"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0xb2617246d0c6c0087f18703d576831899ca94f01_WETH_25"
+address = "0xb36ec83d844c0579ec2493f10b2087e96bb65460"
+protocol = "v2"
+token0 = "TK_0xb2617246d0c6c0087f18703d576831899ca94f01"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH_25"
+address = "0xcf6daab95c476106eca715d48de4b13287ffdeaa"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x9d98c61d1136cfa2ac263be355350c97ca41c110_USDT_30"
+address = "0x4d12b3947d0cf7124012d3c4321d4d2dda8803f7"
+protocol = "v3"
+token0 = "TK_0x9d98c61d1136cfa2ac263be355350c97ca41c110"
+token1 = "USDT"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x7adbfd873084db714a57ed648ee69aa4627cb998_USDC_30"
+address = "0xd227d3d4602f4037839fff79dc5fd80e9cc45b4e"
+protocol = "v3"
+token0 = "TK_0x7adbfd873084db714a57ed648ee69aa4627cb998"
+token1 = "USDC"
+fee_bps = 30
+
+
+
+
+[[pools]]
+name = "AUTO_UNI_DAI_WETH_100"
+address = "0xd8dec118e1215f02e10db846dcbbfe27d477ac19"
+protocol = "v3"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18162f5cf35647be0910f30b4466be39295e4878_WETH_10000"
+address = "0x91c56eceb09f1085a267eb3d5f023d49f4946083"
+protocol = "v3"
+token0 = "TK_0x18162f5cf35647be0910f30b4466be39295e4878"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH"
+address = "0xd3d2e2692501a5c9ca623199d38826e513033a17"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH"
+address = "0xdafd66636e2561b0284edde37e42d192f2844d40"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH_100"
+address = "0x8026a88657a21f28c9f3d1db96c43303fca0cf58"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH_500"
+address = "0xfaa318479b7755b2dbfdd34dc306cb28b420ad12"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH_3000"
+address = "0x1d42064fc4beb5f8aaf85f4617ae8b3b5b8bd801"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WETH_10000"
+address = "0x360b9726186c0f62cc719450685ce70280774dc8"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525_WETH_3000"
+address = "0x07294086d6a7215797260301a41a69126f37323f"
+protocol = "v3"
+token0 = "TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_WETH_3000"
+address = "0xf492b26a7b518f5b9ee28f607661a7ae1787632d"
+protocol = "v3"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_WETH_10000"
+address = "0x794f685b0eab894aedad5c3d9846739d3f4a11e7"
+protocol = "v3"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4a220e6096b25eadb88358cb44068a3248254675_WETH"
+address = "0x0c4a68cf6857cc76fe946d04fe85fac5fae9625e"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_WETH"
+address = "0x14387b80a735b36f592f10f3555a807d3c154138"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_WETH_500"
+address = "0xd5a179e8a237eb18aabe5eccf8cbfec3196a65c0"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_WETH_10000"
+address = "0xe310d7acdb331af81904e747d6ec005de0ac1162"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_WETH"
+address = "0xa2107fa5b38d9bbd2c461d6edf11b11a50f6b974"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_WETH"
+address = "0xc40d16476380e4037e6b1a2594caf6a6cc8da967"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_WETH_100"
+address = "0x4ea16ae82145731390d77485db5cfb616a9582a6"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_WETH_3000"
+address = "0xa6cc3c2531fdaa6ae1a3ca84c2855806728693e8"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_WETH_10000"
+address = "0x3a0f221ea8b150f3d3d27de8928851ab5264bb65"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4_WETH_10000"
+address = "0xfe45750a137d769dd3d633694925927bdb5ef899"
+protocol = "v3"
+token0 = "TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_WETH"
+address = "0x9a9fa64d0d2bbb73570a90edf58fba66b76594fd"
+protocol = "v2"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_WETH_100"
+address = "0x70749ea59d6ef55e35b0922a89f06f80c22cab76"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_WETH_500"
+address = "0x0dd9c5db1959964d911293d193514a6db56b468e"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_WETH_3000"
+address = "0x2982d3295a0e1a99e6e88ece0e93ffdfc5c761ae"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x8b1484d57abbe239bb280661377363b03c89caea_WETH_100"
+address = "0xd78259391af0dcc382cc5ba2a13f9afb9cae9b57"
+protocol = "v3"
+token0 = "TK_0x8b1484d57abbe239bb280661377363b03c89caea"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x8b1484d57abbe239bb280661377363b03c89caea_WETH_3000"
+address = "0x854d6051c8c403cb27f6e0e304fd961f00aad4b9"
+protocol = "v3"
+token0 = "TK_0x8b1484d57abbe239bb280661377363b03c89caea"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x8ed97a637a790be1feff5e888d43629dc05408f6_WETH_3000"
+address = "0x06d444884f7e57837bbbc5e34deadc0f3a636764"
+protocol = "v3"
+token0 = "TK_0x8ed97a637a790be1feff5e888d43629dc05408f6"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x8ed97a637a790be1feff5e888d43629dc05408f6_WETH_10000"
+address = "0xeb7abe950985709c34af514eb8cf72f62def9e75"
+protocol = "v3"
+token0 = "TK_0x8ed97a637a790be1feff5e888d43629dc05408f6"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_WETH"
+address = "0xf7d31825946e7fd99ef07212d34b9dad84c396b7"
+protocol = "v2"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_WETH"
+address = "0x9d3b477880d931988cc1edf859846339bcc909b3"
+protocol = "v2"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_WETH_500"
+address = "0x4bfb38da0ef448721bb025dbeec1ff43cf739b5b"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_WETH_3000"
+address = "0xb011e4eb4111ef00b620a5ed195836dcd69db1ff"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_WETH_10000"
+address = "0x3be033b60bc4aa789368954595332fab143987ec"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0_WETH"
+address = "0xad1a21f61d653c6101b92c335f61140459c81c79"
+protocol = "v2"
+token0 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xfeac2eae96899709a43e252b6b92971d32f9c0f9_10000"
+address = "0xc593fe9193b745447e86b45ea0bf62565ee030cc"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xfeac2eae96899709a43e252b6b92971d32f9c0f9"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_WETH"
+address = "0x1ffc57cada109985ad896a69fbcebd565db4290e"
+protocol = "v2"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_WETH_3000"
+address = "0x64652315d86f5dfae30885fbd29d1da05b63add7"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_WETH_10000"
+address = "0x3b685307c8611afb2a9e83ebc8743dc20480716e"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282_WETH_3000"
+address = "0x57bbd26baad5d558a0780e622762e7d23f558f6f"
+protocol = "v3"
+token0 = "TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x00f3c42833c3170159af4e92dbb451fb3f708917_WETH_100"
+address = "0xcbc7ae5ed0bf50452a334824e48be71cd21841c6"
+protocol = "v3"
+token0 = "TK_0x00f3c42833c3170159af4e92dbb451fb3f708917"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x00f3c42833c3170159af4e92dbb451fb3f708917_WETH_3000"
+address = "0x8eba90fa3076cfa2f1143f1f82132635bf60868f"
+protocol = "v3"
+token0 = "TK_0x00f3c42833c3170159af4e92dbb451fb3f708917"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x00f3c42833c3170159af4e92dbb451fb3f708917_WETH_10000"
+address = "0x4845635180a3e5553d3eeeafc65e24af623f9ddb"
+protocol = "v3"
+token0 = "TK_0x00f3c42833c3170159af4e92dbb451fb3f708917"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_WETH"
+address = "0xbcf9c3e618702ab4a0d2055687c37a2846019c56"
+protocol = "v2"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_WETH_500"
+address = "0x3b9314cd6ed742108d985d6edc20bd0a2f1c1e5e"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_WETH_3000"
+address = "0x510100d5143e011db24e2aa38abe85d73d5b2177"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_WETH_10000"
+address = "0x3157e15e15fd41d6a9c5df255c71506f160db67c"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WETH"
+address = "0xc0d776e2223c9a2ad13433dab7ec08cb9c5e76ae"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WETH"
+address = "0x1add06b17398afca1ad9993ef17061317e463888"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WETH_500"
+address = "0x26f35b980f3b791ac3f7c09ff152815c0dcb5bf3"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WETH_3000"
+address = "0x7995430a85156b2d40d5bb701608788cf84019e3"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x07696dcab55e62cfef953666b29fe1970518cb00_WETH_10000"
+address = "0x558a92bbcadb2a48465194dd07f10db8b1e779cb"
+protocol = "v3"
+token0 = "TK_0x07696dcab55e62cfef953666b29fe1970518cb00"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x47accd13264d8f954105256faac8376ce6a55999_WETH_3000"
+address = "0xe39ac8db7c64a0aa89d7b668f2011ab2597b7cff"
+protocol = "v3"
+token0 = "TK_0x47accd13264d8f954105256faac8376ce6a55999"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x47accd13264d8f954105256faac8376ce6a55999_WETH_10000"
+address = "0xf3f9a2812bd3b41df7ff472c938aa56b1cfed37e"
+protocol = "v3"
+token0 = "TK_0x47accd13264d8f954105256faac8376ce6a55999"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x826180541412d574cf1336d22c0c0a287822678a_WETH"
+address = "0xc55215054035cdee72a455d59f75e60b0eb2b270"
+protocol = "v2"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x826180541412d574cf1336d22c0c0a287822678a_WETH_3000"
+address = "0x7f7ff8f22a902bb9b0aef07c6cb41d91a47e18e1"
+protocol = "v3"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x826180541412d574cf1336d22c0c0a287822678a_WETH_10000"
+address = "0xeab02b0d8f969cc6f6d637861dc1a3ac9ed8e72e"
+protocol = "v3"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_WETH"
+address = "0x1a0323de8d056f6572669aca723abf6bc8efc77b"
+protocol = "v2"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_WETH"
+address = "0x6469b34a2a4723163c4902dbbdea728d20693c12"
+protocol = "v2"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_WETH_500"
+address = "0x7edb1a009e5b15dc1fd8cb385c4bd5bffd0537d9"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_WETH_3000"
+address = "0x184572339de858e2e32534c61959de5246c7dcad"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_WETH_10000"
+address = "0x9ba3f47fe7f5a12562ba0a4a5645d8bf9ea1dd8e"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_WETH"
+address = "0x0928592f80d63d474257a7b797120e301ba2d987"
+protocol = "v2"
+token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_WETH_3000"
+address = "0x8e40fc101cc88b94744f1716a0a46e64929ef757"
+protocol = "v3"
+token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_WETH_10000"
+address = "0x307c4d0a83931c3eebe501f8f0c0b4c249bcf206"
+protocol = "v3"
+token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH"
+address = "0x811beed0119b4afce20d2583eb608c6f7af1954f"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH"
+address = "0x24d3dd4a62e29770cf98810b09f89d3a90279e7a"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH_500"
+address = "0x94e4b2e24523cf9b3e631a6943c346df9687c723"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH_3000"
+address = "0x2f62f2b4c5fcd7570a709dec05d68ea19c82a9ec"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_WETH_10000"
+address = "0x5764a6f2212d502bc5970f9f129ffcd61e5d7563"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WETH_TK_0xe5acbb03d73267c03349c76ead672ee4d941f499"
+address = "0xc821395f890913b9ce7415b36db10ddc5281c53a"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xe5acbb03d73267c03349c76ead672ee4d941f499"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WETH"
+address = "0x998bf04788c1c631c0e02bd1eed3d945308bf0a3"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WETH_500"
+address = "0x9178ea3eb764c0e8728ae5ab0823101a975a0a12"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WETH_3000"
+address = "0xae614a7a56cb79c04df2aeba6f5dab80a39ca78e"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WETH_10000"
+address = "0xb66776014d002479ace38ec16e604e465851a33b"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_WETH"
+address = "0x96f5b7c2be10dc7de02fa8858a8f1bd19c2fa72a"
+protocol = "v2"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_WETH_3000"
+address = "0x087a2050f5179130e5687b410a2d41633278717a"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_WETH_10000"
+address = "0x11a7dec5e32b5a169c1ec8a5f81cce5f17a6fcc2"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_WETH_10000"
+address = "0x9d9590cd131a03a31942f1a198554d37d164e994"
+protocol = "v3"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04_WETH"
+address = "0x5bed6d2acf12d788791b40f474bba1ab648526aa"
+protocol = "v2"
+token0 = "TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04_WETH_3000"
+address = "0x54e26693c842cc4313d758519d49217a9acf8388"
+protocol = "v3"
+token0 = "TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_WETH_500"
+address = "0x237f20c7406be430f5d25f66dfe887daa9055e77"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_WETH_3000"
+address = "0x97944213d2caeea773da1c9b11b0525f25b749cc"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_WETH"
+address = "0x55d5c232d921b9eaa6b37b5845e439acd04b4dba"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_WETH"
+address = "0x5ed259437bc3f94418b98f7b626ec6a1c75b8992"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_WETH_500"
+address = "0xf29a2b454b5da64eeb9c57169ba2776f6955e748"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_WETH_3000"
+address = "0x9e0905249ceefffb9605e034b534544684a58be6"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_WETH"
+address = "0x6631f1ed993f7cae5d4f1c9d6f9d129b37a9f040"
+protocol = "v2"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_WETH_3000"
+address = "0xfdca382f94d95c9aab140661c07fcb3acc5e4418"
+protocol = "v3"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_WETH_10000"
+address = "0x74092c7c0024feeb3839bed5ab6189eed86ae856"
+protocol = "v3"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_WETH"
+address = "0x0d7a61c28b3ad47bb9dbb139260915e29b6efc45"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_WETH_500"
+address = "0xb3fe3bad93b4f2e35fea390f6d607b35550baf97"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_WETH_3000"
+address = "0x5859ebe6fd3bbc6bd646b73a5dbb09a5d7b6e7b7"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_WETH_10000"
+address = "0x5b97b125cf8af96834f2d08c8f1291bd47724939"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_WETH_3000"
+address = "0xdbaaad773ec53acf4c5431d676a670f686461f06"
+protocol = "v3"
+token0 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH"
+address = "0x9c4fe5ffd9a9fc5678cfbd93aa2d4fd684b67c4c"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH"
+address = "0xf957fc1b6ed557c698ed6f1d336e00f306773975"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH_100"
+address = "0x895fa4ea1ffd4305a677c2ce878769c851b7d236"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH_500"
+address = "0x19053608fa7472a4fee2ad11992652cc91e67972"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH_3000"
+address = "0x8a7e585048bda875e64024118c506b14f78166dd"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_WETH_10000"
+address = "0xcb1abb2731a48d8819f03808013c0a0e48d9b3d9"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_WETH"
+address = "0x25b9105cd8972f4e5df4b8ebcd06eb470794891f"
+protocol = "v2"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_WETH_500"
+address = "0xff9035d70f51edd832a3b264a787a414db4e193f"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_WETH_3000"
+address = "0xaf81e930620eb55a9a6927c4b2afcb4d61040c32"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_WETH_10000"
+address = "0x4b62fa30fea125e43780dc425c2be5acb4ba743b"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x5afe3855358e112b5647b952709e6165e1c1eeee_WETH"
+address = "0x2e7e978da0c53404a8cf66ed4ba2c7706c07b62a"
+protocol = "v2"
+token0 = "TK_0x5afe3855358e112b5647b952709e6165e1c1eeee"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x5afe3855358e112b5647b952709e6165e1c1eeee_WETH_10000"
+address = "0xbb0eccb680ff8b2cbbb239b200cc6f9927b4aacb"
+protocol = "v3"
+token0 = "TK_0x5afe3855358e112b5647b952709e6165e1c1eeee"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3_WETH"
+address = "0x2938f4d733e5930271b240445e59ed225bf851ee"
+protocol = "v2"
+token0 = "TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3_WETH_500"
+address = "0xf12334dd3f798b1521f37a2f7726a59d7ca08b0b"
+protocol = "v3"
+token0 = "TK_0x5f602133653237f362eb69826ba8237f4f7ab0c3"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_WETH"
+address = "0x99920e0ba2b8aead4d10de769b28ecc29693c011"
+protocol = "v2"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_WETH_3000"
+address = "0xcb488b8452996454237d824d72f86090470292f4"
+protocol = "v3"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_WETH_10000"
+address = "0xbe80495815844a2874c79c00f4db3f5485e22668"
+protocol = "v3"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_WETH"
+address = "0x3f3ee751ab00246cb0beec2e904ef51e18ac4d77"
+protocol = "v2"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_WETH"
+address = "0x9461e49bc31788b143dc4c743759be834b8c8b62"
+protocol = "v2"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_WETH_500"
+address = "0xd340b57aacdd10f96fc1cf10e15921936f41e29c"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_WETH_3000"
+address = "0xc12af0c4aa39d3061c56cd3cb19f5e62deeaebde"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "WETH"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_WETH_500"
+address = "0xb00779e5b3f48f631283c5b73150a42020b4c9af"
+protocol = "v3"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "WETH"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_WETH_10000"
+address = "0x79a6683d82f25535ff3fd2753e03e0961060e882"
+protocol = "v3"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c_WETH_10000"
+address = "0x6208e69d3253420d995592c32e2d5a3918f8654f"
+protocol = "v3"
+token0 = "TK_0xa21af1050f7b26e0cff45ee51548254c41ed6b5c"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91_WETH_10000"
+address = "0xa1b81353c9caa127771113afffc390f42010beba"
+protocol = "v3"
+token0 = "TK_0xb0ffa8000886e57f86dd5264b9582b2ad87b2b91"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0xb2617246d0c6c0087f18703d576831899ca94f01_WETH_100"
+address = "0x4b2cde9effaa15999010e66da016b2b2c949f747"
+protocol = "v3"
+token0 = "TK_0xb2617246d0c6c0087f18703d576831899ca94f01"
+token1 = "WETH"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0xb2617246d0c6c0087f18703d576831899ca94f01_WETH_10000"
+address = "0x051f301bc65b7caea46d7eaf33852afabd00f283"
+protocol = "v3"
+token0 = "TK_0xb2617246d0c6c0087f18703d576831899ca94f01"
+token1 = "WETH"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WETH_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+address = "0xa1af3bb298673f46cf1299efc7e73e7b2e2d20b8"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_WETH_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+address = "0x61677b8a9e3da3be83da628db5d17aa3af14dc3c"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_10000"
+address = "0x62979dff3b5eb032ecba1a5934d1fd4367bb695c"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_3000"
+address = "0x161563973d6b1e1c299340a01e71353a04770b6e"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_10000"
+address = "0xe41552e6212cb6f7faa381c7bc9434c58bf28ce1"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7_10000"
+address = "0xd6a822d028bbf7b6edfa1533e110ee40c08551d9"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x3da1313ae46132a397d90d95b1424a9a7e3e0fce"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x58dc5a51fe44589beb22e8ce67720b5bc5378009"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_500"
+address = "0x39d1fa498a4622c1039db214096b043451334771"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_3000"
+address = "0x919fa96e88d67499339577fa202345436bcdaf79"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_10000"
+address = "0x4c83a7f819a5c37d64b4c5a2f8238ea082fa1f4e"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WETH_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+address = "0xa3509a16bbfc5992eb01cc861b615ccd8e937da8"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_500"
+address = "0x60c51a68d3c75b62f723e6a2da29c6f1fbe4b7c5"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_10000"
+address = "0x06b1655b9d560de112759b4f0bf57d6f005e72fe"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xdfc5964141c018485b4d017634660f85aa667714_100"
+address = "0x08999d312e8ce45d54560f6e9326fc254d275ab8"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xdfc5964141c018485b4d017634660f85aa667714_3000"
+address = "0x246e30c41c647ee4bfe7a35da16a040295dc6663"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xdfc5964141c018485b4d017634660f85aa667714_10000"
+address = "0xfc436dd3b17c926127e3f6b3a71d96d983f2b70c"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_3000"
+address = "0xc0fbed3cbbf272e0649ddfefdec99f4eba7eca22"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WETH_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_10000"
+address = "0x92ffbf968a1fbd766f94dcb495f2b39cc2bca7e3"
+protocol = "v3"
+token0 = "WETH"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_DAI_USDC_10000"
+address = "0x6958686b6348c3d6d5f2dca3106a5c09c156873a"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_USDC"
+address = "0x004375dff511095cc5a197a54140a24efef3a416"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDC_100"
+address = "0x026babd2ae9379525030fc2574e39bc156c10583"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDC_500"
+address = "0x9a772018fbd77fcd2d25657e5c547baff3fd7d16"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDC_3000"
+address = "0x99ac8ca7087fa4a2a1fb6357269965a2014abc35"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDC_10000"
+address = "0xcbfb0745b8489973bf7b334d54fdbd573df7ef3c"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDC"
+address = "0xebfb684dd2b01e698ca6c14f10e4f289934a54d6"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDC_100"
+address = "0xe8bf7d7358a96fa870d3945bb37bfcc91a9041cc"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDC_500"
+address = "0xab2044f105c43c25b1de3ee27504f0b889ce5953"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDC_3000"
+address = "0xd0fc8ba7e267f2bc56044a7715a489d851dc6d78"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDC_10000"
+address = "0xe845469aae04f8823202b011a848cf199420b4c1"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525_USDC_3000"
+address = "0x2c2226a6381e68a86c1a8dcb8d9fdab050959dd5"
+protocol = "v3"
+token0 = "TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_USDC"
+address = "0x4177d19e4125213bdd8d82dbc1ca775799d18218"
+protocol = "v2"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_USDC"
+address = "0x674f9ef0a5b875bdafcd4cb52b36856fe6edbe6a"
+protocol = "v2"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_USDC_3000"
+address = "0xc72abb13b6bdfa64770cb5b1f57bebd36a91a29e"
+protocol = "v3"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_USDC_10000"
+address = "0xc4e7e1a6896c4dad7816ef457ba77a393f68565e"
+protocol = "v3"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4a220e6096b25eadb88358cb44068a3248254675_USDC"
+address = "0x46dacd8f7487c5efaf1209a1095425a83ecd1837"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_USDC_3000"
+address = "0x2f6a0ad19c5d30f8451831e5e7000af24737790c"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_USDC_10000"
+address = "0xb66c491e2356bf32b7e3ea14af7f60b3ed171a22"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDC"
+address = "0xd8c8a2b125527bf97c8e4845b25de7e964468f77"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDC"
+address = "0x2101072e369761435a532a83369984ec3950aef2"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDC_500"
+address = "0x22fe40544ac2b387f9a68c6c53b9a8e34e4dd40e"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDC_3000"
+address = "0xfad57d2039c21811c8f2b5d5b65308aa99d31559"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDC_10000"
+address = "0xd24b1542323096ccbf9cba3b13c5b9eb4a92c506"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_USDC"
+address = "0xbd5bc7bc110bcec9d269c396f337e58e29540154"
+protocol = "v2"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_USDC_500"
+address = "0x02d0e4b74194b850816d119a95444c319be14d93"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_USDC_3000"
+address = "0x08c83e68298d523be2b1a77ccd05e3eebbbc4a14"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x8b1484d57abbe239bb280661377363b03c89caea_USDC_10000"
+address = "0x1d1ab4f8ee2bd5cda779acc19e93397705f85b7e"
+protocol = "v3"
+token0 = "TK_0x8b1484d57abbe239bb280661377363b03c89caea"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_USDC_100"
+address = "0xccd670a8216d8aceb525930d3549ddf196b31630"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_USDC_3000"
+address = "0xa81259b17ba0e2599531de32445c87225b636632"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_USDC_10000"
+address = "0x5e008a2897a0c99e8e30e381c5fc99054722de30"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0x7e07e520f05c7d510aebc36b4ac942255b7c5723"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_USDC"
+address = "0x82567ef61520103be5f1ff2e10b450b98633b38c"
+protocol = "v2"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_USDC_10000"
+address = "0xc04c717941d17aaf37f645e9e96ca0aa42fe244a"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xc9eef266834730340a55b6cc24621b31baf55581"
+address = "0x3fc51ce94bc6dd3cdfe599f1f99c05a5cc90e059"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xc9eef266834730340a55b6cc24621b31baf55581"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xc9eef266834730340a55b6cc24621b31baf55581_3000"
+address = "0xc9101faaac077d2f7a30c60d3d89955e1a89fa8b"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc9eef266834730340a55b6cc24621b31baf55581"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xc9eef266834730340a55b6cc24621b31baf55581_10000"
+address = "0x0461c60ad5fc24cb1fc075b7f202095819de6944"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc9eef266834730340a55b6cc24621b31baf55581"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDC"
+address = "0xd6dd2c98084ea23d21c72891cd7c262b2d63dd84"
+protocol = "v2"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDC_3000"
+address = "0x2322e5517a3cbc75a3f02d74c96f82dda120d841"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDC_10000"
+address = "0x7899ca76b96f292901c6d5f6d630e9296f61f995"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDC"
+address = "0xc6f6bbb40155d1d2e6becffa0e7eaad5ce2f16b4"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDC"
+address = "0xdce3601e18389b46dc1e009760fab0c0a6140db9"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDC_3000"
+address = "0x1c7a7f3a1bbe8030a1dccf525fda58bdd0b9b8e8"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDC_10000"
+address = "0x353bb62ed786cdf7624bd4049859182f3c1e9e5d"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x07696dcab55e62cfef953666b29fe1970518cb00_USDC_3000"
+address = "0x0554979c35683e8e187ea83d7aa68b2f5aab0c53"
+protocol = "v3"
+token0 = "TK_0x07696dcab55e62cfef953666b29fe1970518cb00"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x07696dcab55e62cfef953666b29fe1970518cb00_USDC_10000"
+address = "0xcf2092343ab49ffbeca7766b61b70bd2b9c099e2"
+protocol = "v3"
+token0 = "TK_0x07696dcab55e62cfef953666b29fe1970518cb00"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x826180541412d574cf1336d22c0c0a287822678a_USDC_3000"
+address = "0xf51648233bb51fffe2bed4be89fcff4ea1fc9ac4"
+protocol = "v3"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x826180541412d574cf1336d22c0c0a287822678a_USDC_10000"
+address = "0xfcedca7ad9ea9e9cbf580eabb479a000ac45b291"
+protocol = "v3"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_USDC"
+address = "0xf93f1a88fc3c99431599d16fbfd35a9299a70dd6"
+protocol = "v2"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_USDC_500"
+address = "0x3952c20f1af4ad4c62bd53c6cee66fcffe0a324d"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDC"
+address = "0x881d5c98866a08f90a6f60e3f94f0e461093d049"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDC_500"
+address = "0xffc048fb0d686d5df9563441aaf3cacdd3374e6c"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDC_3000"
+address = "0xe9131a276fd07af729b5537a429346e8affc67e0"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xe5acbb03d73267c03349c76ead672ee4d941f499_10000"
+address = "0xe312b8dd9c7a29ece6ca4ab1493271cd4323c4c2"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xe5acbb03d73267c03349c76ead672ee4d941f499"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_USDC"
+address = "0x02dd9ff64eec5d866a512ef08463c7c85a14e4aa"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_USDC_3000"
+address = "0x7cc97cf8dec003de52b100d66cd89e5cdcaa124a"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_USDC_10000"
+address = "0x46f7753184a98a7259e651a2b70cef9479142426"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC"
+address = "0xc636312f802869a65b6f89608781ef887defb443"
+protocol = "v2"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC_100"
+address = "0x4be61c7e9a2ab0feb9e9c4a84f705f254f5a33a6"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC_500"
+address = "0xf8a4e2b93314789c6693369e9616878293533a1b"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC_3000"
+address = "0xc840464a8c3324e0bdc9429439dde3a12205424a"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDC_10000"
+address = "0x15e7f2cd6f5c19c9a362c9320e231450d0e4a129"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04_USDC_100"
+address = "0xc6360a062ad0ceb937198a6e23fe33494f9c80a8"
+protocol = "v3"
+token0 = "TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04_USDC_3000"
+address = "0x43a9a7d500b947e2e3a6d2f8adf6ee256420e29d"
+protocol = "v3"
+token0 = "TK_0x1789e0043623282d5dcc7f213d703c6d8bafbb04"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_USDC_3000"
+address = "0xb41b2b4bb06a69d6793f20d27ec4abe96450efea"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDC"
+address = "0xf6dcdce0ac3001b2f67f750bc64ea5beb37b5824"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDC_500"
+address = "0xa2ea4d31e02d954aec68345b922bbe06d8f9ba6c"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDC_3000"
+address = "0x69d91b94f0aaf8e8a2586909fa77a5c2c89818d5"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDC_10000"
+address = "0xe05e653453f733786f2dabae0ffa1e96cfcc4b25"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_USDC"
+address = "0x32ac081a5159d38264daab1aac29d106b7a5f3d2"
+protocol = "v2"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_USDC"
+address = "0x7a2b036046557e8fff7fa84be5a0b3f7ba808f16"
+protocol = "v2"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_USDC_10000"
+address = "0xa3f02d35f2a29ea782575ad24477b6a048bf50da"
+protocol = "v3"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_USDC"
+address = "0x504aa346a22c8c452357237e4902dcfbf3709c3d"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_USDC_3000"
+address = "0xdc253c1da38c6644b2ebf2430ec007c7e16b9dc2"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_USDC_10000"
+address = "0x5864dea5f1750d1f8887f9fb7f3a50f15789514e"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_USDC_3000"
+address = "0x086519db76151cf836fc7fe77d5fa52b3e13ba61"
+protocol = "v3"
+token0 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_USDC_10000"
+address = "0xb975debd497c1cc6cdcb9f4246ef4903e842671f"
+protocol = "v3"
+token0 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC"
+address = "0x6d74443bb2d50785989a7212ebfd3a8dbabd1f60"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC"
+address = "0x56983afc748ee88d695f1bcf8d8fa25831a71a21"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC_100"
+address = "0x319ed32c8c385662e9769bf6385629afd220b7d4"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC_500"
+address = "0x5ae13baaef0620fdae1d355495dc51a17adb4082"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC_3000"
+address = "0xb431c70f800100d87554ac1142c4a94c5fe4c0c4"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDC_10000"
+address = "0x1d61fb4c87361f27bd3be39a06d1a19f0c5d696b"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_USDC_10000"
+address = "0x2a48dbf6347ea5cdc906b4bb6a2ed27969241cde"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x5afe3855358e112b5647b952709e6165e1c1eeee_USDC_10000"
+address = "0x486db7c399f11c6207cddaa900dedd5852df109d"
+protocol = "v3"
+token0 = "TK_0x5afe3855358e112b5647b952709e6165e1c1eeee"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_USDC"
+address = "0xa1db2fc9b2ceaf3cdf41fd11ffcb38404eae3906"
+protocol = "v2"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5_USDC_10000"
+address = "0xa7600c4fbddb57e44018bee74a5f6b636cb68352"
+protocol = "v3"
+token0 = "TK_0x66761fa41377003622aee3c7675fc7b5c1c2fac5"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_USDC_500"
+address = "0x4622df6fb2d9bee0dcdacf545acdb6a2b2f4f863"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_USDC_3000"
+address = "0x173821f6ad4c5324cd35753a9fd12d92f2eaab29"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "USDC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_USDC_10000"
+address = "0x09ec468b8af86f9b47229e17066350291c068c30"
+protocol = "v3"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "USDC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+address = "0x67cea36eeb36ace126a3ca6e21405258130cf33c"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_500"
+address = "0x4ae1386effb9806a1c3f9303d066dbdbb2e44f17"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_3000"
+address = "0xf215e4dea5cce0049e735d3fad64098ecc3a1d57"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_10000"
+address = "0x216fb666dd61600e74f7b2ca25a38aa99db1a4e9"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+address = "0xdf37aa583b868b49c20912bcf56e5d58b1e61b27"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+address = "0x43c5cee226749ce3d5ff973ee300015266baf20a"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766_10000"
+address = "0x472fa0d7c2c27389c70933ed254c87c238edec53"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_500"
+address = "0x972549d634455966496c98d0cdc203911bc082f3"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_3000"
+address = "0x7a95746ae9c21be32b60050b95e06b4c4f8c899d"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7_10000"
+address = "0x3a6a81b9950bcdfc01eff5ff599c31e919576a5f"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x210a97ba874a8e279c95b350ae8ba143a143c159"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_100"
+address = "0xaf245b402269419801c1dc00a0017a62656a7120"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_500"
+address = "0x09622b458f27c6f394455b9c0fb404ffac05e37a"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_3000"
+address = "0x47bde1364cb8cfe45b59e261cc66aa551f1f7954"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_10000"
+address = "0x9445bd19767f73dcae6f2de90e6cd31192f62589"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+address = "0x54a23b99e137e409dd1d6fcad0db6201e85cafb9"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_USDC_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+address = "0x0446f087fb2ed2bc4d39fc6fc8b787534bc5874e"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_3000"
+address = "0x0eedddcf6e26495d2bb6fc21fd565bf20818ec81"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_10000"
+address = "0x1ad96c413367ebb4f9c8961a751cf144c9278592"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xdfc5964141c018485b4d017634660f85aa667714_10000"
+address = "0x9085cd4940b1f3d712806c2d561a464ed4b99d87"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_USDC_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+address = "0x7a809081f991ecfe0ab2727c7e90d2ad7c2e411e"
+protocol = "v2"
+token0 = "USDC"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_500"
+address = "0x18e05c519a1f6f1b5844d60c282c544cebf651b1"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_3000"
+address = "0x7120038482280b4ce09c0050e0c50ee630001aad"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDC_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452_10000"
+address = "0xd8628071e63c91246979e6753eeb15c0fc0187fd"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_DAI_USDT"
+address = "0xb20bd5d04be54f870d5c0d3ca85d82b34b836405"
+protocol = "v2"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_DAI_USDT"
+address = "0x055cedfe14bce33f985c41d9a1934b7654611aac"
+protocol = "v2"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_DAI_USDT_100"
+address = "0x48da0965ab2d2cbf1c17c09cfb5cbe67ad5b1406"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_DAI_USDT_500"
+address = "0x6f48eca74b38d2936b02ab603ff4e36a6c0e3a77"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_DAI_USDT_3000"
+address = "0x4773e2c1c0b400a16dfec4ca6e305141859a5542"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_DAI_USDT_10000"
+address = "0x3196f48548c3b8c901bc4cc5ad662ba97c9c0b2b"
+protocol = "v3"
+token0 = "DAI"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDT_100"
+address = "0xf98cf0d979cfbb780774f318e3da4f7317af50d7"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WBTC_USDT_10000"
+address = "0x5a59e4e647a3acc42b01715f3a1d271c1f7e7aeb"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDT"
+address = "0x5ac13261c181a9c3938bfe1b649e65d10f98566b"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDT"
+address = "0x8b79c78f7aa289a7e9bde311a21ffdba4ab493e3"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDT_500"
+address = "0x36f7273afb18a3f2fdd07e3ac1c28e65d7ea8f07"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_USDT_10000"
+address = "0xfe47dad3d8072a7c5e38202bc4b82d322163e2b6"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x30d20208d987713f46dfd34ef128bb16c404d10f_USDT_10000"
+address = "0xc65de4020c99eb66b3066b3cf2bbacc28f0e78df"
+protocol = "v3"
+token0 = "TK_0x30d20208d987713f46dfd34ef128bb16c404d10f"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4a220e6096b25eadb88358cb44068a3248254675_USDT"
+address = "0x3836106dde89bca75339bfa6ca097e650361590f"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_USDT_10000"
+address = "0xde77450d0887994364b62a93e14a3a76d2db9162"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT"
+address = "0x9db10c305c671153662119d453c4d2c123725566"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT"
+address = "0x665daa5e280edd60b81c67d583ed85b9a5cc45a6"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT_100"
+address = "0xa54609c53f423d49824ab55b7a662d93d90651f9"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT_500"
+address = "0x55ec9256077a311256b2daf81f70c0992d9fbd66"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT_3000"
+address = "0xac5a2c404ebba22a869998089ac7893ff4e1f0a7"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_USDT_10000"
+address = "0x106a1a525e9b404d02db8a21dbe4c30f4c807107"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4_USDT_10000"
+address = "0x186d4a5a24436f2d97f70fe4fa2e298ad670b03b"
+protocol = "v3"
+token0 = "TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44_USDT_10000"
+address = "0xfeb6a9de89465da662ff16f85b5342b73bd0b455"
+protocol = "v3"
+token0 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_USDT_10000"
+address = "0x833d7bfbe528a44133f33578dba5433c5da76b86"
+protocol = "v3"
+token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0_USDT"
+address = "0x9723985b1269bf7600e82cc20a5338951bf413e5"
+protocol = "v2"
+token0 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_USDT"
+address = "0xab7cdd48e7c690ff0b864b954f34959d41b019e1"
+protocol = "v2"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_USDT"
+address = "0x3507698ec030bfa4f18806b4d38070b12243177c"
+protocol = "v2"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_USDT_3000"
+address = "0xea70f0d25545f4f93d4804ebd026d7329908a73a"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x558e7139800f8bc119f68d23a6126fffd43a66a6_USDT_500"
+address = "0x917591eed17a20ab6fd2ed2f6432852423fb3e91"
+protocol = "v3"
+token0 = "TK_0x558e7139800f8bc119f68d23a6126fffd43a66a6"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282_USDT"
+address = "0xff31079816d545ca8b4687f5d1f4dc52c06f7feb"
+protocol = "v2"
+token0 = "TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0xc9eef266834730340a55b6cc24621b31baf55581_USDT_3000"
+address = "0xe88f804369cf4274207eb26fc801b6f2df10ec4b"
+protocol = "v3"
+token0 = "TK_0xc9eef266834730340a55b6cc24621b31baf55581"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDT_3000"
+address = "0x33676385160f9d8f03a0db2821029882f7c79e93"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDT_10000"
+address = "0xd9e7c4cd54b9153fb2c35ac53872801fc739cc23"
+protocol = "v3"
+token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDT"
+address = "0x59c284be92ca73aec147d49fdab41d4e871db2af"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_USDT_10000"
+address = "0x92a0515f69b46a1428a9aacbe8c273ffca4809d8"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x07696dcab55e62cfef953666b29fe1970518cb00_USDT_10000"
+address = "0x89a67c6dee35db9815da2fb9191f0998a8b37c39"
+protocol = "v3"
+token0 = "TK_0x07696dcab55e62cfef953666b29fe1970518cb00"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x47accd13264d8f954105256faac8376ce6a55999_USDT_10000"
+address = "0xc6429168feb71663ab50566fc6059235ca440474"
+protocol = "v3"
+token0 = "TK_0x47accd13264d8f954105256faac8376ce6a55999"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x826180541412d574cf1336d22c0c0a287822678a_USDT_3000"
+address = "0x06d4f1d21d2a85e99e294e721098e40e80249864"
+protocol = "v3"
+token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_USDT_500"
+address = "0x972287e767da4d9d593a1ad65afb658c37b7cd56"
+protocol = "v3"
+token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_USDT_3000"
+address = "0xd8c81e66a71fcfe8258b0cf84267275cdc91cac3"
+protocol = "v3"
+token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_USDT_10000"
+address = "0x3b3ed12e953868a94484e5334863e2ff2d135235"
+protocol = "v3"
+token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDT"
+address = "0x773dd321873fe70553acc295b1b49a104d968cc8"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDT_500"
+address = "0x9470ebd69a50fbe965b5ff0e62a775f8d7ed5ee0"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDT_3000"
+address = "0xb0cc75ed5aabb0acce7cbf0302531bb260d259c4"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDT_TK_0xe5acbb03d73267c03349c76ead672ee4d941f499_10000"
+address = "0xe9614c2b70f3e5b62ebb4c76571e05cd41a65381"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xe5acbb03d73267c03349c76ead672ee4d941f499"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_USDT"
+address = "0x0c11f54ec778cdf062ad0d8464cc7b7c9108c934"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDT"
+address = "0x964640b22791cfdf01c23b33493f98df1bd12ddc"
+protocol = "v2"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad_USDT_10000"
+address = "0x732c0e145e3bba84f566ce9070f5490e8719821a"
+protocol = "v3"
+token0 = "TK_0x0f51bb10119727a7e5ea3538074fb341f56b09ad"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_USDT_3000"
+address = "0xa5c9e485970de092c38c0357c6ec722aaafafd83"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDT"
+address = "0xbbb9bf440d0f686487925fef3b0a0f9aa67753f6"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDT_3000"
+address = "0x5b4cf5d968ba123fb5d1385c1d792d8a7a019876"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_USDT_10000"
+address = "0xe7b624427dc5c7ddea902f320f30cbc9eed9cc64"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_USDT"
+address = "0x4fd5c51e342400c70e4ea0291bc59cfe97ffc390"
+protocol = "v2"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_USDT_3000"
+address = "0xa5a4ef35b96a51ad816a4c0d8bd5fa4b8e307347"
+protocol = "v3"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_USDT"
+address = "0xb3037005e4737bce195a06214e6e91c6d6d3c5ea"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_USDT"
+address = "0x9b46fb7d6925497480161aa4dcd8715330483bed"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDT"
+address = "0xf3f8a942f9d0827d32ea1b9f1a0724b5fa7397db"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDT_100"
+address = "0x2bedb3f68d12e4b2ee72f3de7227e51246353fcb"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDT_3000"
+address = "0x123712f44b4fd26b36b8d4c81e2ed01ae6e9607a"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_USDT_10000"
+address = "0x91a76255ddeee3f03267c9cbe5a28311a6abb58d"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_USDT"
+address = "0x6f56fe9857b435590a691964070930005d3446a2"
+protocol = "v2"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_USDT_3000"
+address = "0x7f76a06e8485bb5a12c0e2632dd5c365ecf3e6da"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_USDT_10000"
+address = "0x6a9c4fc2b35ee398e7a0e75d982872466ba93cb8"
+protocol = "v3"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x5afe3855358e112b5647b952709e6165e1c1eeee_USDT_10000"
+address = "0x8b16436c7c9c15a3c2c9ce58711eaa3ae7fe52d3"
+protocol = "v3"
+token0 = "TK_0x5afe3855358e112b5647b952709e6165e1c1eeee"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_USDT_500"
+address = "0xec5055067d60292ab2c514a1090bc8e014e4abaa"
+protocol = "v3"
+token0 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_USDT"
+address = "0x3f92b191ea40f2e02b62fd9d792d2486091f5537"
+protocol = "v2"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766_USDT_10000"
+address = "0x100147f8a3a459e6975b0dd9f9f91abe31ea01c8"
+protocol = "v3"
+token0 = "TK_0xca14007eff0db1f8135f4c25b34de49ab0d42766"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e_USDT_3000"
+address = "0xf06b2b0e86745c1b1f00c80b7919468faae004a1"
+protocol = "v3"
+token0 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7_USDT_3000"
+address = "0xf0262866f9e0588f67d1a7936726fab0a75bb1a6"
+protocol = "v3"
+token0 = "TK_0xd34a99bc0f67ae1bbd63c660e6d0b0dd03e263b7"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_USDT"
+address = "0x3eed0af1c5f350c6571525d9e3eeea7d2608af81"
+protocol = "v2"
+token0 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_USDT_100"
+address = "0x451347a522faf90482ecacd58847139d092117ab"
+protocol = "v3"
+token0 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_USDT_500"
+address = "0x224e94d1fa04195df9ad941c0d1529908401b23b"
+protocol = "v3"
+token0 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_USDT_3000"
+address = "0x07b1c12be0d62fe548a2b4b025ab7a5ca8def21e"
+protocol = "v3"
+token0 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+token1 = "USDT"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_USDT_10000"
+address = "0x8e26e2fc8140280fba3e34bfdca7fc1102c1ae04"
+protocol = "v3"
+token0 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_USDT_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_3000"
+address = "0x2a372c76aff0b6393c12520566a626fa6810f4c0"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_USDT_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_10000"
+address = "0x23c4855ff903ad733c364780a27b5fadcdad2e17"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_DAI"
+address = "0x231b7589426ffe1b75405526fc32ac09d44364c4"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_WBTC_DAI"
+address = "0x622d4a772b72f56602546559c95d7ca214ebb24f"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_DAI_500"
+address = "0xa93eb5b410b651514a18724872306f5ce9928dde"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "DAI"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WBTC_DAI_3000"
+address = "0x391e8501b626c623d39474afca6f9e46c2686649"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_DAI_10000"
+address = "0x649caaf37f36e67d1129c0fd6c6539d390ca2b82"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_DAI"
+address = "0xf00e80f0de9aea0b33aa229a4014572777e422ee"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_DAI"
+address = "0xd9cedc999be891d7fc65996c708fd827959f4c8a"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_DAI_500"
+address = "0x57d7d040438730d4029794799deed8601e23ff80"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "DAI"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_DAI_3000"
+address = "0x7cf70ed6213f08b70316bd80f7c2dddc94e41ac5"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_DAI_10000"
+address = "0xd6993e525fadb23971a20bbb057af9841eae076f"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4a220e6096b25eadb88358cb44068a3248254675_DAI"
+address = "0x52798667bbb471e45b3ada5eac673610c8a0a9b2"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_DAI_10000"
+address = "0x07e43b28640e30a60bffcc885f2d7ae5fb6251c2"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_DAI"
+address = "0x6d4fd456edeca58cf53a8b586cd50754547dbdb2"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_DAI"
+address = "0x23a1081bad58465e30a0a5083fbc8409c3d76960"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_DAI_500"
+address = "0x3209c64bf470fafecb8b87db3d8ac1baa3ecf629"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "DAI"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x514910771af9ca656af840dff83e8264ecf986ca_DAI_3000"
+address = "0x091c0158ab410bd73ca1541409d5a22e90146a04"
+protocol = "v3"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_DAI_3000"
+address = "0xd57a0bec7863f74f8bc114c4acc19f1da915043e"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_DAI_10000"
+address = "0xc21831336e4940c5a6e640fb40f0e86735dca02c"
+protocol = "v3"
+token0 = "TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_DAI_10000"
+address = "0xca3dcf91628f7f5e9cfe0f666b34b830a98748a8"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_DAI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+address = "0x4e6e41306c7ef6e53ecdb34e3155c73fcb7869f3"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_DAI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+address = "0xb011ea8096ce5986f3e89b4c2c02f193c82abea8"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_DAI"
+address = "0x6929abd7931d0243777d3cd147fe863646a752ba"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_DAI_3000"
+address = "0x5e72d187505367976ee83010bad667d39acba569"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_DAI"
+address = "0xe1ab0442520d5b8bcf09317ad7e0c5bad5824fcd"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_DAI_3000"
+address = "0x5c28b5f471d97f53fcf132f16f9f3c0c888c1a01"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_DAI_10000"
+address = "0x63f7d912eae3e7a2ec19afdad0d7c7533ae0781c"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_DAI"
+address = "0x2a96d40539b2c884b0d99fa228f9cb8849501a02"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_DAI_10000"
+address = "0x5b792308d5d167effa254cd1a0893b177643c6a5"
+protocol = "v3"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_DAI"
+address = "0x3d65e308a5d6e9938b2fed1c8a18089db697d126"
+protocol = "v2"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_DAI_3000"
+address = "0x477e1a178f308fb8c2967d3e56e157c4b8b6f5df"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "DAI"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_DAI_10000"
+address = "0x0ecff5d9acdbd54274aed608ce6e39569854a3c1"
+protocol = "v3"
+token0 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+token1 = "DAI"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_SUSHI_DAI_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+address = "0xc5578194d457dcce3f272538d1ad52c68d1ce849"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_DAI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0xf00f7a64b170d41789c6f16a7eb680a75a050e6d"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_DAI_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x747c9884d29474fe4334c477ebfd25f8a6f5b90d"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_DAI_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_500"
+address = "0x1827a0f8d912afafcf60a13364ede49d699df84f"
+protocol = "v3"
+token0 = "DAI"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_DAI_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_3000"
+address = "0xfe439605633f9afe8ec3e0e075bc12e2a2204c1f"
+protocol = "v3"
+token0 = "DAI"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_DAI_TK_0xdfc5964141c018485b4d017634660f85aa667714"
+address = "0x6c027635a22faaf29b9f565d543f91236c1864fe"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_DAI_TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+address = "0xb1843e08f6c9c5691e6562c15c96c7d20d2be476"
+protocol = "v2"
+token0 = "DAI"
+token1 = "TK_0xf3b9569f82b18aef890de263b84189bd33ebe452"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WBTC"
+address = "0xaa873c9da6541f13c89416c17271b4c21bf7b2d7"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WBTC_3000"
+address = "0x8f0cb37cdff37e004e0088f563e5fe39e05ccc5b"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_WBTC_10000"
+address = "0x83819fb5184e2a418d9309bc1ac46edb67f89e7d"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "WBTC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x4a220e6096b25eadb88358cb44068a3248254675_10000"
+address = "0x83dd3f6d2ae0890190906822db16aba4720ff701"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0x8a01ba64fbc7b12ee13f817dfa862881fec531b8"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x514910771af9ca656af840dff83e8264ecf986ca_3000"
+address = "0x618004783d422dfb792d07d742549d5a24648df2"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x514910771af9ca656af840dff83e8264ecf986ca_10000"
+address = "0xbc7b99a8acf5a3cdd0410189efe9843c2e05afdd"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0x34a566b7c0b68bbcb5be0f7bce228dbc82379bdd"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WBTC"
+address = "0x99a308756ec7e10794af4c43f21b670d4a63aed0"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_WBTC_10000"
+address = "0x24bd2352cb6f1df8993b5d78033486777403fc08"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "WBTC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_10000"
+address = "0x1153c8f2b05fdde2db507c8d16e49d4c7405c907"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WBTC"
+address = "0x65cc29d2e912827e6c1a53a5d18a7c23c9d2920d"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_WBTC_3000"
+address = "0x6fd7e2e1835a26a92d44878814fbf04f4cad1ef4"
+protocol = "v3"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_WBTC"
+address = "0x9b71976ae55cad8408e475968a45c8ee49702ec1"
+protocol = "v2"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "WBTC"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_WBTC_500"
+address = "0xdbac78be00503d10ae0074e5e5873a61fc56647c"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "WBTC"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_WBTC_10000"
+address = "0x3727ab1416c416e78f80441133834edf419a36d5"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "WBTC"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+address = "0x96da3b8edea72329c791d9baf5521909791df560"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+address = "0xcd7989894bc033581532d2cd88da5db0a4b12859"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_WBTC_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+address = "0x110492b31c59716ac47337e616804e3e3adc0b4a"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_10000"
+address = "0x419035ebff16b7f1519cb0e85180a75902e2104c"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_3000"
+address = "0xdcfb3dec45f0ce8e35b02ab9fcf8950ac8f90883"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_10000"
+address = "0xb54c0a669ad005386430ad261917f9be7027be15"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+address = "0x538ddd4bbeaaea496fecac5a770256e0cae2faed"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+address = "0x8e0859ea441fe5d788dd0a2544075f0088b74410"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_100"
+address = "0xa0d9fef6843337828a5ee8aa71f241811e52ad9d"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_500"
+address = "0xbbc43895c8e9d58c537e437611303a5681613662"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_3000"
+address = "0x5a2abdc02ecc86fa3d015f498ec2f2c190c11700"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x45804880de22913dafe09f4980848ece6ecbaf78_10000"
+address = "0x3c2db39424b128c9903e9648f1c0dd0f8532d183"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_3000"
+address = "0x5f0d8fc6057a959e79f7f79f8dbf12f29f9a9f34"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_10000"
+address = "0x913764ac2565c56706feef598dce2d84634c7b60"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e_100"
+address = "0xcceef8a17d01e0097bd1ab51687754c86456363b"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x72dfb2e44f59c5ad2bafe84314e5b99a7cd5075e"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_100"
+address = "0x3fd182d229034b783f80d434ccc93f0d7529b2d5"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 1
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_500"
+address = "0x6c5f35dfd2fa08f5fb2d35d5937181213c7d6a17"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_3000"
+address = "0xfb29a5a39ad4294ba4f6afd362c9425206c1d8b4"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_3000"
+address = "0x67857131ae32f72739a2c8d0bd0e812793d8bb24"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_WBTC_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_10000"
+address = "0x42a25a0fd1a1b4d4bdf9299c8e0e1078a65fd131"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_WBTC_TK_0xdfc5964141c018485b4d017634660f85aa667714"
+address = "0xad673e520aada71cf73cd8e257a5d50c78eb01a0"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0x9b2662dc8b80b0fe79310ad316b943cb5bb15e8b"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0xcf789e7f539151b18e442dc183e7c454edfb69aa"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x514910771af9ca656af840dff83e8264ecf986ca_3000"
+address = "0x9f178e86e42ddf2379cb3d2acf9ed67a1ed2550a"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x514910771af9ca656af840dff83e8264ecf986ca_10000"
+address = "0xa6b9a13b34db2a00284299c47dacf49fb62c1755"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0xdf67d830b5e13058b3f5783b4e1b2ad24d3d95a7"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282"
+address = "0xb35fa40927ba34e2177dd8b964ec92fe204ae1e8"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282_3000"
+address = "0xc93bd2c73c4fc29d6ef6acfe2d74994f28213cd0"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x71ab77b7dbb4fa7e017bc15090b2163221420282"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_3000"
+address = "0x3fc55a072a92673f470c7ad591e8dfbd222fd81d"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_10000"
+address = "0xe07c687cecb3caf246ded3240d186181d5eae705"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+address = "0x2531331f7a2cd0eba74a3b23e1b761dfde21fc22"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+address = "0xb8d4f7a95a88496e8702bfde10fc378c7ade526f"
+protocol = "v2"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+address = "0x52146a769ac02bdb737cecd8712515da746ece7f"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+address = "0x4f4b05f09856d896fb8e47cdcd3d4586f86aa67d"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+address = "0xb88501c392a42855ac99f2f290886def26edc5b1"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_3000"
+address = "0x73b72faeeda748b976c78330ec2651646cea7e7e"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+address = "0x6eed0e6c7e8e5b5a946c7ef04a9a920f3c185d90"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x45804880de22913dafe09f4980848ece6ecbaf78"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_3000"
+address = "0xec76508057d4817a715178aee256d0d388265418"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+address = "0x6107d0350569d276a72cb70efc454fcba62665c2"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x71aa44cbed2ca17077aee7c5087e86a53fc01f6e"
+protocol = "v2"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_3000"
+address = "0x57d333767ae4fc566cbd0393e5bc4f7873a6726c"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984_TK_0xd533a949740bb3306d119cc777fa900ba034cd52_10000"
+address = "0x6207baeba4a6b5dcedfa2007620b9a84a0b2fbfb"
+protocol = "v3"
+token0 = "TK_0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x4a220e6096b25eadb88358cb44068a3248254675_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0x11ed3f302c3ca6f2e0e3bd9b77242c99d95328f7"
+protocol = "v2"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x4a220e6096b25eadb88358cb44068a3248254675_TK_0x514910771af9ca656af840dff83e8264ecf986ca_3000"
+address = "0x09fe8c4ab566d6c9392cb3a04a902f4cd4d3e1fe"
+protocol = "v3"
+token0 = "TK_0x4a220e6096b25eadb88358cb44068a3248254675"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0xbfab9a3a4240b1c2beeb2e2ad0cf34bbd9a1ddc6"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0x9773f438f0856099411fbbc0c964873b214b7406"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+address = "0x2914986c1092e493ccae7e8771cb36333b19adcb"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_TK_0x514910771af9ca656af840dff83e8264ecf986ca_10000"
+address = "0x7fe2d29a68b6dc56a54a665edef47dacef97b4b5"
+protocol = "v3"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+address = "0x7a0ab2f3fcd4cb731557215981b625afe5c6f776"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "TK_0xc8bd181abf6835f88ff2fc52570402604425a702"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x514910771af9ca656af840dff83e8264ecf986ca_TK_0xdfc5964141c018485b4d017634660f85aa667714"
+address = "0x62cb46a15589ac8712610af26235bfe99b9f553f"
+protocol = "v2"
+token0 = "TK_0x514910771af9ca656af840dff83e8264ecf986ca"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_SUSHI_TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1_TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+address = "0x9c823cbc9d569d1479a5919d15963046d7f3805f"
+protocol = "v2"
+token0 = "TK_0x582d872a1b094fc48f5de31d3b73f2d9be47def1"
+token1 = "TK_0x77e06c9eccf2e797fd462a92b6d7642ef85b0a44"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x8ed97a637a790be1feff5e888d43629dc05408f6_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0xf75fd33a79dc71ebf0a1ab8564a966171fdea2ce"
+protocol = "v2"
+token0 = "TK_0x8ed97a637a790be1feff5e888d43629dc05408f6"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+address = "0xfa4df0f55e8826751e8a44387c9a648f53039701"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_3000"
+address = "0xc3acf86074f96490ee10bedfecf19f71211d37a4"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9_10000"
+address = "0xfeae318f24456c4dbaf77a7dd01fd1c69055ffa6"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0x1327778103b20c03d9afd0d2fb1bba9d4d547f24"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+address = "0xb4b4aa5dc5144085bcfbf32f370449d9c29c8e97"
+protocol = "v2"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0_TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+address = "0x2612c494128a83bbf85b4156f320d3554e19b07a"
+protocol = "v2"
+token0 = "TK_0xbd965230588eaa536de6aa45e8ebbc01638535e0"
+token1 = "TK_0xcf0c122c6b73ff809c693db761e7baebe62b6a2e"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+address = "0xe1a01b2d6d3fc81664e57f13ab4dbac4f5631c26"
+protocol = "v2"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_3000"
+address = "0x172ded36eab603dced4058fd2dc0482dab400177"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_10000"
+address = "0x5f15e75fa52c7ec605cf65ff315e47179730927e"
+protocol = "v3"
+token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
+token1 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+address = "0x06520317775b25db8633fc3e19c3717fdd0c63e3"
+protocol = "v2"
+token0 = "TK_0x2b591e99afe9f32eaa6214f7b7629768c40eeb39"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+address = "0x530b43707e03ba2d590e6da662dda45d4c3ce0da"
+protocol = "v2"
+token0 = "TK_0x812ba41e071c7b7fa4ebcfb62df5f45f6fa853ee"
+token1 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+address = "0x6dcaab6fdac993ec3e7161a768db772ef5adcca3"
+protocol = "v2"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_10000"
+address = "0x68f8143b576af6c9c5d733eeff3fe2487a9d7d2f"
+protocol = "v3"
+token0 = "TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"
+token1 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0xd42730adc5fce4a71e420a0ad548e27df56080db"
+protocol = "v2"
+token0 = "TK_0x0d8775f648430679a709e98d2b0cb6250d2887ef"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI2_TK_0x104e072f3a7447e803e451b2aec296c73c5ce668_TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+address = "0x086a075a78dfba1cbabd94f1907c575874552a39"
+protocol = "v2"
+token0 = "TK_0x104e072f3a7447e803e451b2aec296c73c5ce668"
+token1 = "TK_0xd533a949740bb3306d119cc777fa900ba034cd52"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_500"
+address = "0xdb074e21ed7984ed002f1ee8d0461537f292b254"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 5
+
+[[pools]]
+name = "AUTO_UNI_TK_0x18084fba666a33d37592fa2633fd49a74dd93a88_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_3000"
+address = "0xf3db6ac4e6c287ace7893cc5067a755ab66699be"
+protocol = "v3"
+token0 = "TK_0x18084fba666a33d37592fa2633fd49a74dd93a88"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 30
+
+[[pools]]
+name = "AUTO_UNI_TK_0x3472a5a71965499acd81997a54bba8d852c6e53d_TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f_10000"
+address = "0x0fc5c10b3f5206dd05c04bda6a519deaf3ec52d5"
+protocol = "v3"
+token0 = "TK_0x3472a5a71965499acd81997a54bba8d852c6e53d"
+token1 = "TK_0xde30da39c46104798bb5aa3fe8b9e0e1f348163f"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f_TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0_10000"
+address = "0xa480d65e93741f941399669f67b74607caccab8d"
+protocol = "v3"
+token0 = "TK_0x44108f0223a3c3028f5fe7aec7f9bb2e66bef82f"
+token1 = "TK_0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+fee_bps = 100
+
+[[pools]]
+name = "AUTO_UNI_TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed_TK_0xdfc5964141c018485b4d017634660f85aa667714_3000"
+address = "0x90572936b797ff67a253b79d2242976250d81d97"
+protocol = "v3"
+token0 = "TK_0xc5fb36dd2fb59d3b98deff88425a3f425ee469ed"
+token1 = "TK_0xdfc5964141c018485b4d017634660f85aa667714"
+fee_bps = 30
