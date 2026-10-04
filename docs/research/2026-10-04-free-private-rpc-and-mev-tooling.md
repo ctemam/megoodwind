@@ -43,7 +43,45 @@ tx channels only.
 - `config/bsc.toml` `rpc_https_pool` += `bsc.blockrazor.xyz`, `rpc.48.club` (both ~106-113ms, free, private-submit capable). Pool 19→21.
 - No Polygon addition: the only real free private option (Polygon Private Mempool, launched 2026-04) is submission-only and gated behind an access request — needs a human to complete info.polygon.technology/private-mempool, then it belongs in a submit channel, not the read pool.
 
-## Remaining gaps vs the recommendation's intent
+## Private vs public — detection quality vs rejection quality (Commander 2026-10-04)
+
+These are two different channels in this bot:
+
+**Detection** = the mempool **WSS feed** (`eth_subscribe newPendingTransactions`).
+The read RPCs play no role in detection at all. Current feeds are all public:
+`bsc-rpc.publicnode.com`, `eth.drpc.org`, `polygon-bor-rpc.publicnode.com` pools.
+
+**Rejection** = the decisions after a signal: pool-state freshness at sim,
+GoPlus check, slippage bound. These DO depend on read RPCs — stale/mispriced
+reserves are the main false-reject/false-accept source on free endpoints.
+
+Where the two meet: **leaders who submit through private RPCs never reach the
+public mempool** — the public watcher cannot see them at all. The two promoted
+BSC wallets were caught on public flow, but every wallet using 48Club/Puissant,
+Flashbots Protect, or MEV Blocker fullprivacy is invisible to detection. That
+is the real detection-quality gap, and it can only be closed by orderflow
+feeds, not read RPCs.
+
+Free private-orderflow options (checked live from this box):
+
+| Feed | Chain | Reaches | Cost/gate | Wireable today? |
+|---|---|---|---|---|
+| MEV-Share SSE `mev-share.flashbots.net` | ETH | HTTP 200 | free, no auth | yes — SSE JSON stream; needs a client (mev-share-sse crate or ~80 lines of SSE) feeding the discoverer. The repo's `private_mempool_wss`/`auth` hooks expect a WSS pending-tx API — MEV-Share is a different protocol (SSE event stream of tx hints), so it needs its own adapter, not the existing hook |
+| Puissant WSS `wss://puissant-builder.48.club` | BSC | WSS 101 upgrade | conditional — 48SoulPoint member benefit (free tier exists, needs sign-up) | partially — upgrade succeeds; whether it serves unauthenticated feeds needs member credentials. If obtainable free, it plugs straight into `private_mempool_wss` |
+| bloXroute BDN pending-tx stream | BSC/ETH | n/a | paid | no (free-RPC constraint) |
+| Polygon Private Mempool | Polygon | submission-only by design | gated access request | no — it publishes no orderflow feed at all; Polygon private flow is undetectable to anyone by design |
+
+**Rejection quality** (what the read-pool additions just changed): on this box
+the new private reads measured ~104-118ms (blockrazor) / ~106-200ms (48club)
+vs ~250-300ms+ with high variance on the busy public endpoints. Under the
+fleet's sustained multicall load, public endpoints also hit the 429/slowtail
+that caused the earlier chunk-timeout churn — fresher state at sim time =
+fewer rejections from stale reserves and less wasted UserOp submission.
+
+**Bottom line**: private read RPCs already improved the rejection side. To
+improve detection coverage past the public mempool, the only free path today
+is the ETH MEV-Share SSE adapter; BSC needs a 48SoulPoint sign-up (free) to
+confirm Puissant feed access; Polygon offers nothing free.
 
 1. **Private tx submission for copies**: copy lane lands via Pimlico bundler
    (its tx is public when broadcast). Private-submit RPCs (48Club/BlockRazor/
