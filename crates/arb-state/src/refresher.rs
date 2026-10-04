@@ -415,9 +415,10 @@ impl StateRefresher {
     /// Public endpoints answer a ~128-pool read in a single RTT.
     const READER_CHUNK_SIZE: usize = 128;
     /// Max Call3s per aggregate3 round-trip — public nodes reject oversized
-    /// eth_calls ("request is too complex") well before the gas cap. 60 calls
-    /// = 20 V2 or 12 V3 pools per round-trip.
-    const MC3_MAX_CALLS: usize = 60;
+    /// eth_calls ("request is too complex") well before the gas cap. 30 calls
+    /// = 10 V2 or 6 V3 pools per round-trip; lighter batches answer inside the
+    /// deadline instead of timing out and serializing into retries.
+    const MC3_MAX_CALLS: usize = 30;
     /// Per-call deadline for every read. Public endpoints have bimodal tail
     /// latency (~150ms healthy vs 500ms+ slow): an unbounded slow pick holds
     /// the whole parallel join hostage. A call past the deadline benches the
