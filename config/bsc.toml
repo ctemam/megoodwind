@@ -27,6 +27,10 @@ rpc_https_pool = [
     "https://bsc-dataseed2.defibit.io",
 ]
 rpc_wss = "${BSC_WSS_URL}"
+# Read deadline per multicall batch. Public BSC endpoints regularly exceed
+# the 400ms default under concurrent batch load, causing timeout+retry churn
+# (measured: ~3.2k timeouts/hr, rpc phase ~1.6s vs 800ms block budget).
+call_deadline_ms = 900
 # WSS pool for mempool stream — cycled on failure/backpressure
 rpc_wss_pool = [
     "wss://bsc-rpc.publicnode.com",
