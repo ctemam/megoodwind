@@ -20,7 +20,7 @@ export default function Opportunities() {
   const { refreshMs } = useApp()
   const [data, setData] = useState(null)
   const [chain, setChain] = useState('bsc')
-  const [showRejected, setShowRejected] = useState(false)
+  const [showRejected, setShowRejected] = useState(true)
 
   useEffect(() => {
     let dead = false
