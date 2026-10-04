@@ -379,6 +379,68 @@ impl LeaderRegistry {
         self.discovered.lock().unwrap().remove(addr);
     }
 
+    /// Re-register wallets persisted by a previous run. `_discovered.jsonl`
+    /// rows carry {wallet, unix_ms, dominant_class, reason} — latest row per
+    /// wallet wins; rows whose reason marks a live promotion restore
+    /// risk_tier="live" with the configured copy notional cap, the rest
+    /// restore as rescoreable candidates. Without this every restart wipes
+    /// the live copy set back to zero. Returns wallets restored.
+    pub fn restore_discovered(
+        &self,
+        data_dir: &PathBuf,
+        chain: &str,
+        live_notional_usd: f64,
+    ) -> usize {
+        let path = data_dir.join(chain).join("_discovered.jsonl");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return 0;
+        };
+        let mut latest: HashMap<String, (u64, serde_json::Value)> = HashMap::new();
+        for line in text.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(w) = v.get("wallet").and_then(|w| w.as_str()) else {
+                continue;
+            };
+            let ts = v.get("unix_ms").and_then(|t| t.as_u64()).unwrap_or(0);
+            let replace = latest
+                .get(w)
+                .map(|(prev, _)| ts >= *prev)
+                .unwrap_or(true);
+            if replace {
+                latest.insert(w.to_string(), (ts, v));
+            }
+        }
+        let mut restored = 0usize;
+        for (w, (_, v)) in latest {
+            let Ok(addr) = w.parse::<Address>() else {
+                continue;
+            };
+            let live = v
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .map(|r| r.contains("live") || r.contains("promoted"))
+                .unwrap_or(false);
+            let wallet = LeaderWallet {
+                address: w.clone(),
+                label: "auto-discovered".to_string(),
+                strategy_hypothesis: v
+                    .get("dominant_class")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                risk_tier: if live { "live".to_string() } else { "candidate".to_string() },
+                max_copied_notional_usd: if live { live_notional_usd } else { 0.0 },
+                enabled: true,
+            };
+            if self.insert_discovered(addr, wallet) {
+                restored += 1;
+            }
+        }
+        restored
+    }
+
     pub fn discovered_count(&self) -> usize {
         self.discovered.lock().unwrap().len()
     }

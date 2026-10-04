@@ -1375,10 +1375,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // Empty/disabled registry = no-op. Nothing is ever copied or submitted.
     let leader_observer = {
         let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
+        // Restore previously discovered/promoted wallets — without this the
+        // live copy set resets to empty on every restart.
+        let data_dir = std::path::PathBuf::from("data/leaders");
+        let restored = registry.restore_discovered(&data_dir, &cfg.chain.name, cfg.leaders.copy_usd);
+        if restored > 0 {
+            info!(chain = chain_label, restored, "leader wallets restored from discovery log");
+        }
         registry.should_observe(&cfg.leaders).then(|| {
             let obs = arb_leaders::LeaderObserver::new(
                 registry,
-                std::path::PathBuf::from("data/leaders"),
+                data_dir,
                 cfg.chain.name.clone(),
                 &cfg.leaders,
             );
