@@ -302,14 +302,6 @@ token1 = "WETH"
 fee_bps = 100
 
 [[pools]]
-name = "UNI_WETH_DAI_100"
-address = "0xd8dec118e1215f02e10db846dcbbfe27d477ac19"
-protocol = "v3"
-token0 = "DAI"
-token1 = "WETH"
-fee_bps = 1
-
-[[pools]]
 name = "UNI_WETH_DAI_500"
 address = "0x60594a405d53811d3bc4766596efd80fd545a270"
 protocol = "v3"
@@ -422,22 +414,6 @@ token1 = "USDC"
 fee_bps = 30
 
 [[pools]]
-name = "UNI_USDC_DAI_10000"
-address = "0x6958686b6348c3d6d5f2dca3106a5c09c156873a"
-protocol = "v3"
-token0 = "DAI"
-token1 = "USDC"
-fee_bps = 100
-
-[[pools]]
-name = "UNI_USDT_WBTC_100"
-address = "0xf98cf0d979cfbb780774f318e3da4f7317af50d7"
-protocol = "v3"
-token0 = "WBTC"
-token1 = "USDT"
-fee_bps = 1
-
-[[pools]]
 name = "UNI_USDT_WBTC_500"
 address = "0x56534741cd8b152df6d48adf7ac51f75169a83b2"
 protocol = "v3"
@@ -454,33 +430,12 @@ token1 = "USDT"
 fee_bps = 30
 
 [[pools]]
-name = "UNI_USDT_WBTC_10000"
-address = "0x5a59e4e647a3acc42b01715f3a1d271c1f7e7aeb"
-protocol = "v3"
-token0 = "WBTC"
-token1 = "USDT"
-fee_bps = 100
-
-
-# Wallet intelligence: real-time top-wallet discovery (observation only).
-[leaders]
-discover = true
-[[pools]]
 name = "AUTO_TK_0x8b1484d57abbe239bb280661377363b03c89caea_USDC_5"
 address = "0x41a561b972039a9ccb975a4c17b84c9f95099e15"
 protocol = "v3"
 token0 = "TK_0x8b1484d57abbe239bb280661377363b03c89caea"
 token1 = "USDC"
 fee_bps = 5
-
-
-[[pools]]
-name = "AUTO_TK_0x9d98c61d1136cfa2ac263be355350c97ca41c110_USDT_30"
-address = "0x4d12b3947d0cf7124012d3c4321d4d2dda8803f7"
-protocol = "v3"
-token0 = "TK_0x9d98c61d1136cfa2ac263be355350c97ca41c110"
-token1 = "USDT"
-fee_bps = 30
 
 
 [[pools]]
@@ -493,39 +448,12 @@ fee_bps = 100
 
 
 [[pools]]
-name = "AUTO_TK_0x7adbfd873084db714a57ed648ee69aa4627cb998_USDC_30"
-address = "0xd227d3d4602f4037839fff79dc5fd80e9cc45b4e"
-protocol = "v3"
-token0 = "TK_0x7adbfd873084db714a57ed648ee69aa4627cb998"
-token1 = "USDC"
-fee_bps = 30
-
-
-[[pools]]
-name = "AUTO_USDC_WETH_1"
-address = "0x1445f32d1a74872ba41f3d8cf4022e9996120b31"
-protocol = "v3"
-token0 = "USDC"
-token1 = "WETH"
-fee_bps = 1
-
-
-[[pools]]
 name = "AUTO_TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4_WETH_25"
 address = "0xc09bf2b1bc8725903c509e8caeef9190857215a8"
 protocol = "v2"
 token0 = "TK_0x73d7c860998ca3c01ce8c808f5577d94d545d1b4"
 token1 = "WETH"
 fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525_USDC_30"
-address = "0x2c2226a6381e68a86c1a8dcb8d9fdab050959dd5"
-protocol = "v3"
-token0 = "TK_0x28d4e499c4cde621e1cea7c9cbf9d43bf75a9525"
-token1 = "USDC"
-fee_bps = 30
 
 
 [[pools]]
@@ -562,15 +490,6 @@ protocol = "v2"
 token0 = "TK_0x9813037ee2218799597d83d4a5b6f3b6778218d9"
 token1 = "WETH"
 fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_WETH_TK_0xfeac2eae96899709a43e252b6b92971d32f9c0f9_100"
-address = "0xc593fe9193b745447e86b45ea0bf62565ee030cc"
-protocol = "v3"
-token0 = "WETH"
-token1 = "TK_0xfeac2eae96899709a43e252b6b92971d32f9c0f9"
-fee_bps = 100
 
 
 [[pools]]
@@ -619,24 +538,6 @@ fee_bps = 25
 
 
 [[pools]]
-name = "AUTO_TK_0x558e7139800f8bc119f68d23a6126fffd43a66a6_USDT_5"
-address = "0x917591eed17a20ab6fd2ed2f6432852423fb3e91"
-protocol = "v3"
-token0 = "TK_0x558e7139800f8bc119f68d23a6126fffd43a66a6"
-token1 = "USDT"
-fee_bps = 5
-
-
-[[pools]]
-name = "AUTO_USDC_TK_0xc9eef266834730340a55b6cc24621b31baf55581_100"
-address = "0x0461c60ad5fc24cb1fc075b7f202095819de6944"
-protocol = "v3"
-token0 = "USDC"
-token1 = "TK_0xc9eef266834730340a55b6cc24621b31baf55581"
-fee_bps = 100
-
-
-[[pools]]
 name = "AUTO_TK_0x4e15361fd6b4bb609fa63c81a2be19d873717870_WETH_25"
 address = "0x0e26a21013f2f8c0362cfae608b4e69a249d5efc"
 protocol = "v2"
@@ -673,60 +574,6 @@ fee_bps = 100
 
 
 [[pools]]
-name = "AUTO_WETH_USDT_1"
-address = "0xacdb27b266142223e1e676841c1e809255fc6d07"
-protocol = "v3"
-token0 = "WETH"
-token1 = "USDT"
-fee_bps = 1
-
-
-[[pools]]
-name = "AUTO_TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0_WETH_30"
-address = "0x8e40fc101cc88b94744f1716a0a46e64929ef757"
-protocol = "v3"
-token0 = "TK_0x88df592f8eb5d7bd38bfef7deb0fbc02cf3778a0"
-token1 = "WETH"
-fee_bps = 30
-
-
-[[pools]]
-name = "AUTO_USDT_TK_0xe5acbb03d73267c03349c76ead672ee4d941f499_100"
-address = "0x0adff6b23f7d06cdc77b6809c4c541f4a85839af"
-protocol = "v3"
-token0 = "USDT"
-token1 = "TK_0xe5acbb03d73267c03349c76ead672ee4d941f499"
-fee_bps = 100
-
-
-[[pools]]
-name = "AUTO_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDC_30"
-address = "0x2322e5517a3cbc75a3f02d74c96f82dda120d841"
-protocol = "v3"
-token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
-token1 = "USDC"
-fee_bps = 30
-
-
-[[pools]]
-name = "AUTO_TK_0x826180541412d574cf1336d22c0c0a287822678a_USDC_30"
-address = "0xf51648233bb51fffe2bed4be89fcff4ea1fc9ac4"
-protocol = "v3"
-token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
-token1 = "USDC"
-fee_bps = 30
-
-
-[[pools]]
-name = "AUTO_TK_0x826180541412d574cf1336d22c0c0a287822678a_USDT_30"
-address = "0x06d4f1d21d2a85e99e294e721098e40e80249864"
-protocol = "v3"
-token0 = "TK_0x826180541412d574cf1336d22c0c0a287822678a"
-token1 = "USDT"
-fee_bps = 30
-
-
-[[pools]]
 name = "AUTO_TK_0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce_USDC_25"
 address = "0x9379f5e035cf6148c6bbee1d6415795cc773b0a4"
 protocol = "v2"
@@ -736,39 +583,12 @@ fee_bps = 25
 
 
 [[pools]]
-name = "AUTO_TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d_USDT_30"
-address = "0x33676385160f9d8f03a0db2821029882f7c79e93"
-protocol = "v3"
-token0 = "TK_0x046eee2cc3188071c02bfc1745a6b17c656e3f3d"
-token1 = "USDT"
-fee_bps = 30
-
-
-[[pools]]
-name = "AUTO_TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4_USDC_30"
-address = "0xee8aaa362a75fbf8e0a38a50ddc27f38551e16ea"
-protocol = "v3"
-token0 = "TK_0x85f17cf997934a597031b2e18a9ab6ebd4b9f6a4"
-token1 = "USDC"
-fee_bps = 30
-
-
-[[pools]]
 name = "AUTO_TK_0x3fb06d1f5624d77f9d942aef952224837c8449de_WETH_25"
 address = "0x2e4daa132e7e3d4a0db28e94b2879362863c0fbe"
 protocol = "v2"
 token0 = "TK_0x3fb06d1f5624d77f9d942aef952224837c8449de"
 token1 = "WETH"
 fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x00f3c42833c3170159af4e92dbb451fb3f708917_WETH_5"
-address = "0x4068038ab5490063a3ead93b3712ed082e62bd59"
-protocol = "v3"
-token0 = "TK_0x00f3c42833c3170159af4e92dbb451fb3f708917"
-token1 = "WETH"
-fee_bps = 5
 
 
 [[pools]]
@@ -786,15 +606,6 @@ address = "0x2a9d2ba41aba912316d16742f259412b681898db"
 protocol = "v3"
 token0 = "TK_0x06450dee7fd2fb8e39061434babcfc05599a6fb8"
 token1 = "WETH"
-fee_bps = 100
-
-
-[[pools]]
-name = "AUTO_TK_0x07696dcab55e62cfef953666b29fe1970518cb00_USDT_100"
-address = "0x89a67c6dee35db9815da2fb9191f0998a8b37c39"
-protocol = "v3"
-token0 = "TK_0x07696dcab55e62cfef953666b29fe1970518cb00"
-token1 = "USDT"
 fee_bps = 100
 
 
