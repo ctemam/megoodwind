@@ -127,6 +127,11 @@ TK_0x9fdc23fe295104ac55fef09363c56451d0e37cfa = "0x9fdc23fe295104ac55fef09363c56
 TK_0xac0f66379a6d7801d7726d5a943356a172549adb = "0xac0f66379a6d7801d7726d5a943356a172549adb"
 TK_0xbb9b67a2b5e5858b476db55358e4824dbe61f6da = "0xbb9b67a2b5e5858b476db55358e4824dbe61f6da"
 TK_0xbbba073c31bf03b8acf7c28ef0738decf3695683 = "0xbbba073c31bf03b8acf7c28ef0738decf3695683"
+TK_0x1379e8886a944d2d9d440b3d88df536aea08d9f3 = "0x1379e8886a944d2d9d440b3d88df536aea08d9f3"
+TK_0x4f800ba0dff2980c5006c6816f7aa3de63ce8087 = "0x4f800ba0dff2980c5006c6816f7aa3de63ce8087"
+TK_0x692ac1e363ae34b6b489148152b12e2785a3d8d6 = "0x692ac1e363ae34b6b489148152b12e2785a3d8d6"
+TK_0xe261d618a959afffd53168cd07d12e37b26761db = "0xe261d618a959afffd53168cd07d12e37b26761db"
+TK_0xf197ffc28c23e0309b5559e7a166f2c6164c80aa = "0xf197ffc28c23e0309b5559e7a166f2c6164c80aa"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -1015,5 +1020,77 @@ protocol = "v3"
 token0 = "TK_0x1ef5bb23e0b91c2e8480a4a2b71feb4607cb32f1"
 token1 = "USDC"
 fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_WPOL_TK_0xac0f66379a6d7801d7726d5a943356a172549adb_30"
+address = "0x6b5aa9fb0beb9bcda2b0f76bb2174041d326e3dd"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "TK_0xac0f66379a6d7801d7726d5a943356a172549adb"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xf197ffc28c23e0309b5559e7a166f2c6164c80aa_5"
+address = "0x713e43221c9af4dbe8f599cde2a658d5fbd6ee2d"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xf197ffc28c23e0309b5559e7a166f2c6164c80aa"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6_USDCe_5"
+address = "0xeef1a9507b3d505f0062f2be9453981255b503c8"
+protocol = "v3"
+token0 = "TK_0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"
+token1 = "USDCe"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_WPOL_TK_0x692ac1e363ae34b6b489148152b12e2785a3d8d6_100"
+address = "0xfe1e093238bfab3c7813056d496e724165493222"
+protocol = "v3"
+token0 = "WPOL"
+token1 = "TK_0x692ac1e363ae34b6b489148152b12e2785a3d8d6"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_USDCe_DAI_0"
+address = "0xfb07d2f13a0c279c82201e084cab1d80888ed3b5"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "DAI"
+fee_bps = 0
+
+
+[[pools]]
+name = "AUTO_WPOL_TK_0x4f800ba0dff2980c5006c6816f7aa3de63ce8087_25"
+address = "0x52d52b2592001537e2a7f973eac2a9fc640e6ccd"
+protocol = "v2"
+token0 = "WPOL"
+token1 = "TK_0x4f800ba0dff2980c5006c6816f7aa3de63ce8087"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDCe_TK_0xe261d618a959afffd53168cd07d12e37b26761db_100"
+address = "0xd48cb7ad6a0e2137ea81803c63d2863206ce4700"
+protocol = "v3"
+token0 = "USDCe"
+token1 = "TK_0xe261d618a959afffd53168cd07d12e37b26761db"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x1379e8886a944d2d9d440b3d88df536aea08d9f3_USDCe_25"
+address = "0x7e2eaa9514c7a56b4d556ff0d1009cb9c7f2b89d"
+protocol = "v2"
+token0 = "TK_0x1379e8886a944d2d9d440b3d88df536aea08d9f3"
+token1 = "USDCe"
+fee_bps = 25
 
 
