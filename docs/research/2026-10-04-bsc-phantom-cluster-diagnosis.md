@@ -70,3 +70,36 @@ exec-probe's job on a live runner; sim alone cannot adjudicate depth.
   passes it (real factory + live liquidity >10k); consider adding a
   degenerate-price check (tick at range bound + liquidity below a
   floor) to the merge predicate if it recurs. [assumption: it recurs]
+
+## Update 2026-10-04 07:15 UTC — cluster excised across all 3 chains
+
+The 0x83c385 removal was one instance of a systemic class. Full on-chain audit
+of every configured pool (slot0/observationCardinalityNext + reserve checks):
+
+**Signature**: pools seeded with liquidity but never traded
+(`observationCardinalityNext <= 2`, no oracle history). Their slot0 quote is
+whatever the deployer seeded — decoupled from market — so every path through
+them shows a phantom spread vs live partner pools. BSC-Peg ETH market price
+verified ≈$2,693-2,696 across 6 independent venues (ETH/USDT V3 deep,
+ETH/WBNB x3 V3 + V2, implied via WBNB/USDT $787.45); USDT/USDC 0.9998.
+
+| chain | before | removed | after | paths | profitable(dust-flash) |
+|-------|--------|---------|-------|-------|------------------------|
+| BSC   | 194    | 94      | 107   | 7,478 | ~42→243 small-bps      |
+| ETH   | 80     | 21      | 59    | 3,098 | 0                      |
+| Poly  | 104    | 18      | 86    | 3,686 | 0                      |
+
+BSC removals: ~60 obs<=2 V3s (incl. 0x62Cf0052 ETH/USDC @2769 vs 2695 real —
+the source of the "verified" 270-280bps dislocation, $11M stale TVL,
+obs=1; 0x35Af9EFAc price 3.4e38), 10 dust-TVL V2s ($2-$121 reserves),
+all BUSD pools (deprecated token family). Kept 13 THE_* Algebra pools
+(live contracts; algebra has no slot0() — not flaggable by this probe).
+
+ETH removals: 21 obs<=2 V3s incl. USDT/WBTC pools quoting WBTC=$849.
+Polygon removals: 18 obs<=2 V3s incl. USDC/DAI @1e12.
+
+**Merge-predicate rule for discovery**: reject V3 pools with
+`observationCardinalityNext <= 2` (never traded), reject V2 pools below a
+USD-TVL floor, and reject pools whose same-pair quote deviates >3% from
+the cross-venue median at merge time. This is the systematic version of
+the per-pool whitelist review done here.
