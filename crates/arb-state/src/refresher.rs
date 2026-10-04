@@ -23,6 +23,19 @@ sol! {
             uint32 fee;
         }
 
+        /// Legacy reader layout — deployed readers that predate the fee
+        /// field return this 5-field tuple; the fee then comes from the
+        /// static pool config. `readV2Legacy` is never invoked on-chain;
+        /// its return type only exists so `abi_decode_returns` can decode
+        /// raw `readV2` output that matches the legacy layout.
+        struct V2StateLegacy {
+            address pool;
+            address token0;
+            address token1;
+            uint112 reserve0;
+            uint112 reserve1;
+        }
+
         struct V3State {
             address pool;
             address token0;
@@ -96,6 +109,7 @@ sol! {
         }
 
         function readV2(address[] calldata pools) external view returns (V2State[] memory);
+        function readV2Legacy(address[] calldata pools) external view returns (V2StateLegacy[] memory);
         function readV3(address[] calldata pools) external view returns (V3State[] memory);
         function readAlgebra(address[] calldata pools) external view returns (AlgebraState[] memory);
         function readAeroV2(address[] calldata pools) external view returns (AeroV2State[] memory);
@@ -977,7 +991,119 @@ impl StateRefresher {
              pcs_results, dodo_results, wombat_results,
              v2_mc, v3_mc, algebra_mc, aero_mc, block) = tokio::join!(
             async {
-                if v2_dead { Vec::new() } else { chunk_loop!("V2", v2_chunks, readV2) }
+                if v2_dead {
+                    return Vec::new();
+                }
+                // Dual-decode V2 path: current readers return the 6-field
+                // V2State (fee included); legacy deployments return the
+                // original 5-field struct, which fails the typed decode
+                // and otherwise forces the Multicall3 fallback every
+                // block. Read raw returns so a legacy response salvages
+                // with the static config fee; a pool with no configured
+                // fee is dropped — a fabricated zero fee quotes phantom
+                // profits.
+                use alloy_sol_types::SolCall;
+                let map_legacy = |v: Vec<IStateReader::V2StateLegacy>| -> Vec<IStateReader::V2State> {
+                    v.into_iter()
+                        .filter_map(|s| {
+                            self.pool_config_fee_raw(&s.pool).map(|fee| {
+                                IStateReader::V2State {
+                                    pool: s.pool,
+                                    token0: s.token0,
+                                    token1: s.token1,
+                                    reserve0: s.reserve0,
+                                    reserve1: s.reserve1,
+                                    fee,
+                                }
+                            })
+                        })
+                        .collect()
+                };
+                let decode = |raw: &[u8]| -> Option<Vec<IStateReader::V2State>> {
+                    match IStateReader::readV2Call::abi_decode_returns(raw) {
+                        Ok(v) => Some(v),
+                        Err(_) => IStateReader::readV2LegacyCall::abi_decode_returns(raw)
+                            .ok()
+                            .map(map_legacy),
+                    }
+                };
+                let mut all: Vec<IStateReader::V2State> = Vec::new();
+                let mut contract_fail = false;
+                let (mut idx, provider) = self.endpoint.pool_pick();
+                let mut reader = IStateReader::new(self.state_reader_addr, provider);
+                for chunk in &v2_chunks {
+                    let res = tokio::time::timeout(
+                        self.call_deadline,
+                        reader.readV2(chunk.clone()).call_raw(),
+                    )
+                    .await;
+                    match res {
+                        Ok(Ok(raw)) => match decode(&raw[..]) {
+                            Some(v) => all.extend(v),
+                            None => {
+                                warn!(chunk_size = chunk.len(), "V2 chunk decode failed — neither 6-field nor legacy 5-field layout matched");
+                                contract_fail = true;
+                                break;
+                            }
+                        },
+                        outcome => {
+                            if let Ok(Err(e)) = &outcome {
+                                warn!(chunk_size = chunk.len(), "V2 chunk read failed: {}", e);
+                            } else {
+                                warn!(chunk_size = chunk.len(), "V2 chunk read timed out ({}ms)", self.call_deadline.as_millis());
+                            }
+                            let transport_fail = match &outcome {
+                                Ok(Err(e)) => arb_rpc::is_contract_transport_error(e),
+                                Err(_) => true,
+                                _ => false,
+                            };
+                            if transport_fail {
+                                self.endpoint.blacklist_read(idx);
+                                let (nidx, np) = self.endpoint.pool_pick();
+                                idx = nidx;
+                                reader = IStateReader::new(self.state_reader_addr, np);
+                                match tokio::time::timeout(self.call_deadline, reader.readV2(chunk.clone()).call_raw()).await {
+                                    Ok(Ok(raw)) => {
+                                        match decode(&raw[..]) {
+                                            Some(v) => all.extend(v),
+                                            None => {
+                                                warn!(chunk_size = chunk.len(), "V2 chunk retry decode failed");
+                                                contract_fail = true;
+                                            }
+                                        }
+                                    }
+                                    outcome2 => {
+                                        match &outcome2 {
+                                            Ok(Err(e2)) => {
+                                                warn!(chunk_size = chunk.len(), "V2 chunk retry failed: {}", e2);
+                                                if arb_rpc::is_contract_transport_error(e2) {
+                                                    self.endpoint.blacklist_read(idx);
+                                                } else {
+                                                    contract_fail = true;
+                                                }
+                                            }
+                                            Err(_) => {
+                                                warn!(chunk_size = chunk.len(), "V2 chunk retry timed out");
+                                                self.endpoint.blacklist_read(idx);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                if contract_fail { break; }
+                            } else {
+                                contract_fail = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if contract_fail && all.is_empty() {
+                    self.note_reader_contract_failure("V2");
+                } else if !all.is_empty() {
+                    self.clear_reader_failure("V2");
+                }
+                all
             },
             async {
                 if v3_dead { Vec::new() } else { chunk_loop!("V3", v3_chunks, readV3) }

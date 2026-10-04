@@ -215,12 +215,21 @@ pub struct LeadersConfig {
     /// behaving like a bot to stay ahead of the threshold.
     #[serde(default = "default_halflife")]
     pub discover_halflife_secs: f64,
+    /// When true (default), a sender's score/observation only counts once
+    /// per block-confirmation window — a burst of bot-like txs inside one
+    /// block earns a single observation, so promotion requires the
+    /// behavior to persist across multiple blocks. PendingSwap carries no
+    /// block number, so the window is a fixed wall-clock gap; false
+    /// restores counting every pending sighting.
+    #[serde(default = "default_true")]
+    pub discover_require_block_confirmation: bool,
 }
 
 fn default_min_score() -> f64 { 15.0 }
 fn default_min_obs() -> u32 { 3 }
 fn default_max_wallets() -> usize { 50 }
 fn default_halflife() -> f64 { 300.0 }
+fn default_true() -> bool { true }
 
 /// Parsed, enabled wallets keyed by address. Interior mutability because
     /// real-time discovery promotes new wallets while the stream is live.
@@ -256,6 +265,13 @@ impl LeaderRegistry {
     /// observer must stay installed whenever discovery is enabled.
     pub fn is_empty(&self) -> bool {
         self.wallets.read().unwrap().is_empty()
+    }
+
+    /// Whether the observer should be installed at all: manual wallets
+    /// present, discovery enabled (it can fill an initially-empty registry
+    /// from the live stream), or discovered wallets already promoted.
+    pub fn should_observe(&self, cfg: &LeadersConfig) -> bool {
+        !self.is_empty() || cfg.discover || self.discovered_count() > 0
     }
 
     pub fn len(&self) -> usize {
@@ -494,6 +510,7 @@ impl LeaderObserver {
                 discover_cfg.discover_min_observations,
                 discover_cfg.discover_max_wallets,
                 discover_cfg.discover_halflife_secs,
+                discover_cfg.discover_require_block_confirmation,
             )
         });
         Self { registry, discoverer, writer_tx, depth, chain }
@@ -640,6 +657,10 @@ struct SenderStats {
     dominant_class: &'static str,
     dominant_count: u32,
     class_counts: [u32; 5],
+    /// Last sighting that counted toward score/observations — distinct
+    /// from `last_seen` so intra-block repeats still decay the clock
+    /// without inflating the observation count.
+    last_scored: Option<std::time::Instant>,
 }
 
 /// Observation-time class ordering must match `classify` weights below.
@@ -676,6 +697,8 @@ pub struct LeaderDiscoverer {
     min_observations: u32,
     max_wallets: usize,
     halflife_secs: f64,
+    /// See LeadersConfig::discover_require_block_confirmation.
+    require_block_confirmation: bool,
 }
 
 /// Hard caps keep discovery maps bounded — once full, new senders/pairs
@@ -703,6 +726,7 @@ impl LeaderDiscoverer {
         min_observations: u32,
         max_wallets: usize,
         halflife_secs: f64,
+        require_block_confirmation: bool,
     ) -> Self {
         Self {
             registry,
@@ -714,8 +738,15 @@ impl LeaderDiscoverer {
             min_observations,
             max_wallets,
             halflife_secs,
+            require_block_confirmation,
         }
     }
+
+    /// One scoreable observation per sender per window — 3s covers a
+    /// full block on BSC (~0.75s) and Polygon (~2s), part of one on ETH
+    /// (~12s): a candidate must keep signaling across multiple windows
+    /// (i.e. confirmed blocks), not burst once inside a single block.
+    const CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
     fn track(&self, pending: &PendingSwap) {
         let from = pending.from;
@@ -764,6 +795,22 @@ impl LeaderDiscoverer {
                 s.score *= 0.5f64.powf(dt / self.halflife_secs);
             }
             s.last_seen = Some(now);
+            // Block-confirmation gating: the sighting only counts toward
+            // promotion when it lands in a new confirmation window — a
+            // wallet that fires 50 bot txs in one block still earns a
+            // single observation.
+            if self.require_block_confirmation
+                && s.last_scored
+                    .map(|t| now.duration_since(t) < Self::CONFIRM_WINDOW)
+                    .unwrap_or(false)
+            {
+                if map.len() > 20_000 {
+                    let cutoff = now - std::time::Duration::from_secs(3600);
+                    map.retain(|_, st| st.last_seen.map(|l| l > cutoff).unwrap_or(false));
+                }
+                return;
+            }
+            s.last_scored = Some(now);
             s.score += w;
             s.observations += 1;
             let idx = CLASS_WEIGHTS.iter().position(|(c, _)| *c == class).unwrap_or(4);
@@ -1062,15 +1109,19 @@ impl StrategyRegistry {
     /// Simulation verification result (auto mode): a strategy whose route
     /// pools reproduce positive profit through our own simulator is
     /// auto-approved to bounded_live under `cap_usd` — the ONLY path to
-    /// execution. Applies from shadow OR replay: sim verification subsumes
-    /// the coverage gate (route_pools can contain non-pool intermediaries
-    /// that suppress coverage without blocking execution). Manual ops
-    /// approval requires the same sim_verified precondition, so discovery
-    /// alone can never execute.
+    /// execution. Applies from observe, shadow OR replay: sim verification
+    /// subsumes both the evidence thresholds and the coverage gate
+    /// (route_pools can contain non-pool intermediaries that suppress
+    /// coverage without blocking execution). Manual ops approval requires
+    /// the same sim_verified precondition, so discovery alone can never
+    /// execute.
     pub fn mark_verified(&mut self, strategy_id: &str, profit_usd: f64, cap_usd: f64) -> bool {
         match self.records.get_mut(strategy_id) {
             Some(r)
-                if matches!(r.state, StrategyState::Shadow | StrategyState::Replay)
+                if matches!(r.state,
+                    StrategyState::Observe
+                        | StrategyState::Shadow
+                        | StrategyState::Replay)
                     && profit_usd > 0.0 =>
             {
                 r.sim_verified = true;
@@ -1280,7 +1331,8 @@ mod tests {
                discover_min_score = 9.0
                discover_min_observations = 2
                discover_max_wallets = 10
-               discover_halflife_secs = 300.0"#,
+               discover_halflife_secs = 300.0
+               discover_require_block_confirmation = false"#,
         )
         .unwrap();
         let reg = LeaderRegistry::new(&cfg);
@@ -1336,6 +1388,63 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(found.contains("0x8888888888888888888888888888888888888888"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Block-confirmation gate (default on): same-block bursts of bot
+    /// signals count once — promotion requires persistence across
+    /// confirmation windows.
+    #[test]
+    fn discovery_block_confirmation_gates_bursts() {
+        use arb_mempool::decoder::{DecodedSwap, DirectSwap};
+        let dir = std::env::temp_dir().join(format!("arb-leaders-conf-{}", std::process::id()));
+        let cfg: LeadersConfig = toml::from_str(
+            r#"discover = true
+               discover_min_score = 9.0
+               discover_min_observations = 2
+               discover_max_wallets = 10
+               discover_halflife_secs = 300.0"#,
+        )
+        .unwrap();
+        assert!(cfg.discover_require_block_confirmation);
+        let reg = LeaderRegistry::new(&cfg);
+        let obs = LeaderObserver::new(reg, dir.clone(), "BSC".into(), &cfg);
+        let bot = address!("8888888888888888888888888888888888888888");
+        let mk = || PendingSwap {
+            tx_hash: B256::ZERO,
+            from: bot,
+            to: address!("9999999999999999999999999999999999999999"),
+            value: U256::ZERO,
+            decoded: DecodedSwap {
+                router: "test",
+                token_in: None,
+                token_out: None,
+                amount_in: Some(U256::from(1u64)),
+                path: vec![],
+                first_hop_fee: None,
+                hop_fees: vec![],
+                direct: Some(DirectSwap::V2 {
+                    pool: address!("9999999999999999999999999999999999999999"),
+                    amount0_out: U256::from(1u64),
+                    amount1_out: U256::ZERO,
+                }),
+                pools_touched: vec![],
+            },
+            raw_input: vec![],
+            raw_tx: vec![],
+            seen_at: std::time::Instant::now(),
+        };
+        // Same-block burst: 5 direct-pool sightings instantly = 1 window —
+        // score would clear the bar but observations stay at 1.
+        for _ in 0..5 {
+            obs.observe(&mk());
+        }
+        assert!(!obs.registry.contains(&bot));
+        // After the confirmation window the bot repeats — now promoted.
+        std::thread::sleep(LeaderDiscoverer::CONFIRM_WINDOW + std::time::Duration::from_millis(100));
+        obs.observe(&mk());
+        assert!(obs.registry.contains(&bot));
+        obs.shutdown_writer();
         let _ = std::fs::remove_dir_all(dir);
     }
 

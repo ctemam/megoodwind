@@ -52,14 +52,15 @@ export default function WalletIntelligence() {
     const load = () => fetch('/api/wallet-intelligence')
       .then(r => r.json()).then(j => live && setData(j)).catch(() => {})
     load()
-    const t = setInterval(load, Math.max(refreshMs, 5000))
+    const interval = Math.max(Number.isFinite(refreshMs) ? refreshMs : 0, 5000)
+    const t = setInterval(load, interval)
     return () => { live = false; clearInterval(t) }
   }, [refreshMs])
 
   const cd = data?.chains?.[chain]
   const rows = useMemo(() => {
     if (!cd) return []
-    let r = cd.rows.map(x => ({ ...x, rank: forgeScore(x) }))
+    let r = cd.rows.map(x => ({ ...x, rank: x.forge_score ?? forgeScore(x) }))
       .filter(x => cls === 'all' || x.class === cls)
       .filter(x => st === 'all' || x.state === st)
       .filter(x => (x.confidence ?? 0) >= minConf)

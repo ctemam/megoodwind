@@ -362,11 +362,15 @@ async fn main() -> Result<()> {
             let mut n_ver = 0u32;
             let mut verified_out: Vec<(String, f64)> = Vec::new();
             let mut eval_out: Vec<(String, f64, bool)> = Vec::new();
+            // Observe-state records with decoded routes are sim'd too —
+            // evidence thresholds (min_txs) would otherwise starve
+            // single-big-tx leaders, and the simulator is the real gate.
             let ids: Vec<(String, Vec<String>)> = strat
                 .records
                 .values()
                 .filter(|r| matches!(r.state,
-                    arb_leaders::StrategyState::Shadow
+                    arb_leaders::StrategyState::Observe
+                        | arb_leaders::StrategyState::Shadow
                         | arb_leaders::StrategyState::Replay
                         | arb_leaders::StrategyState::BoundedLive))
                 .filter(|r| !r.route_pools.is_empty())

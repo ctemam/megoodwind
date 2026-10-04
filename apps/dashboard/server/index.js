@@ -1610,6 +1610,15 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         blocksPerHour = 3600000 / bt / scanmeta.scanned_blocks
     } catch {}
     const freqPerHour = trades => (trades == null || blocksPerHour == null) ? null : trades * blocksPerHour
+    // Same composite as the client's forgeScore — emitted so ranking is a
+    // single source of truth (client falls back to local compute if absent).
+    const forgeScore = r => {
+      if (r.net_after_gas_usd == null) return 0
+      const wr = r.win_rate ?? 0
+      const freq = Math.min((r.trades ?? 0) / 20, 1)
+      const w = r.class === 'bundle_backrunner' ? 1 : r.class === 'atomic_arb' ? 0.8 : 0.4
+      return Math.log(1 + Math.max(0, r.net_after_gas_usd)) * (0.5 + 0.3 * wr + 0.2 * freq) * w
+    }
     const forgeAction = r => {
       if (r.state === 'expired') return 'expired'
       if (r.state === 'bounded_live') return `live <$${r.max_notional_usd ?? '?'}`
@@ -1652,6 +1661,7 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         best_tx: w.best_tx ?? null,
       })
       rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
+      rows[rows.length - 1].forge_score = forgeScore(rows[rows.length - 1])
       inRows.add(`${w.address}/${w.class}`)
     }
     // Registry strategies with no scan row (expired-visibility preserved).
@@ -1679,6 +1689,7 @@ app.get('/api/wallet-intelligence', async (req, res) => {
         discovered_pending: discSet.has(s.wallet), best_tx: null,
       })
       rows[rows.length - 1].forge_action = forgeAction(rows[rows.length - 1])
+      rows[rows.length - 1].forge_score = forgeScore(rows[rows.length - 1])
     }
     // Observation tails for the detail drawer (last 5 per wallet on demand —
     // cheap: files are bounded and only present for observed wallets).

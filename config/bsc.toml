@@ -461,6 +461,7 @@ TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274 = "0x5dbde81fce337ff4bcaaee4ca3466
 TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208 = "0x9d2144328e1d618f54cd38540f5ee50671f6a208"
 TK_0xd1852cede98aaa8c11efe8600509e51fe5194132 = "0xd1852cede98aaa8c11efe8600509e51fe5194132"
 TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e = "0xe0a281deff5c9d8d67af09d39340e134ac81b82e"
+TK_0x2ab198e0078a8a233b8e7685356cb76482b9e681 = "0x2ab198e0078a8a233b8e7685356cb76482b9e681"
 [[pools]]
 name = "PCS_USDT_WBNB"
 address = "0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE"
@@ -1750,5 +1751,14 @@ protocol = "v3"
 token0 = "USDT"
 token1 = "TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208"
 fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x2ab198e0078a8a233b8e7685356cb76482b9e681_USDT_100"
+address = "0x1ce0cc3d473dc5938e55c78eae9ff17bbd99c972"
+protocol = "v3"
+token0 = "TK_0x2ab198e0078a8a233b8e7685356cb76482b9e681"
+token1 = "USDT"
+fee_bps = 100
 
 

@@ -92,10 +92,14 @@ pub fn project_and_quote(
                 let p1 = p0 + delta;
                 state.sqrt_price_x96 = p1;
                 // dx = L * 2^96 * (1/sqrtP0 - 1/sqrtP1) = L * 2^96 * (p1 - p0) / (p0 * p1)
+                // l * q96 * (p1 - p0) overflows U256 for real liquidity —
+                // divide down before multiplying back up.
                 if p0.is_zero() || p1.is_zero() {
                     return None;
                 }
-                amount_out = l * q96 * (p1 - p0) / (p0 * p1);
+                let diff = p1.checked_sub(p0)?;
+                let intermediate = l.checked_mul(diff)? / p1;
+                amount_out = intermediate.checked_mul(q96)? / p0;
             }
 
             Some((PoolState::V3(state), amount_out))

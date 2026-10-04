@@ -53,6 +53,14 @@ struct SenderAgg {
     /// Strategy deconstruction: per-tx nets (capped), contracts called,
     /// and winning-tx count — everything needed to score forge targets.
     tx_nets: Vec<f64>,
+    /// Hashes of this sender's txs in the window (capped) — the route
+    /// decode unions pool counterparties across a wallet's sibling txs,
+    /// because executor-intermediary leaders keep their arb legs in txs
+    /// other than the profit-taking one.
+    tx_hashes: Vec<B256>,
+    /// The wallet's most profitable tx hashes in the window (net, hash),
+    /// decoded first during route reconstruction.
+    top_txs: Vec<(f64, B256)>,
     contracts: HashMap<Address, u32>,
     wins: u32,
 }
@@ -174,6 +182,10 @@ async fn main() -> Result<()> {
     // route counterparties (router vs pool/other).
     let mut s_contracts: std::collections::HashSet<Address> =
         std::collections::HashSet::new();
+    // Reverse index tx.to -> [(tx_hash, sender)] — executor-intermediary
+    // leaders' arb legs live in txs sent TO their executor contracts by
+    // other EOAs, so route decode must follow the executor.
+    let mut to_index: HashMap<Address, Vec<(B256, Address)>> = HashMap::new();
     // Counterparty addresses seen inside profitable txs, with hit counts —
     // candidate pools for auto-import.
     let mut pool_candidates: HashMap<Address, u32> = HashMap::new();
@@ -195,8 +207,23 @@ async fn main() -> Result<()> {
                 continue;
             }
             let sender = receipt.from;
+            // Record every successful tx per sender (capped) BEFORE the
+            // token-flow skip below — an executor-intermediary leader's arb
+            // txs often show zero wallet-touching transfers (profit stays
+            // on the executor until a harvest tx), and those are exactly
+            // the receipts that carry the real pool legs.
+            {
+                let agg = senders.entry(sender).or_default();
+                if agg.tx_hashes.len() < 24 {
+                    agg.tx_hashes.push(receipt.transaction_hash);
+                }
+            }
             if let Some(to) = receipt.to {
                 s_contracts.insert(to);
+                let v = to_index.entry(to).or_default();
+                if v.len() < 96 {
+                    v.push((receipt.transaction_hash, sender));
+                }
             }
             let mut net_usd = 0.0f64;
             let mut counterparties: std::collections::HashSet<Address> =
@@ -288,6 +315,13 @@ async fn main() -> Result<()> {
             agg.gas_usd += gas_usd;
             agg.net_usd += net_usd;
             agg.unpriced_flows += unpriced;
+            if net_usd > 0.0 {
+                agg.top_txs.push((net_usd, receipt.transaction_hash));
+                agg.top_txs.sort_by(|a, b| {
+                    b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                agg.top_txs.truncate(8);
+            }
             if net_usd > agg.best_tx_usd {
                 agg.best_tx_usd = net_usd;
                 agg.best_tx = Some(receipt.transaction_hash);
@@ -452,50 +486,247 @@ async fn main() -> Result<()> {
             continue;
         };
         let Some(best_tx) = wallet.2.best_tx else { continue };
-        let Ok(Some(receipt)) = endpoint.get_receipt(best_tx).await else {
-            continue;
-        };
-        let mut hop = 0u32;
-        let mut route_pools: std::collections::HashSet<Address> =
+        // Decode up to 12 of the wallet's txs in the window — its most
+        // profitable first. Executor-intermediary leaders park the arb legs
+        // in sibling txs and settle profit in a separate harvest tx; the
+        // union of pool counterparties across the window reconstructs the
+        // real route set that a single-tx decode misses entirely.
+        let mut decode_txs: Vec<B256> = wallet
+            .2
+            .top_txs
+            .iter()
+            .map(|(_, h)| *h)
+            .collect();
+        for h in &wallet.2.tx_hashes {
+            if decode_txs.len() >= 12 {
+                break;
+            }
+            if !decode_txs.contains(h) {
+                decode_txs.push(*h);
+            }
+        }
+        // Collect the transfer legs first, then probe every non-wallet
+        // counterparty on-chain: slot0/getReserves resolves only on real
+        // pools. The previous heuristic (exclude any contract ever used as
+        // a tx target) mislabeled DIRECT-CALLED pools as routers — the
+        // executor-intermediary leaders call pools straight, so their
+        // routes decoded to nothing.
+        let mut legs: Vec<(B256, Address, Address, Address, U256)> = Vec::new();
+        let mut cand_addrs: std::collections::HashSet<Address> =
             std::collections::HashSet::new();
-        let mut ordered_pools: Vec<Address> = Vec::new();
         let mut first_token = String::new();
         let mut last_token = String::new();
+        let mut src_block = 0u64;
+        let mut src_index: Option<u64> = None;
+        for tx_hash in &decode_txs {
+        let Ok(Some(receipt)) = endpoint.get_receipt(*tx_hash).await else {
+            continue;
+        };
+        if *tx_hash == best_tx {
+            src_block = receipt.block_number.unwrap_or(0);
+            src_index = receipt.transaction_index;
+        }
         for log in receipt.inner.logs() {
             let topics = log.topics();
             if topics.len() != 3 || topics[0] != TRANSFER_SIG {
                 continue;
             }
-            hop += 1;
             let token = log.address();
             let from = Address::from_word(topics[1]);
             let to = Address::from_word(topics[2]);
             let amount = U256::from_be_slice(log.data().data.as_ref());
+            for a in [from, to] {
+                if a != *addr && a != token {
+                    cand_addrs.insert(a);
+                }
+            }
+            legs.push((*tx_hash, token, from, to, amount));
+            if first_token.is_empty() {
+                first_token = format!("{token:#x}");
+            }
+            last_token = format!("{token:#x}");
+        }
+        }
+        // Probe candidates: v3 slot0 (0x3850c7bd) or v2 getReserves
+        // (0x0902f1ac) must resolve — routers, executors and sham
+        // contracts answer neither.
+        let mut is_pool: std::collections::HashSet<Address> =
+            std::collections::HashSet::new();
+        let mut probed: std::collections::HashSet<Address> =
+            std::collections::HashSet::new();
+        async fn probe_pool(
+            ep: &Endpoint,
+            c: Address,
+            tracked: &std::collections::HashSet<Address>,
+        ) -> bool {
+            if tracked.contains(&c) {
+                return true;
+            }
+            let slot0 = ep
+                .eth_call_timed(c, alloy_primitives::Bytes::from_static(&[
+                    0x38, 0x50, 0xc7, 0xbd,
+                ]))
+                .await
+                .ok()
+                .map(|(o, _)| o.len() >= 32 * 7)
+                .unwrap_or(false);
+            let v2 = !slot0 && ep
+                .eth_call_timed(c, alloy_primitives::Bytes::from_static(&[
+                    0x09, 0x02, 0xf1, 0xac,
+                ]))
+                .await
+                .ok()
+                .map(|(o, _)| o.len() >= 32 * 3)
+                .unwrap_or(false);
+            slot0 || v2
+        }
+        for c in &cand_addrs {
+            probed.insert(*c);
+            if probe_pool(&endpoint, *c, &tracked).await {
+                is_pool.insert(*c);
+            }
+        }
+        // Executor-intermediary follow-through: when the wallet's own txs
+        // touch no real pool, its arb legs live in txs sent TO its
+        // executor contract by other EOAs — harvest legs reveal the
+        // executor (the contract paying the wallet). Decode up to 12 txs
+        // targeting it and union their pool counterparties.
+        let leg_hits_pool = legs.iter().any(|(_, _, f, t, _)| {
+            is_pool.contains(f) || is_pool.contains(t)
+        });
+        if !leg_hits_pool && !legs.is_empty() {
+            let mut exec_counts: HashMap<Address, u32> = HashMap::new();
+            for (_, _, f, t, _) in &legs {
+                if *t == *addr {
+                    *exec_counts.entry(*f).or_default() += 1;
+                }
+            }
+            if let Some((&exec, &n_exec)) =
+                exec_counts.iter().max_by_key(|(_, c)| *c)
+            {
+                println!(
+                    "EXECUTOR {addr:#x} class={class} exec={exec:#x} harvests={n_exec}"
+                );
+                let mut seen_txs: std::collections::HashSet<B256> =
+                    decode_txs.iter().copied().collect();
+                // Level 1: txs sent TO the hub executor.
+                let mut pending: Vec<B256> = Vec::new();
+                for (h, s) in to_index
+                    .get(&exec)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[])
+                {
+                    if *s != *addr && seen_txs.insert(*h) && pending.len() < 12 {
+                        pending.push(*h);
+                    }
+                }
+                let mut level = 0u8;
+                loop {
+                    for h in &pending {
+                        let Ok(Some(receipt)) = endpoint.get_receipt(*h).await else {
+                            continue;
+                        };
+                        for log in receipt.inner.logs() {
+                            let topics = log.topics();
+                            if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+                                continue;
+                            }
+                            let token = log.address();
+                            let from = Address::from_word(topics[1]);
+                            let to = Address::from_word(topics[2]);
+                            let amount =
+                                U256::from_be_slice(log.data().data.as_ref());
+                            for a in [from, to] {
+                                if a != *addr && a != token {
+                                    cand_addrs.insert(a);
+                                }
+                            }
+                            legs.push((*h, token, from, to, amount));
+                        }
+                    }
+                    for c in &cand_addrs {
+                        if probed.contains(c) {
+                            continue;
+                        }
+                        probed.insert(*c);
+                        if probe_pool(&endpoint, *c, &tracked).await {
+                            is_pool.insert(*c);
+                        }
+                    }
+                    if level == 1
+                        || legs.iter().any(|(_, _, f, t, _)| {
+                            is_pool.contains(f) || is_pool.contains(t)
+                        })
+                    {
+                        break;
+                    }
+                    level = 1;
+                    // Hub-and-spoke fleet: executor txs are single-leg
+                    // payouts from per-strategy WORKER contracts. The arb
+                    // legs live one level deeper — txs sent to the workers.
+                    // Follow the top workers by payout frequency.
+                    let mut workers: HashMap<Address, u32> = HashMap::new();
+                    for (_, _, f, t, _) in &legs {
+                        if *t == exec && *f != *addr {
+                            *workers.entry(*f).or_default() += 1;
+                        }
+                    }
+                    let mut w_sorted: Vec<(Address, u32)> =
+                        workers.into_iter().collect();
+                    w_sorted.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+                    pending.clear();
+                    for (w, _) in w_sorted.into_iter().take(6) {
+                        println!(
+                            "EXEC_WORKER {addr:#x} exec={exec:#x} worker={w:#x}"
+                        );
+                        let mut n = 0u8;
+                        for (h, _) in to_index
+                            .get(&w)
+                            .map(|v| v.as_slice())
+                            .unwrap_or(&[])
+                        {
+                            if n >= 4 {
+                                break;
+                            }
+                            if seen_txs.insert(*h) {
+                                pending.push(*h);
+                                n += 1;
+                            }
+                        }
+                    }
+                    if pending.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+        let mut hop = 0u32;
+        let mut route_pools: std::collections::HashSet<Address> =
+            std::collections::HashSet::new();
+        let mut ordered_pools: Vec<Address> = Vec::new();
+        for (tx_hash, token, from, to, amount) in &legs {
+            hop += 1;
             let label = |a: Address| -> String {
                 if a == *addr {
                     "WALLET".into()
-                } else if s_contracts.contains(&a) {
-                    format!("router:{a:#x}")
-                } else {
+                } else if is_pool.contains(&a) {
                     format!("pool:{a:#x}")
+                } else {
+                    format!("router:{a:#x}")
                 }
             };
-            for a in [from, to] {
-                if a != *addr && !s_contracts.contains(&a) && a != token {
+            for a in [*from, *to] {
+                if is_pool.contains(&a) {
                     if route_pools.insert(a) {
                         ordered_pools.push(a);
                     }
                 }
             }
-            if first_token.is_empty() {
-                first_token = format!("{token:#x}");
-            }
-            last_token = format!("{token:#x}");
             println!(
-                "LEADER_ROUTE {addr:#x} class={class} tx={best_tx:#x} \
+                "LEADER_ROUTE {addr:#x} class={class} tx={tx_hash:#x} \
                  hop={hop} token={token:#x} {} -> {} amt={amount}",
-                label(from),
-                label(to)
+                label(*from),
+                label(*to)
             );
         }
         let covered = route_pools.iter().filter(|p| tracked.contains(*p)).count();
@@ -543,11 +774,11 @@ async fn main() -> Result<()> {
             &format!("{best_tx:#x}"),
             ordered_pools.iter().map(|p| format!("{p:#x}")).collect(),
         );
-        opp.target_block = receipt.block_number.unwrap_or(0);
+        opp.target_block = src_block;
         opp.leader_net_usd = wallet.2.best_tx_usd;
         opp.token_in = first_token;
         opp.token_out = last_token;
-        if let Some(idx) = receipt.transaction_index {
+        if let Some(idx) = src_index {
             if idx > 0 {
                 if let Ok(Some(v)) =
                     endpoint.get_tx_hash_at_index(opp.target_block, idx - 1).await
