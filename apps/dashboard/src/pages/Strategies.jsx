@@ -66,13 +66,16 @@ function ClassicPanel() {
     if (!m) return []
     const evaluated = total(m, 'arb_paths_evaluated_total')
     const profitable = total(m, 'arb_profitable_found_total')
+    const accepts = total(m, 'arb_gate_accepts_total')
     const attempts = total(m, 'arb_submit_attempts_total')
     const landed = total(m, 'arb_submit_landed_total')
     const settled = total(m, 'arb_settlements_total')
     // gate rejects are a parallel loss sink, not a funnel stage — they
-    // live in the cards + reason breakdown instead.
+    // live in the cards + reason breakdown instead. gate accepts is the
+    // "would have submitted" count under dry-run.
     return [
       ['evaluated', evaluated], ['profitable', profitable],
+      ['gate accepts', accepts],
       ['submit attempts', attempts], ['landed', landed], ['settled', settled],
     ]
   }, [m])

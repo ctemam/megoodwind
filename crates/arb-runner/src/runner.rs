@@ -1732,6 +1732,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     metrics::GATE_REJECTS.with_label_values(&[reason]).inc();
                 }
                 if decision.accept {
+                    metrics::GATE_ACCEPTS.inc();
                     metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     let sym = token_syms
@@ -2185,6 +2186,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         };
 
                         let decision = profit_gate.should_submit(&sim, path);
+                        if decision.accept {
+                            metrics::GATE_ACCEPTS.inc();
+                            metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
+                            info!(
+                                path_id = path.id,
+                                effective_usd = decision.effective_profit_usd,
+                                "Backrun candidate passed profit gate"
+                            );
+                        }
                         // A backrun extracts value from the dislocation the
                         // victim creates — it cannot exceed the victim's own
                         // input value. Larger "profits" mean the projection

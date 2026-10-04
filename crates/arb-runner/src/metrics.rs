@@ -134,6 +134,13 @@ lazy_static::lazy_static! {
         vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 50.0]
     ).unwrap();
 
+    /// Candidates the profit gate ACCEPTED — the "would have submitted"
+    /// count in dry-run, the pre-submission count live.
+    pub static ref GATE_ACCEPTS: Counter = register_counter!(
+        "arb_gate_accepts_total",
+        "Profit-gate accepted candidates (resting + backrun)"
+    ).unwrap();
+
     pub static ref SPONSORSHIP_REJECTS: CounterVec = register_counter_vec!(
         "arb_sponsorship_rejects_total",
         "Sponsored UserOperation rejections by reason (gasless mode)",
