@@ -154,20 +154,6 @@ token0 = "USDT"
 token1 = "WBNB"
 fee_bps = 1
 [[pools]]
-name = "AUTO_TK_0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1_WBNB_25"
-address = "0x02eda8dbc97a0c9adfbbfab589430d76a7c7f5b6"
-protocol = "v3"
-token0 = "TK_0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1"
-token1 = "WBNB"
-fee_bps = 25
-[[pools]]
-name = "AUTO_TK_0x07a9a5faf4b994fd632a611e1374626529a32d13_USDT_25"
-address = "0xffe8973d3cdead3f273f9fa1e78901665236e90e"
-protocol = "v2"
-token0 = "TK_0x07a9a5faf4b994fd632a611e1374626529a32d13"
-token1 = "USDT"
-fee_bps = 25
-[[pools]]
 name = "AUTO_TK_0x10d4183389e99233db3cc981c43443ebd28ebd5e_USDT_1"
 address = "0x0e6e1f47c64f517fc9dc35698718c7dfc708d534"
 protocol = "v3"
@@ -175,33 +161,12 @@ token0 = "TK_0x10d4183389e99233db3cc981c43443ebd28ebd5e"
 token1 = "USDT"
 fee_bps = 1
 [[pools]]
-name = "AUTO_USDT_TK_0x9558a9254890b2a8b057a789f413631b9084f4a3_100"
-address = "0xda0b66ebf02c7830953f49085db217ad122fcc2a"
-protocol = "v3"
-token0 = "USDT"
-token1 = "TK_0x9558a9254890b2a8b057a789f413631b9084f4a3"
-fee_bps = 100
-[[pools]]
 name = "AUTO_TK_0x255e746abb8d9acac00d6d023e5e63e3b8dfa7cd_USDT_25"
 address = "0x2a4b99a9c4544d35e8d266111c50b67fea01d53d"
 protocol = "v2"
 token0 = "TK_0x255e746abb8d9acac00d6d023e5e63e3b8dfa7cd"
 token1 = "USDT"
 fee_bps = 25
-[[pools]]
-name = "AUTO_USDT_TK_0x8d65744527f55d0b2338350912d5c99a81ddf0e2_25"
-address = "0x63844bd4bfad910b1643713302a1cc1ed20d50c3"
-protocol = "v2"
-token0 = "USDT"
-token1 = "TK_0x8d65744527f55d0b2338350912d5c99a81ddf0e2"
-fee_bps = 25
-[[pools]]
-name = "AUTO_TK_0x4902c5ebc598265ed2212b559b042de8a5eeec3f_WBNB_1"
-address = "0xfc58462502b7c47f166292df6e6b11e1ae41f314"
-protocol = "v3"
-token0 = "TK_0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
-token1 = "WBNB"
-fee_bps = 1
 [[pools]]
 name = "AUTO_TK_0x8b194370825e37b33373e74a41009161808c1488_WBNB_1"
 address = "0x5d2913a8ea284e486000177852c87ea4d64d03d6"
@@ -223,13 +188,6 @@ protocol = "v2"
 token0 = "USDT"
 token1 = "TK_0x88886f0fd371dff856291badced45922bc888888"
 fee_bps = 25
-[[pools]]
-name = "AUTO_TK_0x223a20e1b83aa3832e78d4b7b132df022e739222_USDT_1"
-address = "0xfdbeffa804bc58e9edd720165f41a62b2ee251b6"
-protocol = "v3"
-token0 = "TK_0x223a20e1b83aa3832e78d4b7b132df022e739222"
-token1 = "USDT"
-fee_bps = 1
 [[pools]]
 name = "AUTO_USDT_TK_0x8b194370825e37b33373e74a41009161808c1488_30"
 address = "0x53c133481819e1df5f7c4722e9feb68725349879"
@@ -264,13 +222,6 @@ address = "0x320e8096e5e7a46e43446141a5b15d801fc596f5"
 protocol = "v3"
 token0 = "TK_0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
 token1 = "WBNB"
-fee_bps = 25
-[[pools]]
-name = "AUTO_USDT_TK_0x7cc151c2ee1016d7b586fb818759b6ae07719999_25"
-address = "0x462b30a53c8552035506e82ce7b6a6c418b0477f"
-protocol = "v2"
-token0 = "USDT"
-token1 = "TK_0x7cc151c2ee1016d7b586fb818759b6ae07719999"
 fee_bps = 25
 [[pools]]
 name = "AUTO_TK_0x205812cdbed920aff76c6580abd681a46d11efc7_TK_0x43f824bed191b79a7de9589c4b85e9e9bf0c7777_25"
@@ -357,13 +308,6 @@ token0 = "TK_0x0d4079f96f92069c8d713c573bd56490232c3333"
 token1 = "USDT"
 fee_bps = 25
 [[pools]]
-name = "AUTO_USDT_TK_0x90269edbf32583a47fa283835b5d35d5d83d7777_100"
-address = "0xaf71611cc44f703d289a1f981e229bb9a4a665aa"
-protocol = "v3"
-token0 = "USDT"
-token1 = "TK_0x90269edbf32583a47fa283835b5d35d5d83d7777"
-fee_bps = 100
-[[pools]]
 name = "AUTO_USDT_TK_0xa3cfb853339b77f385b994799b015cb04b208fe6_1"
 address = "0xe5ce5bc4785cd2a246151364f5a190cee3fdb142"
 protocol = "v3"
@@ -383,13 +327,6 @@ address = "0xd7d30f434b12f7ed9b0ae11ff1c754745a10ad52"
 protocol = "v3"
 token0 = "USDT"
 token1 = "TK_0xca750ef65f295bbecd685abf54e82caf297bdb61"
-fee_bps = 25
-[[pools]]
-name = "AUTO_TK_0x1f9f6a696c6fd109cd3956f45dc709d2b3902163_WBNB_25"
-address = "0xb7f42e58cf2364ac994f93f7aff3b158cfa3dc76"
-protocol = "v2"
-token0 = "TK_0x1f9f6a696c6fd109cd3956f45dc709d2b3902163"
-token1 = "WBNB"
 fee_bps = 25
 [[pools]]
 name = "AUTO_USDT_TK_0xc35ef0564751a27b468f791113c686c8eebaa9ca_25"
@@ -595,6 +532,398 @@ fee_bps = 5
 # === Thena Fusion / Algebra ===
 
 [[pools]]
+name = "V3_CAKE_USDT"
+address = "0xE04D921D6AB7C3eF2Eee14dd7a95Be5706A1EA93"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "V3_CAKE_USDT"
+address = "0x8ec186cD1Ad51c380Bd23fDe29f852226647616c"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "USDT"
+fee_bps = 5
+
+[[pools]]
+name = "V3_CAKE_USDT"
+address = "0x7f51c8AaA6B0599aBd16674e2b17FEc7a9f674A1"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "USDT"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_WBNB"
+address = "0x133B3D95bAD5405d14d53473671200e9342896BF"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_WBNB"
+address = "0xAfB2Da14056725E3BA3a30dD846B6BBbd7886c56"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "WBNB"
+fee_bps = 5
+
+[[pools]]
+name = "V2_CAKE_USDT"
+address = "0xA39Af17CE4a8eb807E076805Da1e2B8EA7D0755b"
+protocol = "v2"
+token0 = "CAKE"
+token1 = "USDT"
+fee_bps = 25
+
+[[pools]]
+name = "V2_CAKE_WBNB"
+address = "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0"
+protocol = "v2"
+token0 = "CAKE"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V2_CAKE_USDC"
+address = "0x177d955dCA80443A09E7a7F5946cA16b8E0dcA1C"
+protocol = "v2"
+token0 = "CAKE"
+token1 = "USDC"
+fee_bps = 25
+
+# === Factory-discovered pools (verified live via getPair/getPool/poolByPair) ===
+
+[[pools]]
+name = "V3_USDT_USDC"
+address = "0x4f31Fa980a675570939B737Ebdde0471a4Be40Eb"
+protocol = "v3"
+token0 = "USDT"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "V3_USDT_WBNB"
+address = "0x172fcD41E0913e95784454622d1c3724f546f849"
+protocol = "v3"
+token0 = "USDT"
+token1 = "WBNB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_USDT_WBNB"
+address = "0x1401ff943D08a7E098328C1d3a9d388923B115D2"
+protocol = "v3"
+token0 = "USDT"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_USDT_WBNB"
+address = "0x6805E0E5333c5c3acCF2930Be4734E2b98f4Ce06"
+protocol = "v3"
+token0 = "USDT"
+token1 = "WBNB"
+fee_bps = 100
+
+[[pools]]
+name = "V3_ETH_USDT"
+address = "0x9F599F3D64a9D99eA21e68127Bb6CE99f893DA61"
+protocol = "v3"
+token0 = "ETH"
+token1 = "USDT"
+fee_bps = 1
+
+[[pools]]
+name = "V3_ETH_USDT"
+address = "0x66E9AcBA7C3a82C8EE02fAF3E325Dd55D6581a8c"
+protocol = "v3"
+token0 = "ETH"
+token1 = "USDT"
+fee_bps = 25
+
+[[pools]]
+name = "V3_USDT_BTCB"
+address = "0x247f51881d1E3aE0f759AFB801413a6C948Ef442"
+protocol = "v3"
+token0 = "USDT"
+token1 = "BTCB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_USDT_BTCB"
+address = "0x46Cf1cF8c69595804ba91dFdd8d6b960c9B0a7C4"
+protocol = "v3"
+token0 = "USDT"
+token1 = "BTCB"
+fee_bps = 5
+
+[[pools]]
+name = "V3_USDT_BTCB"
+address = "0x6f5F1c8856FFacDdD601830E15F56A7461833E89"
+protocol = "v3"
+token0 = "USDT"
+token1 = "BTCB"
+fee_bps = 100
+
+[[pools]]
+name = "V3_CAKE_USDT"
+address = "0x55FE55677e8398eF5C92f01B780403C9a771A1c0"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "USDT"
+fee_bps = 100
+
+[[pools]]
+name = "V3_USDT_FDUSD"
+address = "0xbF72B6485E4b31601aFe7B0a1210Be2004D2B1d6"
+protocol = "v3"
+token0 = "USDT"
+token1 = "FDUSD"
+fee_bps = 1
+
+[[pools]]
+name = "V3_USDC_WBNB"
+address = "0xf2688Fb5B81049DFB7703aDa5e770543770612C4"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WBNB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_USDC_WBNB"
+address = "0x81A9b5F18179cE2bf8f001b8a634Db80771F1824"
+protocol = "v3"
+token0 = "USDC"
+token1 = "WBNB"
+fee_bps = 5
+
+[[pools]]
+name = "V2_ETH_USDC"
+address = "0xEa26B78255Df2bBC31C1eBf60010D78670185bD0"
+protocol = "v2"
+token0 = "ETH"
+token1 = "USDC"
+fee_bps = 25
+
+[[pools]]
+name = "V3_ETH_USDC"
+address = "0x539e0EBfffd39e54A0f7E5F8FEc40ade7933A664"
+protocol = "v3"
+token0 = "ETH"
+token1 = "USDC"
+fee_bps = 5
+
+[[pools]]
+name = "V2_BTCB_USDC"
+address = "0x2dF244535624761f6fCc381CaE3e9b903429d9Ff"
+protocol = "v2"
+token0 = "BTCB"
+token1 = "USDC"
+fee_bps = 25
+
+[[pools]]
+name = "V3_BTCB_USDC"
+address = "0x19CeABe800596eC01164c3680a66e8216D47D517"
+protocol = "v3"
+token0 = "BTCB"
+token1 = "USDC"
+fee_bps = 25
+
+[[pools]]
+name = "V3_USDC_FDUSD"
+address = "0xf66A930Ed3b004BA16ee11b3A9B142EAf2259b0d"
+protocol = "v3"
+token0 = "USDC"
+token1 = "FDUSD"
+fee_bps = 1
+
+[[pools]]
+name = "V2_ETH_WBNB"
+address = "0x74E4716E431f45807DCF19f284c7aA99F18a4fbc"
+protocol = "v2"
+token0 = "ETH"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_ETH_WBNB"
+address = "0x62Fcb3C1794FB95BD8B1A97f6Ad5D8a7e4943a1e"
+protocol = "v3"
+token0 = "ETH"
+token1 = "WBNB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_ETH_WBNB"
+address = "0x7d05c84581f0C41AD80ddf677A510360bae09a5A"
+protocol = "v3"
+token0 = "ETH"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V2_BTCB_WBNB"
+address = "0x61EB789d75A95CAa3fF50ed7E47b96c132fEc082"
+protocol = "v2"
+token0 = "BTCB"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_BTCB_WBNB"
+address = "0x62Edaf2a56c9FB55be5F9B1399Ac067f6a37013b"
+protocol = "v3"
+token0 = "BTCB"
+token1 = "WBNB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_BTCB_WBNB"
+address = "0x6bbc40579ad1BBD243895cA0ACB086BB6300d636"
+protocol = "v3"
+token0 = "BTCB"
+token1 = "WBNB"
+fee_bps = 5
+
+[[pools]]
+name = "V3_BTCB_WBNB"
+address = "0xFC75f4E78bf71eD5066dB9ca771D4CcB7C1264E0"
+protocol = "v3"
+token0 = "BTCB"
+token1 = "WBNB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_WBNB"
+address = "0x1E213600FA9317FEAC4Ef4087acDF5D0e25D7187"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "WBNB"
+fee_bps = 1
+
+[[pools]]
+name = "V2_ETH_BTCB"
+address = "0xD171B26E4484402de70e3Ea256bE5A2630d7e88D"
+protocol = "v2"
+token0 = "ETH"
+token1 = "BTCB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_ETH_BTCB"
+address = "0xCEc31052610aaf0693D6B4d34E055687af3AeeE6"
+protocol = "v3"
+token0 = "ETH"
+token1 = "BTCB"
+fee_bps = 1
+
+[[pools]]
+name = "V3_ETH_BTCB"
+address = "0x4BBA1018b967e59220b22Ca03f68821A3276c9a6"
+protocol = "v3"
+token0 = "ETH"
+token1 = "BTCB"
+fee_bps = 5
+
+[[pools]]
+name = "V3_ETH_BTCB"
+address = "0xD4dCA84E1808da3354924cD243c66828cf775470"
+protocol = "v3"
+token0 = "ETH"
+token1 = "BTCB"
+fee_bps = 25
+
+[[pools]]
+name = "V2_CAKE_ETH"
+address = "0x3f23B4F1a35794306ba4f3176934012dC73312D1"
+protocol = "v2"
+token0 = "CAKE"
+token1 = "ETH"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_ETH"
+address = "0x517F28453B947bA01fE6a6B193294D4576528826"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "ETH"
+fee_bps = 25
+
+[[pools]]
+name = "V2_CAKE_BTCB"
+address = "0x3b2B70Dd9684deEE3f942653a418bE34fc0D525b"
+protocol = "v2"
+token0 = "CAKE"
+token1 = "BTCB"
+fee_bps = 25
+
+[[pools]]
+name = "V3_CAKE_BTCB"
+address = "0x380A466AE6896d7D4FCD571e1E24CD5061A836B3"
+protocol = "v3"
+token0 = "CAKE"
+token1 = "BTCB"
+fee_bps = 25
+
+[[pools]]
+name = "AUTO_TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274_WBNB_1"
+address = "0xd3cffc6b02a34dfc72f1350339031043a854599f"
+protocol = "v3"
+token0 = "TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274"
+token1 = "WBNB"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x00541ab4c72593734aa09bdd66b29818faff1111_USDT_25"
+address = "0x454dc6c5c5c39105ec4cda28a61061f016f85e0e"
+protocol = "v2"
+token0 = "TK_0x00541ab4c72593734aa09bdd66b29818faff1111"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc_USDT_25"
+address = "0x6f1b3c82f4f96a446df52013f230fb95355de1ae"
+protocol = "v2"
+token0 = "TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xd1852cede98aaa8c11efe8600509e51fe5194132_25"
+address = "0xf6389f23764ee56f0bd5c3494200fe2f79f243aa"
+protocol = "v2"
+token0 = "USDT"
+token1 = "TK_0xd1852cede98aaa8c11efe8600509e51fe5194132"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb_USDT_5"
+address = "0x6701b287c8170d6c290c6f4ef426782bd61ae310"
+protocol = "v3"
+token0 = "TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208_25"
+address = "0x6a2dd37603c5b8c5bdd1d2c75111af9af8bdbcc2"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208"
+fee_bps = 25
+
+
+[[pools]]
 name = "THE_USDT_USDC"
 address = "0x1b9a1120a17617d8ec4dc80b921a9a1c50caef7d"
 protocol = "algebra"
@@ -663,182 +992,12 @@ token_batch_min = 25
 token_batch_max = 50
 
 [[pools]]
-name = "V3_CAKE_USDT"
-address = "0xE04D921D6AB7C3eF2Eee14dd7a95Be5706A1EA93"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDT"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_USDT"
-address = "0x8ec186cD1Ad51c380Bd23fDe29f852226647616c"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDT"
-fee_bps = 5
-
-[[pools]]
-name = "V3_CAKE_USDT"
-address = "0x7f51c8AaA6B0599aBd16674e2b17FEc7a9f674A1"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDT"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_WBNB"
-address = "0x133B3D95bAD5405d14d53473671200e9342896BF"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_WBNB"
-address = "0xAfB2Da14056725E3BA3a30dD846B6BBbd7886c56"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "WBNB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_CAKE_USDC"
-address = "0xBa3363669fb975b6C4F7014910ACAcf9Ee77c9D4"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDC"
-fee_bps = 5
-
-[[pools]]
-name = "V2_CAKE_USDT"
-address = "0xA39Af17CE4a8eb807E076805Da1e2B8EA7D0755b"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "USDT"
-fee_bps = 25
-
-[[pools]]
-name = "V2_CAKE_WBNB"
-address = "0x0eD7e52944161450477ee417DE9Cd3a859b14fD0"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V2_CAKE_USDC"
-address = "0x177d955dCA80443A09E7a7F5946cA16b8E0dcA1C"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "USDC"
-fee_bps = 25
-
-# === Factory-discovered pools (verified live via getPair/getPool/poolByPair) ===
-
-[[pools]]
-name = "V3_USDT_USDC"
-address = "0x4f31Fa980a675570939B737Ebdde0471a4Be40Eb"
-protocol = "v3"
-token0 = "USDT"
-token1 = "USDC"
-fee_bps = 5
-
-[[pools]]
-name = "V3_USDT_USDC"
-address = "0x5F69c87e3Ed60d6b6B544C16F0072Cd4A72Ad13C"
-protocol = "v3"
-token0 = "USDT"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_USDC"
-address = "0x418E8Bf549Cb4a544d033Edc8bc26C3357e6EFa7"
-protocol = "v3"
-token0 = "USDT"
-token1 = "USDC"
-fee_bps = 100
-
-[[pools]]
-name = "V3_USDT_WBNB"
-address = "0x172fcD41E0913e95784454622d1c3724f546f849"
-protocol = "v3"
-token0 = "USDT"
-token1 = "WBNB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDT_WBNB"
-address = "0x1401ff943D08a7E098328C1d3a9d388923B115D2"
-protocol = "v3"
-token0 = "USDT"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_WBNB"
-address = "0x6805E0E5333c5c3acCF2930Be4734E2b98f4Ce06"
-protocol = "v3"
-token0 = "USDT"
-token1 = "WBNB"
-fee_bps = 100
-
-[[pools]]
-name = "V3_ETH_USDT"
-address = "0x9F599F3D64a9D99eA21e68127Bb6CE99f893DA61"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDT"
-fee_bps = 1
-
-[[pools]]
-name = "V3_ETH_USDT"
-address = "0x66E9AcBA7C3a82C8EE02fAF3E325Dd55D6581a8c"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDT"
-fee_bps = 25
-
-[[pools]]
 name = "THE_ETH_USDT"
 address = "0xa60a504d92a1C95bda729C3F745B361cA822d6dd"
 protocol = "algebra"
 token0 = "ETH"
 token1 = "USDT"
 fee_bps = 30
-
-[[pools]]
-name = "V3_USDT_BTCB"
-address = "0x247f51881d1E3aE0f759AFB801413a6C948Ef442"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BTCB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDT_BTCB"
-address = "0x46Cf1cF8c69595804ba91dFdd8d6b960c9B0a7C4"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BTCB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_USDT_BTCB"
-address = "0x6ee3eE9C3395BbD136B6076A70Cb6cFF241c0E24"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BTCB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_BTCB"
-address = "0x6f5F1c8856FFacDdD601830E15F56A7461833E89"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BTCB"
-fee_bps = 100
 
 [[pools]]
 name = "THE_USDT_BTCB"
@@ -849,124 +1008,12 @@ token1 = "BTCB"
 fee_bps = 30
 
 [[pools]]
-name = "V2_USDT_BUSD"
-address = "0x7EFaEf62fDdCCa950418312c6C91Aef321375A00"
-protocol = "v2"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_BUSD"
-address = "0x4f3126d5DE26413AbDCF6948943FB9D0847d9818"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDT_BUSD"
-address = "0x1625F94b9185c028733e3Eb41c8203b6b8A11729"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_USDT_BUSD"
-address = "0xB2d25F062a88dB40861007B07E10549772272B0B"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_BUSD"
-address = "0x762b827bee8eF2737E95DEbd0050407D7B15C956"
-protocol = "v3"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 100
-
-[[pools]]
-name = "THE_USDT_BUSD"
-address = "0x80c12ab080f70AffDAA566e6aaBc73c799EB2Ac5"
-protocol = "algebra"
-token0 = "USDT"
-token1 = "BUSD"
-fee_bps = 30
-
-[[pools]]
-name = "V3_CAKE_USDT"
-address = "0x55FE55677e8398eF5C92f01B780403C9a771A1c0"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDT"
-fee_bps = 100
-
-[[pools]]
-name = "V2_USDT_FDUSD"
-address = "0x4e83ae65E9262712f4f4bC2F9Dfe921704bc71dF"
-protocol = "v2"
-token0 = "USDT"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDT_FDUSD"
-address = "0xbF72B6485E4b31601aFe7B0a1210Be2004D2B1d6"
-protocol = "v3"
-token0 = "USDT"
-token1 = "FDUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDT_FDUSD"
-address = "0x07C38a4963136EA2593E1D0051004D045E242fAB"
-protocol = "v3"
-token0 = "USDT"
-token1 = "FDUSD"
-fee_bps = 100
-
-[[pools]]
 name = "THE_USDT_FDUSD"
 address = "0x7B879963ae083732f4514d564f4e4613e24E1f67"
 protocol = "algebra"
 token0 = "USDT"
 token1 = "FDUSD"
 fee_bps = 30
-
-[[pools]]
-name = "V3_USDC_WBNB"
-address = "0xf2688Fb5B81049DFB7703aDa5e770543770612C4"
-protocol = "v3"
-token0 = "USDC"
-token1 = "WBNB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDC_WBNB"
-address = "0x81A9b5F18179cE2bf8f001b8a634Db80771F1824"
-protocol = "v3"
-token0 = "USDC"
-token1 = "WBNB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_USDC_WBNB"
-address = "0xc721dECCD986D54B39e8c29428A1f06155c3671e"
-protocol = "v3"
-token0 = "USDC"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDC_WBNB"
-address = "0x18C5aFFA481e7EDbF37405AdE553827d6387899f"
-protocol = "v3"
-token0 = "USDC"
-token1 = "WBNB"
-fee_bps = 100
 
 [[pools]]
 name = "THE_USDC_WBNB"
@@ -977,260 +1024,12 @@ token1 = "WBNB"
 fee_bps = 30
 
 [[pools]]
-name = "V2_ETH_USDC"
-address = "0xEa26B78255Df2bBC31C1eBf60010D78670185bD0"
-protocol = "v2"
-token0 = "ETH"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_USDC"
-address = "0x62Cf00528cB7aF872C1f9DD426E655C903F16770"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDC"
-fee_bps = 1
-
-[[pools]]
-name = "V3_ETH_USDC"
-address = "0x539e0EBfffd39e54A0f7E5F8FEc40ade7933A664"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDC"
-fee_bps = 5
-
-[[pools]]
-name = "V3_ETH_USDC"
-address = "0xe54329122183164440bF5EB6467A244A09B94471"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_USDC"
-address = "0x35Af9EFAc9588F5dBA2b442247204eBb8B12e8a3"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDC"
-fee_bps = 100
-
-[[pools]]
 name = "THE_ETH_USDC"
 address = "0x96F03BE931c3c64a1d1466e193265c34Bfc7e06E"
 protocol = "algebra"
 token0 = "ETH"
 token1 = "USDC"
 fee_bps = 30
-
-[[pools]]
-name = "V2_BTCB_USDC"
-address = "0x2dF244535624761f6fCc381CaE3e9b903429d9Ff"
-protocol = "v2"
-token0 = "BTCB"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_USDC"
-address = "0xe1799b52C010AD415325D19aF139E20B8AA8AAB0"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "USDC"
-fee_bps = 1
-
-[[pools]]
-name = "V3_BTCB_USDC"
-address = "0xAd3A77e5A8B5a0f8C75467b9Aa463dd848c5C432"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "USDC"
-fee_bps = 5
-
-[[pools]]
-name = "V3_BTCB_USDC"
-address = "0x19CeABe800596eC01164c3680a66e8216D47D517"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_USDC"
-address = "0x378B0a2a8e53784Cd2c331d82dCf9839E2B88a9a"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "USDC"
-fee_bps = 100
-
-[[pools]]
-name = "V2_USDC_BUSD"
-address = "0x2354ef4DF11afacb85a5C7f98B624072ECcddbB1"
-protocol = "v2"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDC_BUSD"
-address = "0x22536030B9cE783B6Ddfb9a39ac7F439f568E5e6"
-protocol = "v3"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDC_BUSD"
-address = "0x7Add61785376f3aAa8C6a7099C74090255708B4f"
-protocol = "v3"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_USDC_BUSD"
-address = "0xb0A81223348AB6B149D8759298815071386e9957"
-protocol = "v3"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDC_BUSD"
-address = "0x89aad2E6086174d9909FfA00FC9d5012bDc48C40"
-protocol = "v3"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 100
-
-[[pools]]
-name = "THE_USDC_BUSD"
-address = "0x49696667dAc8b3d331B55df27da5F1DB36B94189"
-protocol = "algebra"
-token0 = "USDC"
-token1 = "BUSD"
-fee_bps = 30
-
-[[pools]]
-name = "V3_CAKE_USDC"
-address = "0xd3a9EA6b3669E77B6ED063593a40B26b369D1d8a"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDC"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_USDC"
-address = "0x21dCb183F9D895e3A7c5205621555C44C5B566c5"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDC"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_USDC"
-address = "0x794FA211D51f31104c492D7DaCAb503CeBc5E4c0"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "USDC"
-fee_bps = 100
-
-[[pools]]
-name = "V2_USDC_FDUSD"
-address = "0xf934c8F807e78586a473F7096E7976fbfC3cC784"
-protocol = "v2"
-token0 = "USDC"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_USDC_FDUSD"
-address = "0xf66A930Ed3b004BA16ee11b3A9B142EAf2259b0d"
-protocol = "v3"
-token0 = "USDC"
-token1 = "FDUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_USDC_FDUSD"
-address = "0xEFE6E836b94435F3Ba9450cA70A72bA060D0e1b3"
-protocol = "v3"
-token0 = "USDC"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V2_ETH_WBNB"
-address = "0x74E4716E431f45807DCF19f284c7aA99F18a4fbc"
-protocol = "v2"
-token0 = "ETH"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_WBNB"
-address = "0x62Fcb3C1794FB95BD8B1A97f6Ad5D8a7e4943a1e"
-protocol = "v3"
-token0 = "ETH"
-token1 = "WBNB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_ETH_WBNB"
-address = "0x7d05c84581f0C41AD80ddf677A510360bae09a5A"
-protocol = "v3"
-token0 = "ETH"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_WBNB"
-address = "0x5DEdfB51216F13692cd6Abf5F9c2748b6a3dB852"
-protocol = "v3"
-token0 = "ETH"
-token1 = "WBNB"
-fee_bps = 100
-
-[[pools]]
-name = "V2_BTCB_WBNB"
-address = "0x61EB789d75A95CAa3fF50ed7E47b96c132fEc082"
-protocol = "v2"
-token0 = "BTCB"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_WBNB"
-address = "0x62Edaf2a56c9FB55be5F9B1399Ac067f6a37013b"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "WBNB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_BTCB_WBNB"
-address = "0x6bbc40579ad1BBD243895cA0ACB086BB6300d636"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "WBNB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_BTCB_WBNB"
-address = "0xFC75f4E78bf71eD5066dB9ca771D4CcB7C1264E0"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "WBNB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_WBNB"
-address = "0x769FDCAa6a18495EB52FE93D19ce347daD9817bC"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "WBNB"
-fee_bps = 100
 
 [[pools]]
 name = "THE_BTCB_WBNB"
@@ -1241,516 +1040,10 @@ token1 = "WBNB"
 fee_bps = 30
 
 [[pools]]
-name = "V2_WBNB_BUSD"
-address = "0x58F876857a02D6762E0101bb5C46A8c1ED44Dc16"
-protocol = "v2"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_WBNB_BUSD"
-address = "0x8F45b99BF65CDBF9bC0C0b4846D6a324d2DE5314"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_WBNB_BUSD"
-address = "0x85FAac652b707FDf6907EF726751087F9E0b6687"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_WBNB_BUSD"
-address = "0x1c79d6599A5ff35922b2AEd8D2A2eACbC77ebd44"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_WBNB_BUSD"
-address = "0x469efaaadB06b5f4618ed1907ABa380411f9a200"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 100
-
-[[pools]]
-name = "THE_WBNB_BUSD"
-address = "0x4f3f842cBD072c8e65CCDe329c24ac276e74a8FE"
-protocol = "algebra"
-token0 = "WBNB"
-token1 = "BUSD"
-fee_bps = 30
-
-[[pools]]
-name = "V3_CAKE_WBNB"
-address = "0x1E213600FA9317FEAC4Ef4087acDF5D0e25D7187"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "WBNB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_WBNB"
-address = "0xd710DaC10B7255fCc0eC929a0e742A18F25b6395"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "WBNB"
-fee_bps = 100
-
-[[pools]]
-name = "V2_WBNB_FDUSD"
-address = "0x9BE89c1FE6d7D8dCe6B614F6214dd97975b85E30"
-protocol = "v2"
-token0 = "WBNB"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_WBNB_FDUSD"
-address = "0xc756Ed55d75EDc28eff291a243754124bB7Df2d2"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "FDUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_WBNB_FDUSD"
-address = "0x0f3aDA81A32D8a7233fe9B1D04f0A8231AdB98F0"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "FDUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_WBNB_FDUSD"
-address = "0x463b3251843b1D048d70463a8E2e14C5FC6f72CD"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_WBNB_FDUSD"
-address = "0xC8d49359421C8aaD7c37fD7c3794aD39348036A5"
-protocol = "v3"
-token0 = "WBNB"
-token1 = "FDUSD"
-fee_bps = 100
-
-[[pools]]
-name = "V2_ETH_BTCB"
-address = "0xD171B26E4484402de70e3Ea256bE5A2630d7e88D"
-protocol = "v2"
-token0 = "ETH"
-token1 = "BTCB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_BTCB"
-address = "0xCEc31052610aaf0693D6B4d34E055687af3AeeE6"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BTCB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_ETH_BTCB"
-address = "0x4BBA1018b967e59220b22Ca03f68821A3276c9a6"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BTCB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_ETH_BTCB"
-address = "0xD4dCA84E1808da3354924cD243c66828cf775470"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BTCB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_BTCB"
-address = "0x775eF0eD5aE3120e4C75fD67d1A9fAb31723e2c3"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BTCB"
-fee_bps = 100
-
-[[pools]]
 name = "THE_ETH_BTCB"
 address = "0x1F9B1A3DdeDBf47b96C65F29c0586b678DE2623b"
 protocol = "algebra"
 token0 = "ETH"
 token1 = "BTCB"
 fee_bps = 30
-
-[[pools]]
-name = "V2_ETH_BUSD"
-address = "0x7213a321F1855CF1779f42c0CD85d3D95291D34C"
-protocol = "v2"
-token0 = "ETH"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_ETH_BUSD"
-address = "0x70eE03D5d02C16A2DDAC4c0B3378EE37F79F1C48"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_ETH_BUSD"
-address = "0x8a0D21A95768494F8AD482d2c537a2aa2f8dDeE7"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_ETH_BUSD"
-address = "0x0AAD2cf1eAac5f3A1c586B9cE5ECD1dE588298B4"
-protocol = "v3"
-token0 = "ETH"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V2_CAKE_ETH"
-address = "0x3f23B4F1a35794306ba4f3176934012dC73312D1"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "ETH"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_ETH"
-address = "0x036b7D526545AD2eab3ceDC7cfe0aC9898f205c9"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "ETH"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_ETH"
-address = "0xEb7528398B2725E1E0374734a87320132223A5c6"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "ETH"
-fee_bps = 5
-
-[[pools]]
-name = "V3_CAKE_ETH"
-address = "0x517F28453B947bA01fE6a6B193294D4576528826"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "ETH"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_ETH"
-address = "0xfC4B6939B1590151250Cf0aD72f6Ad22f395AEdC"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "ETH"
-fee_bps = 100
-
-[[pools]]
-name = "V3_ETH_FDUSD"
-address = "0x63393D036FEf3B187ca613a8E5D917697ade2cD5"
-protocol = "v3"
-token0 = "ETH"
-token1 = "FDUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_ETH_FDUSD"
-address = "0x9379915c1c275091553e6C93aC099A6E2BFAA34F"
-protocol = "v3"
-token0 = "ETH"
-token1 = "FDUSD"
-fee_bps = 100
-
-[[pools]]
-name = "V2_BTCB_BUSD"
-address = "0xF45cd219aEF8618A92BAa7aD848364a158a24F33"
-protocol = "v2"
-token0 = "BTCB"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_BUSD"
-address = "0x24f651910BA2e69fE57E32F9299FAdB545642d65"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_BTCB_BUSD"
-address = "0x369482C78baD380a036cAB827fE677C1903d1523"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_BTCB_BUSD"
-address = "0x42CCe566F51E4B0B79a4b59f47f85e57F726BEA8"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_BUSD"
-address = "0x8130791A41F62E44a6ab25b30BDb081d78572eBa"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "BUSD"
-fee_bps = 100
-
-[[pools]]
-name = "V2_CAKE_BTCB"
-address = "0x3b2B70Dd9684deEE3f942653a418bE34fc0D525b"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "BTCB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_BTCB"
-address = "0x86384E39FFb9384d42a2886b089f4DC518909daF"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BTCB"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_BTCB"
-address = "0x6811be5539bA6C92Ff15f8270eb79fb28Ad8e470"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BTCB"
-fee_bps = 5
-
-[[pools]]
-name = "V3_CAKE_BTCB"
-address = "0x380A466AE6896d7D4FCD571e1E24CD5061A836B3"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BTCB"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_BTCB"
-address = "0x13e589F047CdE6c8092799558eeb9aF333c2b25a"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BTCB"
-fee_bps = 100
-
-[[pools]]
-name = "V2_BTCB_FDUSD"
-address = "0x4Dc1cB8f96a05D854AD85EcbC22Fe033b4Eb5461"
-protocol = "v2"
-token0 = "BTCB"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_BTCB_FDUSD"
-address = "0x0Eae18045A5C3E3bFf7B8Da1dd55a38A23348E93"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "FDUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_BTCB_FDUSD"
-address = "0x6AA9c4eDA3BF8ac038aD5C243133d6D25aA9cc73"
-protocol = "v3"
-token0 = "BTCB"
-token1 = "FDUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V2_CAKE_BUSD"
-address = "0x804678fa97d91B974ec2af3c843270886528a9E6"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_BUSD"
-address = "0x86F2e5F3395f370607289B898452F226628B172A"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_BUSD"
-address = "0x875e67bc75B84a4C2E6ea65c47F790e24AAA7dDA"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BUSD"
-fee_bps = 5
-
-[[pools]]
-name = "V3_CAKE_BUSD"
-address = "0x9f6EB6903C1277c8f02d71F8814dc9998199af1D"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_BUSD"
-address = "0xb7c8F17F5a0CDdC8F320Af7c59157B71A2b7de3a"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "BUSD"
-fee_bps = 100
-
-[[pools]]
-name = "V3_FDUSD_BUSD"
-address = "0xd288BECf86D300d4Cb575C0c7E28b964f6844431"
-protocol = "v3"
-token0 = "FDUSD"
-token1 = "BUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_FDUSD_BUSD"
-address = "0x56E93dE834c0E506363E82983B715e9692C13780"
-protocol = "v3"
-token0 = "FDUSD"
-token1 = "BUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V2_CAKE_FDUSD"
-address = "0xaae3c0635b51D98c67605EfA9Be6Ef2a4aDc3058"
-protocol = "v2"
-token0 = "CAKE"
-token1 = "FDUSD"
-fee_bps = 25
-
-[[pools]]
-name = "V3_CAKE_FDUSD"
-address = "0xd01c5AABE77CEDa7Fc5D0351EC43D59D8c188CFD"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "FDUSD"
-fee_bps = 1
-
-[[pools]]
-name = "V3_CAKE_FDUSD"
-address = "0xA62439A42fbeC9827a0B0452A5fD619d517F2D83"
-protocol = "v3"
-token0 = "CAKE"
-token1 = "FDUSD"
-fee_bps = 25
-
-# Leader Wallet Intelligence (Phase 0/1) — observation only.
-# Register wallets to record their pending swaps to data/leaders/BSC/*.jsonl.
-# Nothing is ever copied or submitted in this phase.
-# [leaders]
-# wallets = [
-#   { address = "0x...", label = "known arb bot", strategy_hypothesis = "atomic_dex_arb", risk_tier = "observe", max_copied_notional_usd = 0.0, enabled = true },
-# ]
-# Autonomous discovery (no manual wallets needed): scores every pending-tx
-# sender on bot signals (direct pool swap()=5, tracked-pool trade=3,
-# multi-hop=2, single-hop=1) with 5-min half-life; promotes at score>=15
-# after 3+ observations, capped at 50 wallets. Candidates get risk_tier=
-# "candidate" — recorded only, never acted on.
-# [leaders]
-# discover = true
-
-[leaders]
-discover = true
-
-[[pools]]
-name = "AUTO_USDT_TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e_25"
-address = "0xb720ea2a201c03578cca05191e8b4ab859704cfe"
-protocol = "v2"
-token0 = "USDT"
-token1 = "TK_0xe0a281deff5c9d8d67af09d39340e134ac81b82e"
-fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274_WBNB_1"
-address = "0xd3cffc6b02a34dfc72f1350339031043a854599f"
-protocol = "v3"
-token0 = "TK_0x5dbde81fce337ff4bcaaee4ca3466c00aecae274"
-token1 = "WBNB"
-fee_bps = 1
-
-
-[[pools]]
-name = "AUTO_TK_0x00541ab4c72593734aa09bdd66b29818faff1111_USDT_25"
-address = "0x454dc6c5c5c39105ec4cda28a61061f016f85e0e"
-protocol = "v2"
-token0 = "TK_0x00541ab4c72593734aa09bdd66b29818faff1111"
-token1 = "USDT"
-fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc_USDT_25"
-address = "0x6f1b3c82f4f96a446df52013f230fb95355de1ae"
-protocol = "v2"
-token0 = "TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
-token1 = "USDT"
-fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_USDT_TK_0xd1852cede98aaa8c11efe8600509e51fe5194132_25"
-address = "0xf6389f23764ee56f0bd5c3494200fe2f79f243aa"
-protocol = "v2"
-token0 = "USDT"
-token1 = "TK_0xd1852cede98aaa8c11efe8600509e51fe5194132"
-fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb_USDT_5"
-address = "0x6701b287c8170d6c290c6f4ef426782bd61ae310"
-protocol = "v3"
-token0 = "TK_0x1ba42e5193dfa8b03d15dd1b86a3113bbbef8eeb"
-token1 = "USDT"
-fee_bps = 5
-
-
-[[pools]]
-name = "AUTO_USDT_TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208_25"
-address = "0x6a2dd37603c5b8c5bdd1d2c75111af9af8bdbcc2"
-protocol = "v3"
-token0 = "USDT"
-token1 = "TK_0x9d2144328e1d618f54cd38540f5ee50671f6a208"
-fee_bps = 25
-
-
-[[pools]]
-name = "AUTO_TK_0x2ab198e0078a8a233b8e7685356cb76482b9e681_USDT_100"
-address = "0x1ce0cc3d473dc5938e55c78eae9ff17bbd99c972"
-protocol = "v3"
-token0 = "TK_0x2ab198e0078a8a233b8e7685356cb76482b9e681"
-token1 = "USDT"
-fee_bps = 100
-
 
