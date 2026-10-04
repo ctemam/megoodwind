@@ -2118,6 +2118,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 )
             else { continue };
 
+            // Dust victims cannot leave an extractable edge — a $1 swap
+            // "projected" to yield $0.30+ is the constant-product model
+            // over-stating impact, and every such candidate dies at the
+            // post-refresh re-check anyway. Skip before the pipeline spend.
+            if let Some(v) = victim_usd {
+                if v < 25.0 {
+                    debug!(victim_usd = v, tx = %pending.tx_hash,
+                        "backrun skipped — victim below dust floor");
+                    continue;
+                }
+            }
+
             let mut candidate_ids: Vec<usize> = Vec::new();
             for pool_addr in &hit_pools {
                 if quarantined.contains(pool_addr) { continue; }
@@ -2391,7 +2403,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 match verified {
                                     Some((_, reprofit)) if !reprofit.is_zero() => {}
                                     _ => {
-                                        debug!(path_id = path.id, "Backrun edge gone on re-check");
+                                        info!(path_id = path.id,
+                                            victim = %pending.tx_hash,
+                                            "Backrun edge gone on re-check");
                                         continue;
                                     }
                                 }
