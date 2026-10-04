@@ -2089,11 +2089,24 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             // watcher streams full pending txs, so the victim's
                             // signed bytes are available — bundle venues prepend
                             // them and our tx lands immediately after the victim.
-                            if !cfg.lanes.backrun {
+                            // With the generic backrun lane disabled, a victim
+                            // may still submit when its sender is a live leader
+                            // wallet — the flash-funded displacement copy
+                            // (zero-capital wallet copy, after-signal only).
+                            let leader_copy = copy_lane
+                                .as_ref()
+                                .map(|l| l.allows_copy_backrun(&pending.from))
+                                .unwrap_or(false);
+                            if !cfg.lanes.backrun && !leader_copy {
                                 metrics::BACKRUN_STAGES
                                     .with_label_values(&["lane_disabled"])
                                     .inc();
                                 continue;
+                            }
+                            if leader_copy && !cfg.lanes.backrun {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["leader_copy_gated"])
+                                    .inc();
                             }
                             let target_block = block_number + 1;
                             let submit_signer = &signers[signer_rot

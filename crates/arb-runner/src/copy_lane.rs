@@ -197,6 +197,20 @@ impl CopyLane {
         self.mode
     }
 
+    /// Whether a pending tx's sender is a live-tier leader while this lane
+    /// runs live — used to gate leader-signaled backrun submissions when the
+    /// generic backrun lane is disabled. This is the zero-capital copy: the
+    /// executor flash-borrows and replays the displacement the leader's swap
+    /// created, so no token inventory is needed.
+    pub fn allows_copy_backrun(&self, from: &Address) -> bool {
+        self.mode == CopyMode::Live
+            && self
+                .registry
+                .lookup(from)
+                .map(|w| w.risk_tier == "live")
+                .unwrap_or(false)
+    }
+
     pub fn on_swap(&self, pending: &PendingSwap) {
         let Some(wallet) = self.registry.lookup(&pending.from) else {
             return;
