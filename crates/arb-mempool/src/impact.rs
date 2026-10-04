@@ -59,8 +59,18 @@ pub fn project_and_quote(
 
                 Some((PoolState::AeroV2(state), amount_out))
             } else {
-                // For stable pools, recompute is complex — for now skip projection
-                None
+                // Stable pools: the AmmQuoter impl carries the exact
+                // _f/_d/_get_y invariant math (fee already deducted inside).
+                let amount_out = arb_core::AmmQuoter::quote(&state, token_in, amount_in).ok()?;
+                let is_token0_in = token_in == state.token0;
+                let (reserve_in, reserve_out) = if is_token0_in {
+                    (&mut state.reserve0, &mut state.reserve1)
+                } else {
+                    (&mut state.reserve1, &mut state.reserve0)
+                };
+                *reserve_in = *reserve_in + amount_in;
+                *reserve_out = reserve_out.checked_sub(amount_out)?;
+                Some((PoolState::AeroV2(state), amount_out))
             }
         }
         PoolState::V3(mut state) => {
