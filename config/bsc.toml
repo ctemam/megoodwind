@@ -801,14 +801,6 @@ token1 = "USDT"
 fee_bps = 25
 
 [[pools]]
-name = "V3_ETH_USDT"
-address = "0x83c38557a0576Ad38dEf24abaFA17c2C218cb9E4"
-protocol = "v3"
-token0 = "ETH"
-token1 = "USDT"
-fee_bps = 100
-
-[[pools]]
 name = "THE_ETH_USDT"
 address = "0xa60a504d92a1C95bda729C3F745B361cA822d6dd"
 protocol = "algebra"
