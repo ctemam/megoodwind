@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { useApp, fmt } from './state.jsx'
 import Overview from './pages/Overview.jsx'
 import PnL from './pages/PnL.jsx'
@@ -9,7 +9,7 @@ import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
 import ChainConfig from './pages/ChainConfig.jsx'
-import WalletIntelligence from './pages/WalletIntelligence.jsx'
+import Strategies from './pages/Strategies.jsx'
 import AgentPanel from './AgentPanel.jsx'
 
 const NAV = [
@@ -19,7 +19,7 @@ const NAV = [
   ['/wallet', '◉', 'Wallet'],
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
-  ['/intel', '◈', 'Wallet Intelligence'],
+  ['/strategies', '◈', 'Strategies'],
   ['/infra', '⛓', 'Infrastructure'],
   ['/config', '⚙', 'Chain Config'],
 ]
@@ -94,7 +94,8 @@ export default function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />
-          <Route path="/intel" element={<WalletIntelligence />} />
+          <Route path="/strategies" element={<Strategies />} />
+          <Route path="/intel" element={<Navigate to="/strategies" replace />} />
           <Route path="/infra" element={<Infra />} />
           <Route path="/config" element={<ChainConfig />} />
         </Routes>
