@@ -1738,7 +1738,18 @@ app.get('/api/opportunities', async (req, res) => {
     for (const o of readJsonl(path.join(dir, '_opportunities.jsonl'))) {
       if (o?.opportunity_id) byId[o.opportunity_id] = o
     }
-    const rows = Object.values(byId)
+    // Engine records (backrun/classic kinds) fan out to one row per candidate
+    // path, but paths for the same victim/block are mutually exclusive —
+    // collapse to the best net per reference so each row is one opportunity.
+    const best = {}
+    for (const o of Object.values(byId)) {
+      const engine = /\/(backrun|classic)\//.test(o.opportunity_id || '')
+      const key = engine ? `eng:${o.victim_tx || o.source_tx}` : o.opportunity_id
+      if (!(key in best) || (o.allbright_net_usd || 0) > (best[key].allbright_net_usd || 0)
+        || (o.allbright_net_usd || 0) === (best[key].allbright_net_usd || 0) && (o.unix_ms || 0) > (best[key].unix_ms || 0))
+        best[key] = o
+    }
+    const rows = Object.values(best)
       .sort((a, b) => (b.allbright_net_usd || 0) - (a.allbright_net_usd || 0)
         || (b.unix_ms || 0) - (a.unix_ms || 0))
     // Funnel derived from the records (scan/profiler write the JSONL, not the
