@@ -58,6 +58,72 @@ copy-trader — but its substrate covers most of stages 2 and 5:
 - **[repo evidence]** Latency work just landed: parallel eval, backrun lane
   joined with refresh — the copy race benefits directly.
 
+## Execution workflow map: how a copied opportunity actually executes
+
+The top systems (FrenFlow zero-block, Solana Geyser copiers, Uniswap
+copy-trade agent, MEV-style copiers) converge on this pipeline:
+
+```
+Leader wallet signs tx
+        │
+        ▼
+[1] DETECTION — mempool pending-tx feed, 0–5s before confirmation.
+    Top systems run 3 redundant detectors (mempool monitor + event
+    stream + on-chain logs); fastest wins, dedup by leader tx hash.
+    Key detail: match on tx.from == leader, NOT pool Swap events
+    (Swap events index the router, not the EOA).           [verified]
+        │
+        ▼
+[2] DECODE — parse the leader's calldata into (action, token, size,
+    venue). On Solana: balance deltas pre/post.             [verified]
+        │
+        ▼
+[3] GUARDS — wallet on watchlist → token whitelist/blacklist →
+    size cap → honeypot/tax/LP sim → balance check.
+    Total: ms-scale, all local except balance/safety RPC.   [verified]
+        │
+        ▼
+[4] SIZING — fixed-$ or proportional-to-leader relative to bankroll.
+        │
+        ▼
+[5] EXECUTION — two modes:
+    a) ZERO-BLOCK: leader tx still pending → submit
+       [leader_tx, copy_tx] ordered bundle to builder/relay →
+       same price as leader, same block. 30–200ms detect→submit
+       on ETH-class chains.                                [verified]
+    b) NEXT-BLOCK: leader confirmed → place copy (or limit order
+       if price moved beyond slippage cap). ~3s end-to-end vs
+       15–30s for naive confirm-then-copy systems.           [verified]
+    Always via private/bundle channels — a public-mempool copy gets
+    sandwiched itself.                                     [verified]
+        │
+        ▼
+[6] STATE — advance cursor (last processed leader tx), dedup,
+    record position (token, size, cost basis, source wallet).
+        │
+        ▼
+[7] EXIT — own TP/SL + trailing + partial ladders; source wallet is
+    entry signal only.                                     [verified]
+```
+
+### Mapped onto allbright's actual code path
+
+| Stage | Copy-system step | allbright equivalent today |
+|---|---|---|
+| [1] Detect | mempool feed + `tx.from == leader` | `mempool_rx` yields `PendingSwap{raw_tx, decoded}` — needs a watchlist HashSet on sender |
+| [2] Decode | calldata → (action, token, size) | `pending.decoded` already decodes router swaps |
+| [3] Guards | token safety + watchlist | `ProfitGate` gates profit; **no token-safety or wallet-match exists** |
+| [4] Sizing | bankroll-relative | `find_optimal_amount` sizes flash borrow — wrong objective, needs new sizer |
+| [5] Execute | zero-block `[leader, copy]` bundle | **already built**: backrun lane submits `[victim, ours]` ordered bundles via `build_fast` + venue router |
+| [6] State | cursor + dedup + positions | **absent** — no persistence; dedup only in-memory seen set |
+| [7] Exit | TP/SL/trailing | **absent** — atomic in-out only |
+
+So the execution path is the *smallest* gap — allbright's backrun
+machinery is literally the zero-block copy mechanism with an arb-profit
+gate instead of a wallet signal. The heavy missing pieces are upstream
+(watchlist + scoring) and downstream (positions + exits). [assumption —
+architecture reading]
+
 ## Missing gaps for a wallet-copying lane
 
 1. **No wallet registry or scorer.** Nothing stores tracked wallets,
