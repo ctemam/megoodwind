@@ -4,8 +4,6 @@ name = "BSC"
 rpc_https = "${BSC_RPC_URL}"
 # Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
 rpc_https_pool = [
-    "https://bnb.api.onfinality.io/public",
-    "https://bsc.drpc.org",
     "https://bsc-mainnet.public.blastapi.io",
     "https://rpc-bsc.48.club",
     "https://0.48.club",
@@ -29,8 +27,6 @@ rpc_https_pool = [
     "https://bsc-dataseed1.ninicoin.io",
     "https://bsc-dataseed3.defibit.io",
     "https://bsc-dataseed2.defibit.io",
-    "https://rpc.swiftnodes.io/rpc/bsc",
-    "https://xrpc.cl/bsc",
 ]
 rpc_wss = "${BSC_WSS_URL}"
 # WSS pool for mempool stream — cycled on failure/backpressure

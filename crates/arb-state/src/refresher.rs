@@ -313,6 +313,10 @@ pub struct StateRefresher {
 
 impl StateRefresher {
     const CHUNK_SIZE: usize = 50;
+    /// Reader batch size — the bespoke contract eats a whole pool class in
+    /// one eth_call, so chunks can far exceed the Multicall3 Call3 cap.
+    /// Public endpoints answer a ~128-pool read in a single RTT.
+    const READER_CHUNK_SIZE: usize = 128;
     /// Max Call3s per aggregate3 round-trip — public nodes reject oversized
     /// eth_calls ("request is too complex") well before the gas cap. 60 calls
     /// = 20 V2 or 12 V3 pools per round-trip.
@@ -937,22 +941,22 @@ impl StateRefresher {
             }};
         }
 
-        let v2_chunks: Vec<_> = v2_addrs.chunks(Self::CHUNK_SIZE)
+        let v2_chunks: Vec<_> = v2_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let v3_chunks: Vec<_> = v3_addrs.chunks(Self::CHUNK_SIZE)
+        let v3_chunks: Vec<_> = v3_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let algebra_chunks: Vec<_> = algebra_addrs.chunks(Self::CHUNK_SIZE)
+        let algebra_chunks: Vec<_> = algebra_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let aero_chunks: Vec<_> = aero_addrs.chunks(Self::CHUNK_SIZE)
+        let aero_chunks: Vec<_> = aero_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let pcs_chunks: Vec<_> = pcs_stable_addrs.chunks(Self::CHUNK_SIZE)
+        let pcs_chunks: Vec<_> = pcs_stable_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let dodo_chunks: Vec<_> = dodo_addrs.chunks(Self::CHUNK_SIZE)
+        let dodo_chunks: Vec<_> = dodo_addrs.chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
 
