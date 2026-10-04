@@ -19,7 +19,7 @@ trader_rpc = ""
 # The deployed arb contract must expose executeV4Arbitrage on this chain.
 # v4_pool_manager = "0x000000000004444c5dc75cB358380D2e3dE08A90"
 arb_contract = "0x70DD16A8dA1639fc734d3AA0765436D8dBaeccC3"
-state_reader = "0x0000000000000000000000000000000000000000"
+state_reader = "0xec3d37cd945bf2a6a6d2712e56c688a08273e7a2"
 block_time_ms = 12000
 scan_budget_ms = 2500
 call_deadline_ms = 1500

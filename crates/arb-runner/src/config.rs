@@ -345,5 +345,34 @@ fn expand_env_vars(input: &str) -> String {
         result = result.replace(&format!("${{{key}}}"), &value);
         result = result.replace(&format!("${key}"), &value);
     }
-    result
+    // Strip placeholders whose env vars are unset — a literal "${VAR}" string
+    // must not survive into parsed fields (e.g. trader_rpc would fail URL
+    // parsing with "relative URL without a base").
+    let bytes = result.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                if let Some(rel) = result[i + 2..].find('}') {
+                    i += rel + 3;
+                    continue;
+                }
+            } else if i + 1 < bytes.len()
+                && (bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_')
+            {
+                let mut j = i + 1;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+                {
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or(result)
 }

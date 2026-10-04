@@ -26,7 +26,7 @@ rpc_https_pool = [
     "https://bsc-dataseed3.defibit.io",
     "https://bsc-dataseed2.defibit.io",
 ]
-rpc_wss = "${BSC_WSS_URL}"
+rpc_wss = "wss://bsc-rpc.publicnode.com"
 # Read deadline per multicall batch. Public BSC endpoints regularly exceed
 # the 400ms default under concurrent batch load, causing timeout+retry churn
 # (measured: ~3.2k timeouts/hr, rpc phase ~1.6s vs 800ms block budget).
@@ -51,8 +51,12 @@ trader_rpc = "${BSC_TRADER_NODE}"   # Warp-enabled, $0.15/call — ONLY for tx s
 # 0321B32E7A0302114058b (different singleton — swap/settle split with its
 # Vault, NOT UniV4-monolithic, so do not point the contract's interface at it).
 v4_pool_manager = "0x28e2Ea090877bF75740558f6BFB36A5fFee9e9dF"
-arb_contract = "${BSC_ARB_CONTRACT}"
-state_reader = "${BSC_STATE_READER}"
+# BscFlashArb deployed 2026-10-04 via sponsored CREATE2 UserOp (tx
+# 0x69e1a01e83c430580e6b7e1accdbdc553bb52089c5426a07936f702f41633f28).
+arb_contract = "0x2db918f9c7020950e5a7d9948b489b5322700626"
+# StateReader deployed 2026-10-04 via sponsored CREATE2 UserOp on all three
+# chains (same salt → same address).
+state_reader = "0xec3d37cd945bf2a6a6d2712e56c688a08273e7a2"
 block_time_ms = 3000
 scan_budget_ms = 800
 
