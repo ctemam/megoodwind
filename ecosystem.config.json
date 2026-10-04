@@ -9,19 +9,35 @@
       "watch": false,
       "max_memory_restart": "2G",
       "env": {
-        "METRICS_PORT": "9100"
+        "METRICS_PORT": "9100",
+        "BSC_WSS_URL": "wss://bsc-rpc.publicnode.com",
+        "BSC_ARB_CONTRACT": "0x279b1b7ec514de1bc5f5d6332fe14c20706a8db1",
+        "BSC_STATE_READER": "0x0000000000000000000000000000000000000000",
+        "BSC_TRADER_NODE": "https://bsc-rpc.publicnode.com"
       }
     },
     {
-      "name": "allbrightA-base",
+      "name": "allbrightA-eth",
       "script": "./target/release/arb-runner",
-      "args": "config/base.toml",
+      "args": "config/ethereum.toml",
       "instances": 1,
       "autorestart": true,
       "watch": false,
       "max_memory_restart": "2G",
       "env": {
-        "METRICS_PORT": "9101"
+        "METRICS_PORT": "9102"
+      }
+    },
+    {
+      "name": "allbrightA-polygon",
+      "script": "./target/release/arb-runner",
+      "args": "config/polygon.toml",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "2G",
+      "env": {
+        "METRICS_PORT": "9103"
       }
     },
     {
