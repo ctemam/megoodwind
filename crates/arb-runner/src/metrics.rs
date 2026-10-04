@@ -142,10 +142,13 @@ lazy_static::lazy_static! {
     ).unwrap();
 
     /// Cumulative projected net USD of gate-accepted candidates — the
-    /// pipeline's projected P&L before execution, resting + backrun.
+    /// pipeline's projected P&L before execution. Resting accepts add their
+    /// own value; backrun accepts add the BEST path per victim event (all
+    /// paths for one victim extract the same dislocation — summing would
+    /// multiply-count a single opportunity).
     pub static ref ACCEPTED_PROFIT_USD: Counter = register_counter!(
         "arb_accepted_profit_usd_total",
-        "Cumulative projected net USD of profit-gate accepted candidates"
+        "Cumulative projected net USD of accepted candidates (per-victim max)"
     ).unwrap();
 
     /// 1 when the runner is in dry-run (measure mode: full pipeline, no

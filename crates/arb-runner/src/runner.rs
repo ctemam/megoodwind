@@ -2154,6 +2154,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 // decay, breaker revert history) before we spend the
                 // re-verify RPC call and a submission on any of them.
                 let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
+                // Projected USD counts once per victim event — every accepted
+                // path for one victim extracts the same dislocation, so the
+                // counter takes the best candidate, not the sum.
+                let mut best_accepted_usd = 0.0f64;
                 for &(pidx, _) in screened.iter().take(20) {
                     let path = &paths[pidx];
                     if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
@@ -2190,11 +2194,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                         let decision = profit_gate.should_submit(&sim, path);
                         if decision.accept {
                             metrics::GATE_ACCEPTS.inc();
-                            metrics::ACCEPTED_PROFIT_USD.inc_by(decision.effective_profit_usd);
+                            best_accepted_usd = best_accepted_usd.max(decision.effective_profit_usd);
                             metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
                             info!(
                                 path_id = path.id,
                                 effective_usd = decision.effective_profit_usd,
+                                victim_usd,
                                 "Backrun candidate passed profit gate"
                             );
                         }
@@ -2260,6 +2265,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 decision.effective_profit_usd, score));
                         }
                     }
+                }
+                if best_accepted_usd > 0.0 {
+                    metrics::ACCEPTED_PROFIT_USD.inc_by(best_accepted_usd);
                 }
                 // Highest route_score first; stale-victim and revert-prone
                 // candidates sink automatically.
