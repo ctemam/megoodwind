@@ -2,6 +2,13 @@
 
 Date: 2026-10-04. Research only — no code changes.
 
+**Standing constraint (Commander): stay away from front-running.** The
+copy lane must use backrun/after-the-signal semantics only: our tx lands
+*after* the leader's (same-block `[leader_tx, ours]` ordered bundle or
+next block). No same-block precedence over the leader, no sandwiching —
+it degrades the leader's fill (and the signal we're following) and is the
+hostile-MEV behavior the venue/block builder ecosystem penalizes.
+
 ## How the top systems work (industry pass)
 
 The leading smart-money / copy-trading products share a 7-stage pipeline:
