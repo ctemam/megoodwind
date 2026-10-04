@@ -921,6 +921,44 @@ fn spawn_settlement(
         record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids);
     });
 }
+/// Feed one gate-accepted candidate into the opportunities log so the
+/// dashboard's Opportunities page shows engine detects, not only leader
+/// evidence. `kind` distinguishes classic resting-state accepts from
+/// mempool backruns; `ref_tx` is the victim hash or the block tag.
+fn log_accepted_opportunity(
+    chain: &str,
+    kind: &str,
+    source_wallet: &str,
+    ref_tx: &str,
+    path: &PathTemplate,
+    effective_usd: f64,
+    profit_bps: u32,
+    ready: bool,
+) {
+    use arb_core::opportunity::{ActionableOpportunity, ExecutionStatus, SimulationStatus};
+    let tx_short: String = ref_tx.chars().take(18).collect();
+    let mut o = ActionableOpportunity::new(
+        chain,
+        kind,
+        source_wallet,
+        &format!("{}-{}", path.id, tx_short),
+        path.hops.iter().map(|h| format!("{}", h.pool)).collect(),
+    );
+    o.victim_tx = ref_tx.to_string();
+    o.token_in = format!("{}", path.flash_token);
+    o.token_out = o.token_in.clone();
+    o.allbright_net_usd = effective_usd;
+    o.profit_bps = profit_bps as f64;
+    o.simulation_status = SimulationStatus::Pass;
+    if ready {
+        o.execution_status = ExecutionStatus::Ready;
+    }
+    let dir = format!("data/leaders/{chain}");
+    if let Err(e) = o.append_jsonl(&dir) {
+        debug!(error = %e, "opportunity feed append failed");
+    }
+}
+
 fn write_status_json(
     chain_name: &str,
     started: &chrono::DateTime<chrono::Utc>,
@@ -1755,6 +1793,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     .iter()
                     .map(|h| format!("{}", h.pool))
                     .collect();
+                log_accepted_opportunity(
+                    chain_label, "classic", "classic_engine",
+                    &format!("blk{block_number}"), &paths[best_path_idx],
+                    effective_usd, best.profit_bps, !dry_run && !executor_broken);
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
                     gross_profit = %best.gross_profit, flash_amount = %best.flash_amount,
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
@@ -2224,6 +2266,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     continue;
                                 }
                             }
+                        }
+                        if decision.accept {
+                            log_accepted_opportunity(
+                                chain_label, "backrun",
+                                &format!("{}", pending.from),
+                                &format!("{}", pending.tx_hash),
+                                path, decision.effective_profit_usd,
+                                sim.profit_bps, !dry_run);
                         }
                         if decision.accept && !dry_run {
                             // reproduction_precision: share of OUR hops that

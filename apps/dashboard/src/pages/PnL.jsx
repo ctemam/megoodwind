@@ -81,12 +81,7 @@ export default function PnL() {
           <tr className="total"><td>Total</td><td /><td /><td /><td className={total >= 0 ? 'pos' : 'neg'}>{fmt(total, currency, prices)}</td></tr>
         </tbody>
       </table>
-      <div className="dim" style={{ marginTop: 10, fontSize: 12 }}>
-        {win === 'all'
-          ? 'Net = cumulative effective profit of gate-passed paths minus metered spend.'
-          : `Net = profit minus metered spend over the last ${WINDOWS.find(([k]) => k === win)?.[1] || win} (resets excluded).`}
-        {' '}Gas is surfaced in wei (per-chain ETH/BNB); dry-run mode incurs no gas.
-      </div>
+
     </div>
   )
 }

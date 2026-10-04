@@ -71,24 +71,24 @@ function ClassicPanel() {
         <select value={chain} onChange={e => setChain(e.target.value)}>
           {Object.keys(all?.chains || { bsc: 1 }).map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
         </select>
-        <span className={`tag ${live ? 'live' : ''}`}>
+        <span className={`tag ${live ? 'live' : ''}`}
+          title={dryRun === 1 ? 'Measure mode: full pipeline runs, submissions off until a wallet key is provisioned' : 'Live submission enabled'}>
           {dryRun == null ? 'MODE —' : live ? 'LIVE' : 'DRY RUN'}
         </span>
         <span className="dim">
           {cnt(m?.arb_pool_count)} pools · block {cnt(m?.arb_current_block)}
-          {!live && ' · measure mode: full pipeline, submissions off until a wallet key is provisioned'}
         </span>
       </form>
 
       <div className="grid cards">
-        <Card k="Opportunities detected" v={cnt(detected)} s="resting + backrun candidates" />
-        <Card k="Evaluated & accepted" v={cnt(accepted)} s="passed profit gate" />
-        <Card k="Executed" v={cnt(executed)} s="submitted on-chain" />
-        <Card k="Settled" v={cnt(settled)} s="confirmed outcome" />
+        <Card k="Opportunities detected" v={cnt(detected)} s="resting + backrun" />
+        <Card k="Evaluated & accepted" v={cnt(accepted)} s="profit gate" />
+        <Card k="Executed" v={cnt(executed)} s="submitted" />
+        <Card k="Settled" v={cnt(settled)} s="on-chain outcome" />
         <Card k="Projected P&L" v={usd(projected, currency, prices)}
-          cls={projected > 0 ? 'pos' : ''} s="accepted candidates, pre-execution" />
+          cls={projected > 0 ? 'pos' : ''} s="gate estimate" />
         <Card k="Realized P&L" v={usd(realized, currency, prices)}
-          cls={realized > 0 ? 'pos' : realized < 0 ? 'neg' : ''} s="net after gas, on-chain" />
+          cls={realized > 0 ? 'pos' : realized < 0 ? 'neg' : ''} s="net after gas" />
       </div>
 
       <div className="panel">
@@ -109,11 +109,7 @@ function ClassicPanel() {
         </table>
       </div>
 
-      <div className="dim" style={{ fontSize: 11.5 }}>
-        Live Prometheus counters only. Projected P&L is the profit gate's own
-        estimate of accepted candidates; Realized P&L is measured on-chain.
-        {dryRun === 1 && ' Executed/landed/settled stay 0 in dry-run.'}
-      </div>
+
     </div>
   )
 }

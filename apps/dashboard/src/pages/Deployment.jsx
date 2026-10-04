@@ -94,7 +94,7 @@ export default function Deployment() {
         {!live && (
           <form className="inline" onSubmit={e => { e.preventDefault(); verify() }}>
             <span className="dim" style={{ fontSize: 12 }}>
-              {sim?.verified ? `Verified ${new Date(sim.verifiedAt).toLocaleString()}` : 'Review the metrics, then attest simulation quality (SIMULATION_VERIFIED).'}
+              {sim?.verified ? `Verified ${new Date(sim.verifiedAt).toLocaleDateString()}` : 'Attest simulation quality'}
             </span>
             {!sim?.verified && <button className="primary" disabled={busy || !simTotal}>Verify simulation</button>}
           </form>
@@ -105,12 +105,12 @@ export default function Deployment() {
       <div className="panel">
         <h3>3 · Go live</h3>
         {live ? (
-          <div className="dim" style={{ fontSize: 13 }}>Live mode active — this stage is closed. Simulation was auto-killed when the runners restarted.</div>
+          <div className="dim" style={{ fontSize: 13 }}>Live — stage closed.</div>
         ) : (
           <>
-            <div className="dim" style={{ fontSize: 13, marginBottom: 10 }}>
-              Flips <code>dry_run=false</code> + <code>LIVE_COMMANDER_APPROVED=true</code> and restarts both runners —
-              <b> the restart auto-kills simulation</b>. Real transactions begin immediately.
+            <div className="dim" style={{ fontSize: 13, marginBottom: 10 }}
+              title="Flips dry_run=false + LIVE_COMMANDER_APPROVED=true and restarts both runners; restart auto-kills simulation">
+              Flips live flag and restarts runners — real transactions begin immediately.
             </div>
             {!preflightOk && <div className="warn-box">Preflight has failing checks — go-live stays disabled.</div>}
             {!sim?.verified && preflightOk && <div className="warn-box">Verify simulation (step 2) to unlock go-live.</div>}

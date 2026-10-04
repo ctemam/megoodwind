@@ -47,16 +47,16 @@ export default function Opportunities() {
   return (
     <div className="grid">
       <div className="grid cards">
-        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s">sim-verified, no rejection</div></div>
-        <div className="card"><div className="k">Decoded routes</div><div className="v">{funnel.decoded ?? D}</div><div className="s">leader tx → route + victim</div></div>
-        <div className="card"><div className="k">Replay positive</div><div className="v">{funnel.replay_positive ?? D}</div><div className="s">of {funnel.replay_attempts ?? D} attempts</div></div>
-        <div className="card"><div className="k">Matched live</div><div className="v">{funnel.matched_live ?? D}</div><div className="s">victim touched a verified route</div></div>
+        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s">sim-verified</div></div>
+        <div className="card"><div className="k">Decoded routes</div><div className="v">{funnel.decoded ?? D}</div><div className="s">leader routes</div></div>
+        <div className="card"><div className="k">Replay positive</div><div className="v">{funnel.replay_positive ?? D}</div><div className="s">of {funnel.replay_attempts ?? D}</div></div>
+        <div className="card"><div className="k">Matched live</div><div className="v">{funnel.matched_live ?? D}</div><div className="s">verified route hit</div></div>
         <div className="card"><div className="k">Submitted</div><div className="v">{funnel.submitted ?? D}</div><div className="s">landed {funnel.landed ?? D} · settled {funnel.settled ?? D}</div></div>
       </div>
 
       <div className="panel">
         <div className="row" style={{ marginBottom: 8 }}>
-          <h3 style={{ margin: 0 }}>Actionable opportunities</h3>
+          <h3 style={{ margin: 0 }} title="Actionable only when our simulator reproduces positive net on live state — leader P&L is evidence, never a signal">Actionable opportunities</h3>
           <div className="tabs">
             {chains.map(c => (
               <button key={c} className={`tab${c === chain ? ' on' : ''}`} onClick={() => setChain(c)}>{c.toUpperCase()}</button>
@@ -65,9 +65,6 @@ export default function Opportunities() {
               {showRejected ? 'all' : 'pass only'}
             </button>
           </div>
-        </div>
-        <div className="muted" style={{ marginBottom: 8 }}>
-          An opportunity is actionable only when our simulator reproduces positive net on live state — leader P&amp;L alone is evidence, never a signal.
         </div>
         <table className="tbl">
           <thead><tr>
@@ -78,7 +75,7 @@ export default function Opportunities() {
           </tr></thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan="12" className="muted">No {showRejected ? '' : 'passing '}opportunity records — run leader_scan + profit_profile to populate.</td></tr>
+              <tr><td colSpan="12" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
             )}
             {sorted.map((o, i) => (
               <tr key={o.opportunity_id}>

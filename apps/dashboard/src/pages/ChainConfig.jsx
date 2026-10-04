@@ -178,9 +178,7 @@ export default function ChainConfig() {
             </table>
           </Collap>
         )}
-        <div className="dim" style={{ fontSize: 12, marginTop: 8 }}>
-          Unhealthy endpoints are auto-benched by the runner's 60s circuit breaker — config is never silently edited.
-        </div>
+
       </div>
 
       {/* ── Token batch optimization — staged admission, 25–50 per chain,
@@ -213,7 +211,7 @@ export default function ChainConfig() {
             <div style={{ fontSize: 12 }}>
               <span className="dim">Zero-hit: </span>
               {zeroHit.map(sym => <span key={sym} style={{ marginRight: 12, color: 'var(--warn)' }}>{sym}</span>)}
-              <span className="dim"> — review for removal; rank by net profit per scan capacity, not raw path count</span>
+              <span className="dim" title="Review for removal — rank by net profit per scan capacity, not raw path count"> — review</span>
             </div>
           )}
         </div>

@@ -91,28 +91,28 @@ export default function WalletIntelligence() {
       <div className="grid cards">
         <div className="card"><div className="k">Wallets tracked</div>
           <div className="v">{cd?.rows?.length ?? D}</div>
-          <div className="s">{cd?.scanned_wallets ?? 0} scored · {cd?.strategies ?? 0} strategies</div></div>
+          <div className="s">{cd?.scanned_wallets ?? 0} scored</div></div>
         <div className="card"><div className="k">Sim-verified</div>
           <div className="v pos">{cd?.rows?.filter(r => r.sim_verified).length ?? D}</div>
-          <div className="s">shadow sim reproduced profit</div></div>
-        <div className="card"><div className="k">Sim funnel — last run</div>
+          <div className="s">reproduced profit</div></div>
+        <div className="card"><div className="k">Sim funnel</div>
           <div className="v">{cd?.verify ? `${cd.verify.verified}/${cd.verify.evaluated}` : D}</div>
           <div className="s">{cd?.verify
-            ? `verified @blk ${blk(cd.verify.block)} · cap $${cd.verify.cap_usd}`
-            : 'no sim run recorded'}</div></div>
+            ? `blk ${blk(cd.verify.block)}`
+            : D}</div></div>
         <div className="card"><div className="k">Bounded live</div>
           <div className="v">{states.bounded_live ?? 0}</div>
-          <div className="s">cap-gated strategies only</div></div>
+          <div className="s">cap-gated</div></div>
         <div className="card"><div className="k">Bait suspects</div>
           <div className="v">{cd?.counters?.bait_suspect ?? D}</div>
-          <div className="s">pools suppressed (L4)</div></div>
+          <div className="s">suppressed</div></div>
         <div className="card"><div className="k">Scan cursor</div>
           <div className="v" style={{ fontSize: 16 }}>{blk(cd?.cursor_block)}</div>
-          <div className="s">incremental block scan</div></div>
+          <div className="s">incremental</div></div>
       </div>
 
       <div className="panel">
-        <h3>Wallet Intelligence — {chain.toUpperCase()}</h3>
+        <h3 title="Figures measured from mined-block outcome attribution. Promotion is backend-governed — this page is read-only.">Wallet Intelligence — {chain.toUpperCase()}</h3>
         <form className="inline" onSubmit={e => e.preventDefault()}>
           <select value={chain} onChange={e => setChain(e.target.value)}>
             {Object.keys(data?.chains || { bsc: 1, base: 1 }).map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
@@ -186,12 +186,12 @@ export default function WalletIntelligence() {
                           <div><b style={{ color: 'var(--txt)' }}>Executor family</b> <span className="mono">{r.executor_family ?? D}</span></div>
                           <div><b style={{ color: 'var(--txt)' }}>Route pools</b> {r.route_pools.length ? r.route_pools.map(p => <div key={p} className="mono">{p}</div>) : D}</div>
                           <div><b style={{ color: 'var(--txt)' }}>Notional cap</b> {r.max_notional_usd ? `$${r.max_notional_usd}` : 'none — not live-approved'}</div>
-                          <div><b style={{ color: 'var(--txt)' }}>Sim verification</b> {r.sim_verified ? `verified · reproduces ${usd(r.verified_profit_usd)} gross` : 'not verified — discovery alone never executes'}</div>
+                          <div><b style={{ color: 'var(--txt)' }}>Sim verification</b> {r.sim_verified ? `verified · ${usd(r.verified_profit_usd)} gross` : 'not verified'}</div>
                           <div><b style={{ color: 'var(--txt)' }}>Evidence</b> {r.txs ?? D} txs · {r.trades ?? D} trades · {r.atomic_txs} atomic · {r.private_hits} private hits</div>
                           <div><b style={{ color: 'var(--txt)' }}>Pending-stream discovery</b> {r.discovered_pending ? 'yes' : 'no'}</div>
                           <div><b style={{ color: 'var(--txt)' }}>Best tx</b> {r.best_tx ? <span className="mono">{r.best_tx}</span> : D}</div>
                           <div><b style={{ color: 'var(--txt)' }}>Observations</b> {obs ? `${obs.count} recorded` : 'none yet'}</div>
-                          <div><b style={{ color: 'var(--txt)' }}>Promotion path</b> observe → replay (evidence) → shadow (full route coverage) → bounded_live (sim-verified, capped)</div>
+                          <div><b style={{ color: 'var(--txt)' }}>Promotion path</b> observe → replay → shadow → bounded_live</div>
                         </div>
                         {obs?.tail?.length > 0 && (
                           <div style={{ marginTop: 8 }}>
@@ -221,10 +221,7 @@ export default function WalletIntelligence() {
             </button>
           </div>
         )}
-        <div className="dim" style={{ fontSize: 11.5, marginTop: 8 }}>
-          All figures are measured from mined-block outcome attribution — never projected.
-          State promotion is backend-governed: this page is read-only by design.
-        </div>
+
       </div>
     </div>
   )
