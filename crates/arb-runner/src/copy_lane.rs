@@ -49,6 +49,8 @@ sol! {
     ) external;
     function approve(address spender, uint256 amount) external returns (bool);
     function balanceOf(address owner) external view returns (uint256);
+    function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+    function token0() external view returns (address);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +109,17 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// One constant-product hop. None on zero reserves or zero output.
+fn eval_v2_step(amt: U256, r_in: U256, r_out: U256, fee_bps: u32) -> Option<U256> {
+    if r_in.is_zero() || r_out.is_zero() {
+        return None;
+    }
+    let fee = U256::from(fee_bps.min(9_999) as u64);
+    let amt_fee = amt * (U256::from(10_000u64) - fee);
+    let out = amt_fee * r_out / (r_in * U256::from(10_000u64) + amt_fee);
+    (!out.is_zero()).then_some(out)
 }
 
 impl CopyLane {
@@ -236,10 +249,15 @@ impl CopyLane {
             return;
         }
 
-        // Simulate the leader's token path over tracked V2 pools at resting
-        // (pre-leader) state — any hop we cannot price yields no bounded
-        // minOut, so we skip rather than ship a blind copy.
-        let Some(sim_out) = self.sim_v2_path(&d.path, &d.pools_touched, amount_in) else {
+        // Pick the concrete pool per hop first — the same list is reused for
+        // the stale sim here and the fresh on-chain re-read in spawn_submit.
+        let Some(hops) = self.pick_hops(&d.path, &d.pools_touched) else {
+            self.reject("sim_unsupported");
+            return;
+        };
+        // Resting-state sim for the record — any hop we cannot price yields
+        // no bounded minOut, so we skip rather than ship a blind copy.
+        let Some(sim_out) = self.eval_hops(&d.path, &hops, amount_in) else {
             self.reject("sim_unsupported");
             return;
         };
@@ -266,33 +284,47 @@ impl CopyLane {
                     self.reject("wallet_not_live");
                     return;
                 }
-                self.spawn_submit(pending.clone(), d.path.clone(), amount_in, min_out);
+                self.spawn_submit(pending.clone(), d.path.clone(), amount_in, sim_out, hops);
             }
             CopyMode::Off => {}
         }
     }
 
-    /// Constant-product walk of `path` over tracked V2 pools. Prefers pools
-    /// the leader actually touched, then any tracked pool with live state.
-    /// Returns the final output or None when a hop is unpriceable.
-    fn sim_v2_path(
+    /// Pick the best tracked V2 pool per hop. Prefers pools the leader
+    /// actually touched, then any tracked pool. `fee_bps` is kept so the
+    /// fresh re-read can re-sim without the store.
+    fn pick_hops(
         &self,
         path: &[Address],
         pools_touched: &[Address],
-        amount_in: U256,
-    ) -> Option<U256> {
+    ) -> Option<Vec<(Address, u32)>> {
         let touched: HashSet<Address> = pools_touched.iter().copied().collect();
-        let mut amt = amount_in;
+        let mut hops = Vec::with_capacity(path.len().saturating_sub(1));
         for pair in path.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let key = if a < b { (a, b) } else { (b, a) };
             let candidates = self.pair_to_pools.get(&key)?;
-            // Best candidate: touched + live state first, then any tracked.
             let pool = candidates
                 .iter()
                 .filter(|(p, _)| self.store.get(p).is_some())
                 .max_by_key(|(p, _)| touched.contains(p) as u8);
-            let (pool_addr, _fee_bps) = pool.copied()?;
+            hops.push(pool.copied()?);
+        }
+        Some(hops)
+    }
+
+    /// Constant-product walk of `path` over the picked hops using PoolStore
+    /// state. Returns None when a hop has no V2 state or zero reserves.
+    fn eval_hops(
+        &self,
+        path: &[Address],
+        hops: &[(Address, u32)],
+        amount_in: U256,
+    ) -> Option<U256> {
+        let mut amt = amount_in;
+        for (i, pair) in path.windows(2).enumerate() {
+            let (a, _b) = (pair[0], pair[1]);
+            let (pool_addr, _) = hops[i];
             let state = self.store.get(&pool_addr)?;
             let PoolState::V2(v2) = state else { return None };
             let (r_in, r_out) = if v2.token0 == a {
@@ -300,12 +332,7 @@ impl CopyLane {
             } else {
                 (v2.reserve1, v2.reserve0)
             };
-            if r_in.is_zero() || r_out.is_zero() {
-                return None;
-            }
-            let fee = U256::from(v2.fee_bps.min(9_999) as u64);
-            let amt_fee = amt * (U256::from(10_000u64) - fee);
-            amt = amt_fee * r_out / (r_in * U256::from(10_000u64) + amt_fee);
+            amt = eval_v2_step(amt, r_in, r_out, v2.fee_bps)?;
         }
         Some(amt)
     }
@@ -315,7 +342,8 @@ impl CopyLane {
         pending: PendingSwap,
         path: Vec<Address>,
         amount_in: U256,
-        min_out: U256,
+        stale_out: U256,
+        hops: Vec<(Address, u32)>,
     ) {
         let Some(account) = self.account else {
             self.reject("no_smart_account");
@@ -327,7 +355,9 @@ impl CopyLane {
         let chain = self.chain.clone();
         let chain_id = self.chain_id;
         let deadline_secs = self.deadline_secs;
+        let slippage_bps = self.slippage_bps;
         let data_dir = self.data_dir.clone();
+        let store = self.store.clone();
         let wallet_hex = format!("{:#x}", pending.from);
         let token_in = path[0];
         let router_addr = pending.to;
@@ -355,6 +385,83 @@ impl CopyLane {
                         .inc();
                     return;
                 }
+            }
+
+            // Fresh-state re-sim: re-read reserves for every hop at submit
+            // time — store state can be a block+ stale, and the leader's own
+            // tx lands before ours. `min_out` tightens to the worse of the
+            // stale and fresh sims; a hop whose fresh read fails falls back
+            // to stored reserves rather than shipping blind.
+            let mut read_futs = Vec::with_capacity(hops.len());
+            for (pool_addr, _) in &hops {
+                let cd = getReservesCall {}.abi_encode();
+                read_futs.push(endpoint.eth_call_timed(*pool_addr, cd.into()));
+            }
+            let reads = futures::future::join_all(read_futs).await;
+            let mut amt = amount_in;
+            let mut fallback_hops = 0usize;
+            let mut sim_ok = true;
+            for (i, pair) in path.windows(2).enumerate() {
+                let (a, _b) = (pair[0], pair[1]);
+                let (pool_addr, fee_bps) = hops[i];
+                let fresh = reads[i].as_ref().ok().and_then(|(ret, _)| {
+                    if ret.len() >= 64 {
+                        Some((
+                            U256::from_be_slice(&ret[..32]),
+                            U256::from_be_slice(&ret[32..64]),
+                        ))
+                    } else {
+                        None
+                    }
+                });
+                let (r0, r1, token0) = match (fresh, store.get(&pool_addr)) {
+                    (Some((r0, r1)), Some(PoolState::V2(v2))) => (r0, r1, v2.token0),
+                    (Some((r0, r1)), _) => (r0, r1, a),
+                    (None, Some(PoolState::V2(v2))) => {
+                        fallback_hops += 1;
+                        (v2.reserve0, v2.reserve1, v2.token0)
+                    }
+                    _ => {
+                        sim_ok = false;
+                        break;
+                    }
+                };
+                let (r_in, r_out) = if token0 == a { (r0, r1) } else { (r1, r0) };
+                match eval_v2_step(amt, r_in, r_out, fee_bps) {
+                    Some(o) => amt = o,
+                    None => {
+                        sim_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !sim_ok || amt.is_zero() {
+                metrics::COPY_REJECTS
+                    .with_label_values(&[&chain, "fresh_sim_fail"])
+                    .inc();
+                metrics::COPY_FRESH
+                    .with_label_values(&[&chain, "fail"])
+                    .inc();
+                return;
+            }
+            // Tighten min_out to the worse sim — state that moved since
+            // detection lowers the bound instead of shipping a stale quote.
+            let best_out = amt.min(stale_out);
+            let min_out = best_out * U256::from(10_000 - slippage_bps) / U256::from(10_000);
+            if min_out.is_zero() {
+                metrics::COPY_REJECTS
+                    .with_label_values(&[&chain, "fresh_sim_zero"])
+                    .inc();
+                return;
+            }
+            if fallback_hops > 0 {
+                metrics::COPY_FRESH
+                    .with_label_values(&[&chain, "fallback"])
+                    .inc();
+            } else {
+                metrics::COPY_FRESH
+                    .with_label_values(&[&chain, "ok"])
+                    .inc();
             }
 
             // One-time approval per (token, router) — submits its own
