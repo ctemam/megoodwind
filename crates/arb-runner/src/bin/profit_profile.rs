@@ -509,9 +509,10 @@ async fn main() -> Result<()> {
                             || o.rejection_reason == "route_partially_covered" {
                             o.rejection_reason.clear();
                         }
+                        // Replay-positive is evidence for scoring, never a
+                        // live-ready opportunity — only the runner's
+                        // post-re-check path may stamp execution_status=Ready.
                         if o.is_actionable() {
-                            o.execution_status =
-                                arb_core::opportunity::ExecutionStatus::Ready;
                             arb_leaders::OPPORTUNITY_TOTAL
                                 .with_label_values(&[cfg.chain.name.as_str(), "actionable"])
                                 .inc();

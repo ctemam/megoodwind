@@ -56,6 +56,19 @@ function ClassicPanel() {
     ]
   }, [m])
 
+  // Backrun kill-stage diagnostic: which stage ends each candidate.
+  const killStages = useMemo(() => {
+    if (!m) return []
+    const out = []
+    for (const [k, v] of Object.entries(m)) {
+      const g = k.match(/^arb_backrun_stage_total\{stage="(.+)"\}$/)
+      if (g) out.push([g[1].replaceAll('_', ' '), v])
+    }
+    const ORDER = ['recheck dead', 'exec probe dead', 'bundle fail',
+      'venue reject', 'venue error', 'venue accept']
+    return out.sort((a, b) => ORDER.indexOf(a[0]) - ORDER.indexOf(b[0]))
+  }, [m])
+
   const detected = stages[0]?.[1]
   const accepted = stages[1]?.[1]
   const executed = stages[2]?.[1]
@@ -105,6 +118,19 @@ function ClassicPanel() {
                 </tr>
               )
             })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="panel">
+        <h3 title="where each backrun candidate dies after the gate accepts it">Backrun kill stages — {chain.toUpperCase()}</h3>
+        <table>
+          <tbody>
+            {killStages.length === 0
+              ? <tr><td className="dim">No terminal events yet.</td></tr>
+              : killStages.map(([name, v]) => (
+                <tr key={name}><td>{name}</td><td>{cnt(v)}</td></tr>
+              ))}
           </tbody>
         </table>
       </div>

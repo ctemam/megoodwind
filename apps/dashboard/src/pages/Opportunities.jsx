@@ -42,12 +42,12 @@ export default function Opportunities() {
   }, [cd, showRejected])
   const [sorted, th] = useSort(rows, ['allbright_net_usd', -1])
   const funnel = cd?.funnel || {}
-  const actionable = rows.filter(r => r.simulation_status === 'pass' && !r.rejection_reason)
+  const actionable = rows.filter(r => r.execution_status === 'ready')
 
   return (
     <div className="grid">
       <div className="grid cards">
-        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s">sim-verified</div></div>
+        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s" title="survived the runner's real-state re-check">live-verified</div></div>
         <div className="card"><div className="k">Decoded routes</div><div className="v">{funnel.decoded ?? D}</div><div className="s">leader routes</div></div>
         <div className="card"><div className="k">Replay positive</div><div className="v">{funnel.replay_positive ?? D}</div><div className="s">of {funnel.replay_attempts ?? D}</div></div>
         <div className="card"><div className="k">Matched live</div><div className="v">{funnel.matched_live ?? D}</div><div className="s">verified route hit</div></div>

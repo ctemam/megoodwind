@@ -182,6 +182,16 @@ lazy_static::lazy_static! {
         "Backrun bundles submitted"
     ).unwrap();
 
+    /// Per-stage drop accounting for the backrun pipeline — the diagnostic
+    /// that answers "which stage killed each opportunity":
+    /// candidates -> gate_accepted -> recheck_dead | bundle_fail |
+    /// bundle_built -> submitted (see SUBMIT_LANDED/SETTLEMENTS downstream).
+    pub static ref BACKRUN_STAGES: CounterVec = register_counter_vec!(
+        "arb_backrun_stage_total",
+        "Backrun candidates per terminal/pipeline stage",
+        &["stage"]
+    ).unwrap();
+
     /// Settlement feedback: submissions tracked to an on-chain outcome,
     /// labeled by realized result (settled/revert/dropped).
     pub static ref SETTLEMENTS: CounterVec = register_counter_vec!(

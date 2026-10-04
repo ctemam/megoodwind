@@ -2279,14 +2279,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                             }
                         }
-                        if decision.accept {
-                            log_accepted_opportunity(
-                                chain_label, "backrun",
-                                &format!("{}", pending.from),
-                                &format!("{}", pending.tx_hash),
-                                path, decision.effective_profit_usd,
-                                sim.profit_bps, !dry_run);
-                        }
                         if decision.accept && !dry_run {
                             // reproduction_precision: share of OUR hops that
                             // sit inside a matched leader route's pool set —
@@ -2403,6 +2395,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 match verified {
                                     Some((_, reprofit)) if !reprofit.is_zero() => {}
                                     _ => {
+                                        metrics::BACKRUN_STAGES
+                                            .with_label_values(&["recheck_dead"])
+                                            .inc();
                                         info!(path_id = path.id,
                                             victim = %pending.tx_hash,
                                             "Backrun edge gone on re-check");
@@ -2419,6 +2414,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
                                 "Backrun candidate found"
                             );
+                            // Feed only re-verified candidates: gate accepts that
+                            // die at the re-check are phantom edges, not
+                            // actionable opportunities.
+                            log_accepted_opportunity(
+                                chain_label, "backrun",
+                                &format!("{}", pending.from),
+                                &format!("{}", pending.tx_hash),
+                                path, _effective_usd,
+                                sim.profit_bps, !dry_run);
                             metrics::BACKRUN_SUBMITTED.inc();
 
                             // Build a true [victim, ours] ordered bundle: the
@@ -2484,6 +2488,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                             match endpoint.provider().call(probe).await {
                                                 Ok(_) => {}
                                                 Err(e) => {
+                                                    metrics::BACKRUN_STAGES
+                                                        .with_label_values(&["exec_probe_dead"])
+                                                        .inc();
                                                     if e.as_error_resp().is_some() {
                                                         let reason = classify_exec_probe_revert(
                                                             &format!("{e:?}")
@@ -2564,6 +2571,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 for r in sub_results {
                                     match r.result {
                                         Ok(res) if res.success => {
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_accept"])
+                                                .inc();
                                             debug!(venue = r.venue, "Backrun submitted");
                                             // Settlement: realized P&L feeds
                                             // the opportunity record +
@@ -2576,10 +2586,28 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                                 Some((path.id, cb_tx.clone(), block_number)),
                                             );
                                         }
-                                        Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
-                                        Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
+                                        Ok(res) => {
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_reject"])
+                                                .inc();
+                                            info!(venue = r.venue, error = ?res.error,
+                                                "Backrun rejected");
+                                        }
+                                        Err(e) => {
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_error"])
+                                                .inc();
+                                            warn!(venue = r.venue, error = %e,
+                                                "Backrun venue error");
+                                        }
                                     }
                                 }
+                            } else {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["bundle_fail"])
+                                    .inc();
+                                warn!(path_id = path.id,
+                                    "backrun bundle build failed");
                             }
                             break;
                         }
