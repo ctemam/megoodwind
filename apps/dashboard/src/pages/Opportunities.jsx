@@ -56,7 +56,7 @@ export default function Opportunities() {
 
       <div className="panel">
         <div className="row" style={{ marginBottom: 8 }}>
-          <h3 style={{ margin: 0 }} title="Actionable only when our simulator reproduces positive net on live state — leader P&L is evidence, never a signal">Actionable opportunities</h3>
+          <h3 style={{ margin: 0 }}>Actionable opportunities</h3>
           <div className="tabs">
             {chains.map(c => (
               <button key={c} className={`tab${c === chain ? ' on' : ''}`} onClick={() => setChain(c)}>{c.toUpperCase()}</button>
