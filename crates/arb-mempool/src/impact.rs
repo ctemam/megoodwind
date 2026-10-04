@@ -10,12 +10,15 @@ use crate::decoder::{DecodedSwap, DirectSwap};
 /// Project one swap hop's impact on a pool, returning the post-swap state and
 /// an estimate of the amount the hop outputs (the input to the victim's next
 /// hop). Exact for V2-family pools; a same-tick approximation for V3.
+/// Returns (post-swap state, amount_out, move_frac) — move_frac is the
+/// fractional price move this projection pushed, used downstream to
+/// penalize same-tick approximations that walked far (crossed real ticks).
 pub fn project_and_quote(
     pool_addr: Address,
     token_in: Address,
     amount_in: U256,
     store: &PoolStore,
-) -> Option<(PoolState, U256)> {
+) -> Option<(PoolState, U256, f64)> {
     let current = store.get(&pool_addr)?;
 
     match current {
@@ -38,7 +41,15 @@ pub fn project_and_quote(
             *reserve_in = *reserve_in + amount_in;
             *reserve_out = reserve_out.checked_sub(amount_out)?;
 
-            Some((PoolState::V2(state), amount_out))
+            let move_frac = if reserve_in.is_zero() {
+                0.0
+            } else {
+                // fractional reserve shift — exact for constant-product
+                amount_in.to_string().parse::<f64>().unwrap_or(0.0)
+                    / (reserve_in.to_string().parse::<f64>().unwrap_or(1.0)
+                        + amount_in.to_string().parse::<f64>().unwrap_or(0.0))
+            };
+            Some((PoolState::V2(state), amount_out, move_frac.min(1.0)))
         }
         PoolState::AeroV2(mut state) => {
             // For volatile Aerodrome pools, same constant-product math
@@ -57,7 +68,10 @@ pub fn project_and_quote(
                 *reserve_in = *reserve_in + amount_in;
                 *reserve_out = reserve_out.checked_sub(amount_out)?;
 
-                Some((PoolState::AeroV2(state), amount_out))
+                let ri = reserve_in.to_string().parse::<f64>().unwrap_or(0.0);
+                let ai = amount_in.to_string().parse::<f64>().unwrap_or(0.0);
+                let move_frac = if ri + ai > 0.0 { ai / (ri + ai) } else { 0.0 };
+                Some((PoolState::AeroV2(state), amount_out, move_frac.min(1.0)))
             } else {
                 // Stable pools: the AmmQuoter impl carries the exact
                 // _f/_d/_get_y invariant math (fee already deducted inside).
@@ -70,7 +84,7 @@ pub fn project_and_quote(
                 };
                 *reserve_in = *reserve_in + amount_in;
                 *reserve_out = reserve_out.checked_sub(amount_out)?;
-                Some((PoolState::AeroV2(state), amount_out))
+                Some((PoolState::AeroV2(state), amount_out, 0.0))
             }
         }
         PoolState::V3(mut state) => {
@@ -86,9 +100,10 @@ pub fn project_and_quote(
             let q96 = U256::from(1u128) << 96;
             let p0 = state.sqrt_price_x96;
             let amount_out;
+            let move_frac;
 
             if zero_for_one {
-                let product = amount_in * p0 / q96;
+                let product: U256 = amount_in * p0 / q96;
                 let denom: U256 = l + product;
                 if denom.is_zero() {
                     return None;
@@ -97,6 +112,10 @@ pub fn project_and_quote(
                 state.sqrt_price_x96 = p1;
                 // dy = L * (sqrtP0 - sqrtP1) / 2^96
                 amount_out = l * (p0 - p1) / q96;
+                // p1/p0 = L/(L+product): fractional move = product/(L+product)
+                let lf = l.to_string().parse::<f64>().unwrap_or(0.0);
+                let pf = product.to_string().parse::<f64>().unwrap_or(0.0);
+                move_frac = if lf + pf > 0.0 { pf / (lf + pf) } else { 0.0 };
             } else {
                 let delta = amount_in * q96 / l;
                 let p1 = p0 + delta;
@@ -110,9 +129,12 @@ pub fn project_and_quote(
                 let diff = p1.checked_sub(p0)?;
                 let intermediate = l.checked_mul(diff)? / p1;
                 amount_out = intermediate.checked_mul(q96)? / p0;
+                let p0f = p0.to_string().parse::<f64>().unwrap_or(1.0);
+                let p1f = p1.to_string().parse::<f64>().unwrap_or(0.0);
+                move_frac = if p0f > 0.0 { (p1f - p0f) / p0f } else { 0.0 };
             }
 
-            Some((PoolState::V3(state), amount_out))
+            Some((PoolState::V3(state), amount_out, move_frac.min(1.0)))
         }
         _ => None,
     }
@@ -153,6 +175,11 @@ fn usd_to_units(usd: f64, token: Address,
 /// entries — the same index the runner builds from pool configs. When the
 /// decoder recovered a V3 fee for a hop (`hop_fees`), prefer the matching fee
 /// tier; if none matches, project onto all pools on the pair.
+///
+/// Returns (projected store, moved pools, victim USD, max_move_frac) — the
+/// last is the largest fractional price move any hop produced. Same-tick
+/// V3 projections that pushed a pool >~25% walked across real ticks the
+/// approximation cannot see; callers should scale confidence accordingly.
 pub fn project_pending_path(
     store: &PoolStore,
     decoded: &DecodedSwap,
@@ -160,7 +187,7 @@ pub fn project_pending_path(
     pair_pools: &HashMap<(Address, Address), Vec<(Address, u32)>>,
     usd_prices: &HashMap<Address, f64>,
     decimals: &HashMap<Address, u32>,
-) -> Option<(PoolStore, Vec<Address>, Option<f64>)> {
+) -> Option<(PoolStore, Vec<Address>, Option<f64>, f64)> {
     if let Some(direct) = &decoded.direct {
         return project_direct(store, direct, usd_prices, decimals);
     }
@@ -187,6 +214,7 @@ pub fn project_pending_path(
         .first()
         .and_then(|(t_in, _)| usd_value(amount_in, *t_in, usd_prices, decimals));
     let mut est_usd = victim_usd;
+    let mut max_move = 0.0f64;
     for (k, (t_in, t_out)) in hops.iter().enumerate() {
         let key = if t_in < t_out { (*t_in, *t_out) } else { (*t_out, *t_in) };
         let Some(pools) = pair_pools.get(&key) else { continue };
@@ -230,9 +258,12 @@ pub fn project_pending_path(
         // them is a screen; chaining an ambiguous one would guess the venue.
         let mut chained = false;
         for pool_addr in &matched {
-            if let Some((new_state, out)) =
+            if let Some((new_state, out, move_frac)) =
                 project_and_quote(*pool_addr, *t_in, est_in, &projected)
             {
+                if move_frac > max_move {
+                    max_move = move_frac;
+                }
                 let ts = projected.updated_at(pool_addr).unwrap_or(0);
                 projected.update_at(*pool_addr, new_state, ts);
                 if !chained {
@@ -252,7 +283,7 @@ pub fn project_pending_path(
     if hit_pools.is_empty() {
         None
     } else {
-        Some((projected, hit_pools, victim_usd))
+        Some((projected, hit_pools, victim_usd, max_move))
     }
 }
 
@@ -265,7 +296,7 @@ fn project_direct(
     direct: &DirectSwap,
     usd_prices: &HashMap<Address, f64>,
     decimals: &HashMap<Address, u32>,
-) -> Option<(PoolStore, Vec<Address>, Option<f64>)> {
+) -> Option<(PoolStore, Vec<Address>, Option<f64>, f64)> {
     let (pool, token_in, amount_in) = match direct {
         DirectSwap::V2 {
             pool,
@@ -318,12 +349,12 @@ fn project_direct(
         projected.update_at(addr, st, ts);
     }
 
-    let (new_state, _) = project_and_quote(pool, token_in, amount_in, &projected)?;
+    let (new_state, _, move_frac) = project_and_quote(pool, token_in, amount_in, &projected)?;
     let ts = projected.updated_at(&pool).unwrap_or(0);
     projected.update_at(pool, new_state, ts);
 
     let victim_usd = usd_value(amount_in, token_in, usd_prices, decimals);
-    Some((projected, vec![pool], victim_usd))
+    Some((projected, vec![pool], victim_usd, move_frac))
 }
 
 /// Pool-state sanity quarantine: a pool whose implied spot price diverges

@@ -108,6 +108,12 @@ pub struct GateConfig {
     /// is added to safety_margin_bps. Values stay conservative until realized
     /// fills provide sim-vs-live divergence data to calibrate against.
     pub protocol_margins: Option<std::collections::HashMap<String, u32>>,
+    /// Estimated gas used by one arb execution (flash-loan + swaps). Used
+    /// with live `eth_gasPrice` to net execution cost out of the profit
+    /// floor — gross sim profit ignores the tx's own gas, the dominant
+    /// cost on cheap-fee chains. Conservative default 350k.
+    #[serde(default = "default_est_tx_gas")]
+    pub est_tx_gas: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +170,7 @@ pub fn min_profit_usd_floor(cfg_value: f64) -> f64 {
 fn default_warp_threshold() -> f64 { 50.0 }
 fn default_warp_budget() -> f64 { 5.0 }
 fn default_false() -> bool { false }
+fn default_est_tx_gas() -> u64 { 350_000 }
 fn default_min_profit_usd() -> f64 { 0.50 }
 fn default_safety_margin_bps() -> u32 { 30 }
 fn default_stable_extra_margin() -> u32 { 50 }

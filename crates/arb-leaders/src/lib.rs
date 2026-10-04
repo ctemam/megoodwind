@@ -454,11 +454,34 @@ fn writer_loop(
     }
 }
 
-/// Coarse attribution: enough to bucket a wallet's flow before replay
-/// measurement assigns real per-trade P&L.
+/// Known flash-loan entry selectors — a calldata selector match means the
+/// tx borrows inside a single tx: the profit structure is atomic MEV, not
+/// retail flow. Balancer Vault flashLoan 0x5cff49cd, Aave flashLoan
+/// 0xab9c4b5d, Aave flashLoanSimple 0x920f5c84, Aave flashLoan 0x7b4a47e7
+/// (v3 legacy sig).
+const FLASH_SELECTORS: [[u8; 4]; 4] = [
+    [0x5c, 0xff, 0x49, 0xcd],
+    [0xab, 0x9c, 0x4b, 0x5d],
+    [0x92, 0x0f, 0x5c, 0x84],
+    [0x7b, 0x4a, 0x47, 0xe7],
+];
+
+fn is_flash_loan_call(raw_input: &[u8]) -> bool {
+    raw_input.len() >= 4 && FLASH_SELECTORS.iter().any(|s| raw_input[..4] == *s)
+}
+
+/// Coarse attribution bucketed by PROFIT STRUCTURE first — what a wallet
+/// does determines whether its strategy is even expressible by our engine.
+/// direct_pool_swap stays top-weight (humans never call swap() on a pool);
+/// flash_loan_arb and cyclic_arb are structural arb signals (borrowed
+/// capital, same-token in/out); the router buckets are mechanics.
 fn classify(swap: &PendingSwap, touched_tracked_pool: bool) -> &'static str {
     if swap.decoded.direct.is_some() {
         "direct_pool_swap"
+    } else if is_flash_loan_call(&swap.raw_input) {
+        "flash_loan_arb"
+    } else if same_token_cycle(swap) {
+        "cyclic_arb"
     } else if touched_tracked_pool {
         "tracked_pool_trade"
     } else if swap.decoded.path.len() > 2 {
@@ -468,6 +491,17 @@ fn classify(swap: &PendingSwap, touched_tracked_pool: bool) -> &'static str {
     } else {
         "opaque"
     }
+}
+
+/// Same token in and out — the signature of an atomic cyclic arb. Checked
+/// on both the decoded token pair and the packed path ends.
+fn same_token_cycle(swap: &PendingSwap) -> bool {
+    if let (Some(t_in), Some(t_out)) = (swap.decoded.token_in, swap.decoded.token_out) {
+        if t_in == t_out {
+            return true;
+        }
+    }
+    swap.decoded.path.len() >= 3 && swap.decoded.path.first() == swap.decoded.path.last()
 }
 
 /// Writes observations to `data/leaders/<chain>/<wallet>.jsonl` and —
@@ -656,7 +690,7 @@ struct SenderStats {
     /// strategy hypothesis until replay measurement refines it.
     dominant_class: &'static str,
     dominant_count: u32,
-    class_counts: [u32; 5],
+    class_counts: [u32; 7],
     /// Last sighting that counted toward score/observations — distinct
     /// from `last_seen` so intra-block repeats still decay the clock
     /// without inflating the observation count.
@@ -664,11 +698,13 @@ struct SenderStats {
 }
 
 /// Observation-time class ordering must match `classify` weights below.
-const CLASS_WEIGHTS: [(&str, f64); 5] = [
-    ("direct_pool_swap", 5.0),   // humans never call swap() on a pool — pure bot
+const CLASS_WEIGHTS: [(&str, f64); 7] = [
+    ("direct_pool_swap", 5.0), // humans never call swap() on a pool — pure bot
+    ("flash_loan_arb", 4.5),   // borrowed-capital atomic flow — MEV by structure
+    ("cyclic_arb", 4.0),       // same-token in/out — atomic arb signature
     ("tracked_pool_trade", 3.0), // trades our tracked liquidity — likely arb loop
-    ("multi_hop_router", 2.0),   // paths humans rarely compose manually
-    ("single_hop_router", 1.0),  // weakest signal — retail flow too
+    ("multi_hop_router", 2.0), // paths humans rarely compose manually
+    ("single_hop_router", 1.0), // weakest signal — retail flow too
     ("opaque", 0.0),
 ];
 
@@ -813,7 +849,10 @@ impl LeaderDiscoverer {
             s.last_scored = Some(now);
             s.score += w;
             s.observations += 1;
-            let idx = CLASS_WEIGHTS.iter().position(|(c, _)| *c == class).unwrap_or(4);
+            let idx = CLASS_WEIGHTS
+                .iter()
+                .position(|(c, _)| *c == class)
+                .unwrap_or(CLASS_WEIGHTS.len() - 1);
             s.class_counts[idx] += 1;
             if s.class_counts[idx] > s.dominant_count {
                 s.dominant_count = s.class_counts[idx];

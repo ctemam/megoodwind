@@ -1041,3 +1041,8 @@ token0 = "ETH"
 token1 = "BTCB"
 fee_bps = 30
 
+
+# Wallet intelligence: real-time top-wallet discovery (observation only).
+# Enabled 2026-10-04 per Commander order — BSC is the live trading chain.
+[leaders]
+discover = true

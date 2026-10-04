@@ -26,6 +26,12 @@ pub struct ProfitGate {
     pub protocol_margins: HashMap<Protocol, u32>,
     pub token_usd_prices: HashMap<Address, f64>,
     pub token_decimals: HashMap<Address, u32>,
+    /// USD cost of one execution tx's gas (gas_price * est_tx_gas *
+    /// native_price), set from the runner each block. The min_profit_usd
+    /// floor applies to profit NET of this cost — gross sim profit
+    /// otherwise ignores the tx's own gas, the dominant cost on cheap
+    /// chains. 0.0 until the first gas-price read.
+    pub tx_gas_cost_usd: f64,
 }
 
 impl ProfitGate {
@@ -68,6 +74,16 @@ impl ProfitGate {
             protocol_margins,
             token_usd_prices,
             token_decimals,
+            tx_gas_cost_usd: 0.0,
+        }
+    }
+
+    /// Update the per-execution gas cost used for the net-profit floor.
+    /// Guards non-finite/non-positive input (a bad gas-price read must not
+    /// poison the gate with NaN).
+    pub fn set_gas_cost_usd(&mut self, usd: f64) {
+        if usd.is_finite() && usd > 0.0 {
+            self.tx_gas_cost_usd = usd;
         }
     }
 
@@ -142,17 +158,27 @@ impl ProfitGate {
         let effective_profit_usd =
             profit_usd * (effective_bps as f64 / result.profit_bps as f64);
 
-        if effective_profit_usd < self.min_profit_usd {
+        // Net the execution tx's own gas cost out of the floor — a path
+        // that sims +$0.60 gross but pays $0.55 gas loses money live.
+        let net_profit_usd = effective_profit_usd - self.tx_gas_cost_usd;
+
+        if net_profit_usd < self.min_profit_usd {
             return Decision {
                 accept: false,
-                effective_profit_usd,
-                reject_reason: Some("below_min_usd"),
+                effective_profit_usd: net_profit_usd,
+                reject_reason: Some(if self.tx_gas_cost_usd > 0.0
+                    && effective_profit_usd >= self.min_profit_usd
+                {
+                    "below_gas_net"
+                } else {
+                    "below_min_usd"
+                }),
             };
         }
 
         Decision {
             accept: true,
-            effective_profit_usd,
+            effective_profit_usd: net_profit_usd,
             reject_reason: None,
         }
     }

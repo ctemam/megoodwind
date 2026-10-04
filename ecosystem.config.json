@@ -41,6 +41,24 @@
       }
     },
     {
+      "name": "allbrightA-leaderscan-bsc",
+      "script": "./target/release/leader_scan",
+      "args": "config/bsc.toml --loop 900 --merge",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "2G"
+    },
+    {
+      "name": "allbrightA-leaderscan-eth",
+      "script": "./target/release/leader_scan",
+      "args": "config/ethereum.toml --loop 900 --merge",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "2G"
+    },
+    {
       "name": "allbrightA-dashboard",
       "script": "apps/dashboard/server/index.js",
       "interpreter": "/home/ubuntu/.nvm/versions/node/v24.19.0/bin/node",

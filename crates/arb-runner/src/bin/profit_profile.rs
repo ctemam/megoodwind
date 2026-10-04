@@ -627,7 +627,7 @@ async fn main() -> Result<()> {
                 });
             if !hit_any_pair { continue; }
             n_pair += 1;
-            let Some((projected, hit_pools, victim_usd)) =
+            let Some((projected, hit_pools, victim_usd, _max_move)) =
                 arb_mempool::impact::project_pending_path(
                     &store, &pending.decoded, amount_in, &pair_to_pools,
                     &token_usd_prices, &token_decimals,

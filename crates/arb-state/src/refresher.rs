@@ -1993,6 +1993,174 @@ impl StateRefresher {
         Ok((updated, elapsed))
     }
 
+    /// Targeted refresh: re-read only `addrs` via the deployless Multicall3
+    /// path — one aggregate3 per protocol class, all concurrent. Used on the
+    /// backrun critical path: a full refresh costs an RTT per protocol
+    /// partition while a victim's handful of touched pools fits one batch
+    /// each. Protocols with no deployless fallback (Curve/Dodo/Wombat/V4)
+    /// keep their previous state.
+    pub async fn refresh_pools(&self, store: &PoolStore, addrs: &[Address]) -> usize {
+        if addrs.is_empty() {
+            return 0;
+        }
+        self.rpc_ns.store(0, Ordering::Relaxed);
+        self.decode_ns.store(0, Ordering::Relaxed);
+        let t = Instant::now();
+
+        let mut v2 = Vec::new();
+        let mut v3 = Vec::new();
+        let mut algebra = Vec::new();
+        let mut aero = Vec::new();
+        for a in addrs {
+            match self.pool_protocol(a) {
+                Some(Protocol::UniswapV2) => v2.push(*a),
+                Some(Protocol::UniswapV3) | Some(Protocol::AerodromeSlipstream) => v3.push(*a),
+                Some(Protocol::Algebra) => algebra.push(*a),
+                Some(Protocol::AerodromeV2) => aero.push(*a),
+                _ => {}
+            }
+        }
+
+        let (v2_mc, v3_mc, algebra_mc, aero_mc) = tokio::join!(
+            async {
+                if v2.is_empty() {
+                    Vec::new()
+                } else {
+                    futures::future::join_all(
+                        v2.chunks(Self::CHUNK_SIZE).map(|c| self.multicall_v2(c)),
+                    )
+                    .await
+                    .concat()
+                }
+            },
+            async {
+                if v3.is_empty() {
+                    Vec::new()
+                } else {
+                    futures::future::join_all(
+                        v3.chunks(Self::CHUNK_SIZE).map(|c| self.multicall_v3(c)),
+                    )
+                    .await
+                    .concat()
+                }
+            },
+            async {
+                if algebra.is_empty() {
+                    Vec::new()
+                } else {
+                    futures::future::join_all(
+                        algebra
+                            .chunks(Self::CHUNK_SIZE)
+                            .map(|c| self.multicall_algebra(c)),
+                    )
+                    .await
+                    .concat()
+                }
+            },
+            async {
+                if aero.is_empty() {
+                    Vec::new()
+                } else {
+                    futures::future::join_all(
+                        aero.chunks(Self::CHUNK_SIZE)
+                            .map(|c| self.multicall_aero(c)),
+                    )
+                    .await
+                    .concat()
+                }
+            },
+        );
+
+        let mut updated = 0;
+        for (pool, r0, r1, t0, t1) in &v2_mc {
+            store.update(
+                *pool,
+                PoolState::V2(V2PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    reserve0: *r0,
+                    reserve1: *r1,
+                    fee_bps: self.fee_for_pool(pool),
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, sqrt_p, tick, liq, fee, t0, t1) in &v3_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *fee,
+                    fee_otz: None,
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, sqrt_p, tick, liq, fee_zto, fee_otz, t0, t1) in &algebra_mc {
+            if sqrt_p.is_zero() {
+                continue;
+            }
+            store.update(
+                *pool,
+                PoolState::V3(V3PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    sqrt_price_x96: *sqrt_p,
+                    tick: *tick,
+                    liquidity: *liq,
+                    fee: *fee_zto,
+                    fee_otz: Some(*fee_otz),
+                }),
+            );
+            updated += 1;
+        }
+        for (pool, r0, r1, t0, t1, stable, dec0, dec1) in &aero_mc {
+            store.update(
+                *pool,
+                PoolState::AeroV2(AeroV2PoolState {
+                    address: *pool,
+                    token0: *t0,
+                    token1: *t1,
+                    reserve0: *r0,
+                    reserve1: *r1,
+                    stable: *stable,
+                    fee_bps: self.fee_for_pool(pool),
+                    decimals0: *dec0,
+                    decimals1: *dec1,
+                }),
+            );
+            updated += 1;
+        }
+
+        let wall = t.elapsed();
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["wall"])
+            .observe(wall.as_secs_f64());
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["rpc"])
+            .observe(self.rpc_ns.load(Ordering::Relaxed) as f64 / 1e9);
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["decode"])
+            .observe(self.decode_ns.load(Ordering::Relaxed) as f64 / 1e9);
+        debug!(
+            pools = addrs.len(),
+            updated,
+            ms = wall.as_millis(),
+            "Targeted pool refresh"
+        );
+        updated
+    }
+
     fn partition_by_type(
         &self,
     ) -> (

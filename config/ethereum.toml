@@ -609,3 +609,7 @@ token1 = "WETH"
 fee_bps = 100
 
 
+
+# Wallet intelligence: real-time top-wallet discovery (observation only).
+[leaders]
+discover = true

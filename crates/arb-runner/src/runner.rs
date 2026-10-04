@@ -1592,6 +1592,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 profit_gate.token_usd_prices = token_usd_prices.clone();
                 debug!(derived, block = block_number, "Periodic price derivation");
             }
+            // Net-of-gas feed: live gas price × est executor gas × native
+            // USD, so the gate enforces NET profit per the handoff invariant.
+            if let Ok(gp) = endpoint.provider().get_gas_price().await {
+                let native_px = ["WBNB", "WETH", "WPOL", "ETH"].iter()
+                    .find_map(|s| tokens.get(*s))
+                    .and_then(|a| token_usd_prices.get(a).copied())
+                    .unwrap_or(native_usd);
+                let gas_usd = gp as f64 * cfg.gate.est_tx_gas as f64 / 1e18 * native_px;
+                profit_gate.set_gas_cost_usd(gas_usd);
+            }
             last_pricing_block = block_number;
         }
 
@@ -2009,7 +2019,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             // pools it touches: the resting state has no spread — the pending
             // swap creates one. Later hops of a multi-hop victim move our
             // pools too, not just the first.
-            let Some((projected, hit_pools, victim_usd)) =
+            let Some((projected, hit_pools, victim_usd, max_move)) =
                 arb_mempool::impact::project_pending_path(
                     &store, &pending.decoded, amount_in, &pair_to_pools,
                     &token_usd_prices, &token_decimals,
@@ -2163,8 +2173,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             };
                             // route_confidence: leader-verified geometry is
                             // stronger evidence than generic enumeration.
-                            let confidence = if matched.is_empty() { 0.7 }
-                                else if overlap > 0 { 1.0 } else { 0.5 };
+                            // Scaled down when the same-tick projection
+                            // pushed a pool far — a >25% move crossed real
+                            // ticks the approximation cannot see, so the
+                            // projected edge is less trustworthy.
+                            let approx_penalty = if max_move > 0.25 {
+                                debug!(victim = %pending.tx_hash, max_move,
+                                    "backrun projection moved pool >25% — confidence penalized");
+                                0.5
+                            } else { 1.0 };
+                            let confidence = (if matched.is_empty() { 0.7 }
+                                else if overlap > 0 { 1.0 } else { 0.5 })
+                                * approx_penalty;
                             // No gas model yet — gas_risk 0 (constant term
                             // would not change the ordering anyway).
                             // revert_risk: this path's realized revert rate
@@ -2191,8 +2211,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 // whole scored queue — a full refresh serialized per
                 // candidate (~1.3s each under RPC churn) had the queue
                 // tail reaching ~16s of victim age before the first
-                // submission attempt.
-                let _ = refresher.refresh(&store).await;
+                // submission attempt. Targeted refresh reads only the
+                // pools the victim moved plus the candidate path pools —
+                // one aggregate3 batch per protocol instead of a full
+                // partition sweep.
+                {
+                    let mut tgt: Vec<Address> = hit_pools.clone();
+                    for (pidx, _, _, _, _) in &scored {
+                        for h in &paths[*pidx].hops {
+                            if !tgt.contains(&h.pool) { tgt.push(h.pool); }
+                        }
+                        if tgt.len() >= 64 { break; }
+                    }
+                    tgt.truncate(64);
+                    let t_refresh = Instant::now();
+                    let n = refresher.refresh_pools(&store, &tgt).await;
+                    debug!(pools = tgt.len(), updated = n,
+                        ms = t_refresh.elapsed().as_millis(),
+                        "backrun targeted refresh");
+                }
                 // If the victim already landed, the refreshed store IS
                 // the post-victim state — re-projecting the swap would
                 // double-count its impact. Re-project only while the
@@ -2209,7 +2246,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     arb_mempool::impact::project_pending_path(
                         &store, &pending.decoded, amount_in, &pair_to_pools,
                         &token_usd_prices, &token_decimals,
-                    ).map(|(s, _, _)| s)
+                    ).map(|(s, _, _, _)| s)
                 };
 
                 // Re-verify + submit in score order; a stale edge falls

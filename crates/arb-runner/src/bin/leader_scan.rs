@@ -102,6 +102,16 @@ async fn main() -> Result<()> {
     // data/leaders/<chain>/_pools.toml + _tokens.toml exports into the
     // config. For exports produced by earlier runs (before --merge existed).
     let merge_only = args.iter().any(|a| a == "--merge-only");
+    // --loop SECONDS: keep rescanning — the persisted cursor makes every
+    // pass cover only new blocks, so _strategies.jsonl/_opportunities.jsonl
+    // stay fresh without a cron. Run under pm2 (auto-restart covers a
+    // transient RPC failure exiting the process). 0 = single run.
+    let loop_secs: u64 = args
+        .iter()
+        .position(|a| a == "--loop")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     let cfg = config::load_config(&cfg_path)?;
     let chain = cfg.chain.name.clone();
@@ -159,10 +169,11 @@ async fn main() -> Result<()> {
         }
     }
 
+    loop {
     let latest = endpoint.block_number().await?;
     let hi = if from_block > 0 { from_block } else { latest };
     // Incremental scanning: with no explicit --from, resume one block past
-    // the persisted cursor so each run covers only new ground.
+    // the persisted cursor so each pass covers only new ground.
     let lo = if from_block > 0 {
         hi.saturating_sub(n_blocks as u64)
     } else {
@@ -1099,7 +1110,13 @@ async fn main() -> Result<()> {
         std::fs::write(&path, &export)?;
     }
     println!("LEADER_SCAN exported {n_targets} targeted wallets -> {path}");
-    Ok(())
+
+    if loop_secs == 0 {
+        return Ok(());
+    }
+    println!("LEADER_LOOP sleeping {loop_secs}s — cursor resumes at block {}", hi + 1);
+    tokio::time::sleep(std::time::Duration::from_secs(loop_secs)).await;
+    }
 }
 
 /// Merge provenance-passed `[[pools]]` blocks and `[tokens]` rows into the
