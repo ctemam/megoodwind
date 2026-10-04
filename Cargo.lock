@@ -925,6 +925,7 @@ dependencies = [
  "alloy-provider",
  "alloy-rpc-types",
  "alloy-signer-local",
+ "alloy-sol-types",
  "alloy-transport-ws",
  "anyhow",
  "arb-core",
@@ -951,6 +952,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -978,7 +980,10 @@ dependencies = [
  "arb-core",
  "arb-rpc",
  "dashmap",
+ "futures",
+ "lazy_static",
  "parking_lot",
+ "prometheus",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

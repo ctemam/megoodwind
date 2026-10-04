@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -189,10 +190,56 @@ sol! {
     }
 }
 
+lazy_static::lazy_static! {
+    /// Per-batch network round-trip for each reader method / aggregate3
+    /// call, labeled by the read-pool endpoint that served it. Wire time
+    /// only — client-side ABI decode is measured separately.
+    static ref READER_RPC_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
+        "arb_reader_rpc_seconds",
+        "Network round-trip per batched state read, by reader method and endpoint",
+        &["method", "endpoint"],
+        vec![0.005, 0.01, 0.02, 0.04, 0.07, 0.1, 0.15, 0.25, 0.4, 0.8]
+    ).unwrap();
+
+    /// Client-side ABI decode time per batch, by method.
+    static ref READER_DECODE_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
+        "arb_reader_decode_seconds",
+        "Client-side ABI decode time per batched read, by method",
+        &["method"],
+        vec![0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025]
+    ).unwrap();
+
+    /// Per-refresh phase totals. rpc = summed network-call time across all
+    /// reads (branches run concurrently — busy time, not wall); decode =
+    /// summed client decode/extract time; store = PoolStore update section;
+    /// wall = total refresh (same measurement as arb_state_refresh_seconds).
+    static ref REFRESH_PHASE_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
+        "arb_state_refresh_phase_seconds",
+        "Per-refresh time by phase: rpc|decode|store|wall",
+        &["phase"],
+        vec![0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+    ).unwrap();
+}
+
+/// Records a decode/extract segment into READER_DECODE_SECONDS on scope
+/// exit — keeps measurement correct through early returns.
+struct DecodeTimer<'a> {
+    r: &'a StateRefresher,
+    m: &'static str,
+    t: Instant,
+}
+
+impl Drop for DecodeTimer<'_> {
+    fn drop(&mut self) {
+        self.r.note_decode(self.m, self.t.elapsed());
+    }
+}
+
 /// Canonical Multicall3 — deployed at the same address on BSC and Base.
 /// READ-PATH ONLY: never used to wrap execution calldata (flash-loan
 /// callbacks must land on our executor contract, not Multicall3).
-pub const MULTICALL3_ADDR: Address = alloy_primitives::address!("cA11bde05977b3631167028862bE2a173976CA11");
+pub const MULTICALL3_ADDR: Address =
+    alloy_primitives::address!("cA11bde05977b3631167028862bE2a173976CA11");
 
 pub struct PoolConfig {
     pub address: Address,
@@ -234,8 +281,17 @@ fn default_fee_for_factory(factory: Address, chain_id: u64) -> Option<u32> {
     }
 }
 
-fn partition_pools(configs: &[PoolConfig]) -> (Vec<Address>, Vec<Address>, Vec<Address>, Vec<Address>,
-                                                Vec<Address>, Vec<Address>, Vec<Address>) {
+fn partition_pools(
+    configs: &[PoolConfig],
+) -> (
+    Vec<Address>,
+    Vec<Address>,
+    Vec<Address>,
+    Vec<Address>,
+    Vec<Address>,
+    Vec<Address>,
+    Vec<Address>,
+) {
     let mut v2 = Vec::new();
     let mut v3 = Vec::new();
     let mut algebra = Vec::new();
@@ -309,6 +365,10 @@ pub struct StateRefresher {
     chain_id: u64,
     call_deadline: std::time::Duration,
     reader_breaker: MethodCircuitBreaker,
+    /// Refresh-phase accumulators (nanoseconds): reset at the top of each
+    /// refresh and summed across the parallel read branches.
+    rpc_ns: AtomicU64,
+    decode_ns: AtomicU64,
 }
 
 impl StateRefresher {
@@ -340,6 +400,8 @@ impl StateRefresher {
             chain_id,
             call_deadline: Self::CALL_DEADLINE,
             reader_breaker: MethodCircuitBreaker::default(),
+            rpc_ns: AtomicU64::new(0),
+            decode_ns: AtomicU64::new(0),
         }
     }
 
@@ -368,15 +430,52 @@ impl StateRefresher {
         self.reader_breaker.is_dead(label)
     }
 
-    /// One aggregate3 against the read pool with blacklist+retry on
-    /// transport failure — same failover pattern as the chunk loops.
+    /// Record one network round-trip: phase accumulator + per-method,
+    /// per-endpoint histogram + the endpoint's latency EWMA.
+    fn note_rpc(&self, method: &'static str, idx: usize, dur: std::time::Duration) {
+        self.rpc_ns
+            .fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
+        self.endpoint.note_latency(idx, dur);
+        READER_RPC_SECONDS
+            .with_label_values(&[method, self.endpoint.endpoint_url(idx)])
+            .observe(dur.as_secs_f64());
+    }
+
+    /// Record client-side decode/extract time: phase accumulator +
+    /// per-method histogram.
+    fn note_decode(&self, method: &'static str, dur: std::time::Duration) {
+        self.decode_ns
+            .fetch_add(dur.as_nanos() as u64, Ordering::Relaxed);
+        READER_DECODE_SECONDS
+            .with_label_values(&[method])
+            .observe(dur.as_secs_f64());
+    }
+
+    /// Scope guard that times a decode/extract segment — records on drop
+    /// so early returns stay measured.
+    fn decode_timer(&self, method: &'static str) -> DecodeTimer<'_> {
+        DecodeTimer {
+            r: self,
+            m: method,
+            t: Instant::now(),
+        }
+    }
+
+    /// One aggregate3 against the read pool — batches run CONCURRENTLY
+    /// (join_all preserves order): sequential batching multiplied the
+    /// refresh wall time by the batch count at one RTT each.
     async fn multicall_aggregate3(
         &self,
         calls: Vec<IMulticall3::Call3>,
     ) -> Vec<IMulticall3::Result3> {
+        let parts = futures::future::join_all(
+            calls
+                .chunks(Self::MC3_MAX_CALLS)
+                .map(|b| self.aggregate3_batch(b)),
+        )
+        .await;
         let mut all = Vec::with_capacity(calls.len());
-        for batch in calls.chunks(Self::MC3_MAX_CALLS) {
-            let r = self.aggregate3_batch(batch).await;
+        for r in parts {
             if r.is_empty() {
                 return Vec::new();
             }
@@ -392,14 +491,33 @@ impl StateRefresher {
     fn aggregate3_batch<'a>(
         &'a self,
         batch: &'a [IMulticall3::Call3],
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<IMulticall3::Result3>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<IMulticall3::Result3>> + Send + 'a>>
+    {
         Box::pin(async move {
             for attempt in 0..2 {
                 let (idx, provider) = self.endpoint.pool_pick();
                 let mc = IMulticall3::new(MULTICALL3_ADDR, provider);
-                match tokio::time::timeout(self.call_deadline, mc.aggregate3(batch.to_vec()).call()).await {
-                    Ok(Ok(r)) => return r,
+                let t = Instant::now();
+                match tokio::time::timeout(
+                    self.call_deadline,
+                    mc.aggregate3(batch.to_vec()).call_raw(),
+                )
+                .await
+                {
+                    Ok(Ok(raw)) => {
+                        self.note_rpc("aggregate3", idx, t.elapsed());
+                        let _dt = self.decode_timer("aggregate3");
+                        match <IMulticall3::aggregate3Call as alloy_sol_types::SolCall>::abi_decode_returns(&raw[..]) {
+                            Ok(r) => return r,
+                            Err(e) => {
+                                warn!(error = %e, calls = batch.len(), "aggregate3 decode failed");
+                                return Vec::new();
+                            }
+                        }
+                    }
                     outcome => {
+                        // Failed/timed-out calls still spent wire time — count it.
+                        self.note_rpc("aggregate3", idx, t.elapsed());
                         if let Ok(Err(e)) = &outcome {
                             warn!(error = %e, attempt, calls = batch.len(), "Multicall3 aggregate3 failed");
                             let msg = e.to_string().to_ascii_lowercase();
@@ -419,7 +537,11 @@ impl StateRefresher {
                                 return Vec::new();
                             }
                         } else {
-                            warn!(attempt, calls = batch.len(), "Multicall3 aggregate3 timed out");
+                            warn!(
+                                attempt,
+                                calls = batch.len(),
+                                "Multicall3 aggregate3 timed out"
+                            );
                         }
                         self.endpoint.blacklist_read(idx);
                     }
@@ -449,7 +571,10 @@ impl StateRefresher {
     /// the price/tick layout are identical.
     fn decode_v3_slot0(&self, pool: &Address, data: &[u8]) -> Option<(U256, i32)> {
         use alloy_sol_types::SolCall;
-        if matches!(self.pool_protocol(pool), Some(Protocol::AerodromeSlipstream)) {
+        if matches!(
+            self.pool_protocol(pool),
+            Some(Protocol::AerodromeSlipstream)
+        ) {
             ISlipstreamPool::slot0Call::abi_decode_returns(data)
                 .ok()
                 .map(|r| (U256::from(r.sqrtPriceX96), r.tick.as_i32()))
@@ -465,12 +590,17 @@ impl StateRefresher {
     /// dead pool can't sink the batch — unlike the all-or-nothing
     /// IStateReader chunk reads. Pools whose token pair is already in config
     /// skip the token0/token1 calls — only getReserves is dynamic.
-    async fn multicall_v2(&self, pools: &[Address]) -> Vec<(Address, U256, U256, Address, Address)> {
+    async fn multicall_v2(
+        &self,
+        pools: &[Address],
+    ) -> Vec<(Address, U256, U256, Address, Address)> {
         use alloy_sol_types::SolCall;
         let mut out = Vec::with_capacity(pools.len());
 
-        let (slim, full): (Vec<Address>, Vec<Address>) =
-            pools.iter().copied().partition(|p| self.pool_tokens(p).is_some());
+        let (slim, full): (Vec<Address>, Vec<Address>) = pools
+            .iter()
+            .copied()
+            .partition(|p| self.pool_tokens(p).is_some());
 
         if !slim.is_empty() {
             let calls: Vec<IMulticall3::Call3> = slim
@@ -482,19 +612,28 @@ impl StateRefresher {
                 })
                 .collect();
             let results = self.multicall_aggregate3(calls).await;
+            let _dt = self.decode_timer("mc_v2");
             if results.len() == slim.len() {
                 for (i, res) in results.iter().enumerate() {
                     let p = slim[i];
                     if !res.success {
                         continue;
                     }
-                    let Some((t0, t1)) = self.pool_tokens(&p) else { continue };
+                    let Some((t0, t1)) = self.pool_tokens(&p) else {
+                        continue;
+                    };
                     let Ok(reserves) =
                         IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..])
                     else {
                         continue;
                     };
-                    out.push((p, U256::from(reserves.reserve0), U256::from(reserves.reserve1), t0, t1));
+                    out.push((
+                        p,
+                        U256::from(reserves.reserve0),
+                        U256::from(reserves.reserve1),
+                        t0,
+                        t1,
+                    ));
                 }
             }
         }
@@ -510,10 +649,15 @@ impl StateRefresher {
                     IV2Pool::token0Call::new(()).abi_encode().into(),
                     IV2Pool::token1Call::new(()).abi_encode().into(),
                 ]
-                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                .map(|call_data| IMulticall3::Call3 {
+                    target: p,
+                    allowFailure: true,
+                    callData: call_data,
+                })
             })
             .collect();
         let results = self.multicall_aggregate3(calls).await;
+        let _dt = self.decode_timer("mc_v2");
         if results.len() != full.len() * 3 {
             return out;
         }
@@ -525,7 +669,8 @@ impl StateRefresher {
             if !(res.success && t0.success && t1.success) {
                 return None;
             }
-            let reserves = IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
+            let reserves =
+                IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
             let token0 = IV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
             let token1 = IV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
             Some((
@@ -553,7 +698,10 @@ impl StateRefresher {
     /// Multicall3 read for V3 pools: slot0 + liquidity + fee + tokens in
     /// ONE aggregate3 round-trip, allowFailure per call. Pools with config
     /// tokens + declared fee only need the dynamic slot0/liquidity reads.
-    async fn multicall_v3(&self, pools: &[Address]) -> Vec<(Address, U256, i32, u128, u32, Address, Address)> {
+    async fn multicall_v3(
+        &self,
+        pools: &[Address],
+    ) -> Vec<(Address, U256, i32, u128, u32, Address, Address)> {
         use alloy_sol_types::SolCall;
         let mut out = Vec::with_capacity(pools.len());
 
@@ -570,10 +718,15 @@ impl StateRefresher {
                         IV3Pool::slot0Call::new(()).abi_encode().into(),
                         IV3Pool::liquidityCall::new(()).abi_encode().into(),
                     ]
-                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                    .map(|call_data| IMulticall3::Call3 {
+                        target: p,
+                        allowFailure: true,
+                        callData: call_data,
+                    })
                 })
                 .collect();
             let results = self.multicall_aggregate3(calls).await;
+            let _dt = self.decode_timer("mc_v3");
             if results.len() == slim.len() * 2 {
                 for (i, &p) in slim.iter().enumerate() {
                     let s = &results[i * 2];
@@ -610,10 +763,15 @@ impl StateRefresher {
                     IV3Pool::token0Call::new(()).abi_encode().into(),
                     IV3Pool::token1Call::new(()).abi_encode().into(),
                 ]
-                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                .map(|call_data| IMulticall3::Call3 {
+                    target: p,
+                    allowFailure: true,
+                    callData: call_data,
+                })
             })
             .collect();
         let results = self.multicall_aggregate3(calls).await;
+        let _dt = self.decode_timer("mc_v3");
         if results.len() != full.len() * 5 {
             return out;
         }
@@ -632,15 +790,7 @@ impl StateRefresher {
             let fee = IV3Pool::feeCall::abi_decode_returns(&f.returnData[..]).ok()?;
             let token0 = IV3Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
             let token1 = IV3Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
-            Some((
-                p,
-                sqrt_p,
-                tick,
-                liq,
-                fee.to::<u32>(),
-                token0,
-                token1,
-            ))
+            Some((p, sqrt_p, tick, liq, fee.to::<u32>(), token0, token1))
         }));
         out
     }
@@ -657,7 +807,14 @@ impl StateRefresher {
         }
         IAlgebraIntegralPool::globalStateCall::abi_decode_returns(data)
             .ok()
-            .map(|gs| (U256::from(gs.price), gs.tick.as_i32(), gs.feeZto as u32, gs.feeOtz as u32))
+            .map(|gs| {
+                (
+                    U256::from(gs.price),
+                    gs.tick.as_i32(),
+                    gs.feeZto as u32,
+                    gs.feeOtz as u32,
+                )
+            })
     }
 
     /// Multicall3 read for Algebra pools: globalState + liquidity in ONE
@@ -669,8 +826,10 @@ impl StateRefresher {
         use alloy_sol_types::SolCall;
         let mut out = Vec::with_capacity(pools.len());
 
-        let (slim, full): (Vec<Address>, Vec<Address>) =
-            pools.iter().copied().partition(|p| self.pool_tokens(p).is_some());
+        let (slim, full): (Vec<Address>, Vec<Address>) = pools
+            .iter()
+            .copied()
+            .partition(|p| self.pool_tokens(p).is_some());
 
         if !slim.is_empty() {
             let calls: Vec<IMulticall3::Call3> = slim
@@ -680,10 +839,15 @@ impl StateRefresher {
                         IAlgebraPool::globalStateCall::new(()).abi_encode().into(),
                         IAlgebraPool::liquidityCall::new(()).abi_encode().into(),
                     ]
-                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                    .map(|call_data| IMulticall3::Call3 {
+                        target: p,
+                        allowFailure: true,
+                        callData: call_data,
+                    })
                 })
                 .collect();
             let results = self.multicall_aggregate3(calls).await;
+            let _dt = self.decode_timer("mc_algebra");
             if results.len() == slim.len() * 2 {
                 for (i, &p) in slim.iter().enumerate() {
                     let s = &results[i * 2];
@@ -691,7 +855,9 @@ impl StateRefresher {
                     if !(s.success && l.success) {
                         continue;
                     }
-                    let Some((t0, t1)) = self.pool_tokens(&p) else { continue };
+                    let Some((t0, t1)) = self.pool_tokens(&p) else {
+                        continue;
+                    };
                     let (Some((sqrt_p, tick, fee_zto, fee_otz)), Ok(liq)) = (
                         Self::decode_algebra_global_state(&s.returnData[..]),
                         IAlgebraPool::liquidityCall::abi_decode_returns(&l.returnData[..]),
@@ -715,10 +881,15 @@ impl StateRefresher {
                     IAlgebraPool::token0Call::new(()).abi_encode().into(),
                     IAlgebraPool::token1Call::new(()).abi_encode().into(),
                 ]
-                .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                .map(|call_data| IMulticall3::Call3 {
+                    target: p,
+                    allowFailure: true,
+                    callData: call_data,
+                })
             })
             .collect();
         let results = self.multicall_aggregate3(calls).await;
+        let _dt = self.decode_timer("mc_algebra");
         if results.len() != full.len() * 4 {
             return out;
         }
@@ -736,16 +907,7 @@ impl StateRefresher {
             let liq = IAlgebraPool::liquidityCall::abi_decode_returns(&l.returnData[..]).ok()?;
             let token0 = IAlgebraPool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
             let token1 = IAlgebraPool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
-            Some((
-                p,
-                sqrt_p,
-                tick,
-                liq,
-                fee_zto,
-                fee_otz,
-                token0,
-                token1,
-            ))
+            Some((p, sqrt_p, tick, liq, fee_zto, fee_otz, token0, token1))
         }));
         out
     }
@@ -780,10 +942,15 @@ impl StateRefresher {
                         IAeroV2Pool::token0Call::new(()).abi_encode().into(),
                         IAeroV2Pool::token1Call::new(()).abi_encode().into(),
                     ]
-                    .map(|call_data| IMulticall3::Call3 { target: p, allowFailure: true, callData: call_data })
+                    .map(|call_data| IMulticall3::Call3 {
+                        target: p,
+                        allowFailure: true,
+                        callData: call_data,
+                    })
                 })
                 .collect();
             let results = self.multicall_aggregate3(calls).await;
+            let _dt = self.decode_timer("mc_aero");
             if results.len() == need_tokens.len() * 2 {
                 for (i, &p) in need_tokens.iter().enumerate() {
                     let t0 = &results[i * 2];
@@ -819,7 +986,11 @@ impl StateRefresher {
                     IAeroV2Pool::getReservesCall::new(()).abi_encode().into(),
                     IAeroV2Pool::stableCall::new(()).abi_encode().into(),
                 ]
-                .map(|call_data| IMulticall3::Call3 { target: *p, allowFailure: true, callData: call_data })
+                .map(|call_data| IMulticall3::Call3 {
+                    target: *p,
+                    allowFailure: true,
+                    callData: call_data,
+                })
             })
             .chain(unique_tokens.iter().map(|&t| IMulticall3::Call3 {
                 target: t,
@@ -828,6 +999,7 @@ impl StateRefresher {
             }))
             .collect();
         let results = self.multicall_aggregate3(calls).await;
+        let _dt = self.decode_timer("mc_aero");
         if results.len() != pool_tokens.len() * 2 + unique_tokens.len() {
             return out;
         }
@@ -860,17 +1032,35 @@ impl StateRefresher {
             ) else {
                 continue;
             };
-            out.push((p, reserves.reserve0, reserves.reserve1, t0, t1, stable, d0, d1));
+            out.push((
+                p,
+                reserves.reserve0,
+                reserves.reserve1,
+                t0,
+                t1,
+                stable,
+                d0,
+                d1,
+            ));
         }
         out
     }
 
     pub async fn refresh(&self, store: &PoolStore) -> Result<(usize, std::time::Duration)> {
         let start = Instant::now();
+        self.rpc_ns.store(0, Ordering::Relaxed);
+        self.decode_ns.store(0, Ordering::Relaxed);
         let mut updated = 0;
 
-        let (v2_addrs, v3_addrs, algebra_addrs, aero_addrs,
-             pcs_stable_addrs, wombat_addrs, dodo_addrs) = self.partition_by_type();
+        let (
+            v2_addrs,
+            v3_addrs,
+            algebra_addrs,
+            aero_addrs,
+            pcs_stable_addrs,
+            wombat_addrs,
+            dodo_addrs,
+        ) = self.partition_by_type();
 
         // Each async block picks its own provider from the read pool and fails
         // over to the next healthy endpoint on a transport error (429/timeout).
@@ -880,15 +1070,28 @@ impl StateRefresher {
         // of burning one RTT per chunk. Total-failure streaks mark the method
         // dead so future refreshes skip it entirely.
         macro_rules! chunk_loop {
-            ($label:literal, $chunks:expr, $call:ident) => {{
+            ($label:literal, $chunks:expr, $call:ident, $callty:ident) => {{
                 let mut all = Vec::new();
                 let mut contract_fail = false;
                 let (mut idx, provider) = self.endpoint.pool_pick();
                 let mut reader = IStateReader::new(self.state_reader_addr, provider);
                 for chunk in &$chunks {
-                    match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call()).await {
-                        Ok(Ok(states)) => all.extend(states),
+                    let t = Instant::now();
+                    match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call_raw()).await {
+                        Ok(Ok(raw)) => {
+                            self.note_rpc($label, idx, t.elapsed());
+                            let _dt = self.decode_timer($label);
+                            match <IStateReader::$callty as alloy_sol_types::SolCall>::abi_decode_returns(&raw[..]) {
+                                Ok(states) => all.extend(states),
+                                Err(e) => {
+                                    warn!(chunk_size = chunk.len(), "{} chunk decode failed: {}", $label, e);
+                                    contract_fail = true;
+                                    break;
+                                }
+                            }
+                        }
                         outcome => {
+                            self.note_rpc($label, idx, t.elapsed());
                             if let Ok(Err(e)) = &outcome {
                                 warn!(chunk_size = chunk.len(), "{} chunk read failed: {}", $label, e);
                             } else {
@@ -904,9 +1107,21 @@ impl StateRefresher {
                                 let (nidx, np) = self.endpoint.pool_pick();
                                 idx = nidx;
                                 reader = IStateReader::new(self.state_reader_addr, np);
-                                match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call()).await {
-                                    Ok(Ok(states)) => all.extend(states),
+                                let t2 = Instant::now();
+                                match tokio::time::timeout(self.call_deadline, reader.$call(chunk.clone()).call_raw()).await {
+                                    Ok(Ok(raw)) => {
+                                        self.note_rpc($label, idx, t2.elapsed());
+                                        let _dt = self.decode_timer($label);
+                                        match <IStateReader::$callty as alloy_sol_types::SolCall>::abi_decode_returns(&raw[..]) {
+                                            Ok(states) => all.extend(states),
+                                            Err(e) => {
+                                                warn!(chunk_size = chunk.len(), "{} chunk retry decode failed: {}", $label, e);
+                                                contract_fail = true;
+                                            }
+                                        }
+                                    }
                                     outcome2 => {
+                                        self.note_rpc($label, idx, t2.elapsed());
                                         match &outcome2 {
                                             Ok(Err(e2)) => {
                                                 warn!(chunk_size = chunk.len(), "{} chunk retry failed: {}", $label, e2);
@@ -941,26 +1156,33 @@ impl StateRefresher {
             }};
         }
 
-        let v2_chunks: Vec<_> = v2_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let v2_chunks: Vec<_> = v2_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let v3_chunks: Vec<_> = v3_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let v3_chunks: Vec<_> = v3_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let algebra_chunks: Vec<_> = algebra_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let algebra_chunks: Vec<_> = algebra_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let aero_chunks: Vec<_> = aero_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let aero_chunks: Vec<_> = aero_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let pcs_chunks: Vec<_> = pcs_stable_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let pcs_chunks: Vec<_> = pcs_stable_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
-        let dodo_chunks: Vec<_> = dodo_addrs.chunks(Self::READER_CHUNK_SIZE)
+        let dodo_chunks: Vec<_> = dodo_addrs
+            .chunks(Self::READER_CHUNK_SIZE)
             .map(|c| c.to_vec())
             .collect();
 
-        let wombat_data: Vec<(Address, Address, Address)> = wombat_addrs.iter()
+        let wombat_data: Vec<(Address, Address, Address)> = wombat_addrs
+            .iter()
             .filter_map(|addr| {
                 let cfg = self.pool_configs.iter().find(|c| c.address == *addr)?;
                 Some((*addr, cfg.token0?, cfg.token1?))
@@ -983,17 +1205,28 @@ impl StateRefresher {
         // a guaranteed revert costs a full RTT every block. For V2/V3 the
         // Multicall3 salvage becomes the primary reader and runs inside the
         // same parallel join, so a dead reader adds zero extra round-trips.
-        let v2_dead = !reader_live || self.reader_method_dead("V2");
-        let v3_dead = !reader_live || self.reader_method_dead("V3");
-        let algebra_dead = !reader_live || self.reader_method_dead("Algebra");
-        let aero_dead = !reader_live || self.reader_method_dead("AeroV2");
-        let pcs_dead = !reader_live || self.reader_method_dead("PCS Stable");
-        let dodo_dead = !reader_live || self.reader_method_dead("DODO");
-        let wombat_dead = !reader_live || self.reader_method_dead("Wombat");
+        let v2_dead = !reader_live || self.reader_method_dead("readV2");
+        let v3_dead = !reader_live || self.reader_method_dead("readV3");
+        let algebra_dead = !reader_live || self.reader_method_dead("readAlgebra");
+        let aero_dead = !reader_live || self.reader_method_dead("readAeroV2");
+        let pcs_dead = !reader_live || self.reader_method_dead("readPcsStable");
+        let dodo_dead = !reader_live || self.reader_method_dead("readDodoV2");
+        let wombat_dead = !reader_live || self.reader_method_dead("readWombat");
 
-        let (v2_results, v3_results, algebra_results, aero_results,
-             pcs_results, dodo_results, wombat_results,
-             v2_mc, v3_mc, algebra_mc, aero_mc, block) = tokio::join!(
+        let (
+            v2_results,
+            v3_results,
+            algebra_results,
+            aero_results,
+            pcs_results,
+            dodo_results,
+            wombat_results,
+            v2_mc,
+            v3_mc,
+            algebra_mc,
+            aero_mc,
+            block,
+        ) = tokio::join!(
             async {
                 if v2_dead {
                     return Vec::new();
@@ -1007,22 +1240,22 @@ impl StateRefresher {
                 // fee is dropped — a fabricated zero fee quotes phantom
                 // profits.
                 use alloy_sol_types::SolCall;
-                let map_legacy = |v: Vec<IStateReader::V2StateLegacy>| -> Vec<IStateReader::V2State> {
-                    v.into_iter()
-                        .filter_map(|s| {
-                            self.pool_config_fee_raw(&s.pool).map(|fee| {
-                                IStateReader::V2State {
-                                    pool: s.pool,
-                                    token0: s.token0,
-                                    token1: s.token1,
-                                    reserve0: s.reserve0,
-                                    reserve1: s.reserve1,
-                                    fee,
-                                }
+                let map_legacy =
+                    |v: Vec<IStateReader::V2StateLegacy>| -> Vec<IStateReader::V2State> {
+                        v.into_iter()
+                            .filter_map(|s| {
+                                self.pool_config_fee_raw(&s.pool)
+                                    .map(|fee| IStateReader::V2State {
+                                        pool: s.pool,
+                                        token0: s.token0,
+                                        token1: s.token1,
+                                        reserve0: s.reserve0,
+                                        reserve1: s.reserve1,
+                                        fee,
+                                    })
                             })
-                        })
-                        .collect()
-                };
+                            .collect()
+                    };
                 let decode = |raw: &[u8]| -> Option<Vec<IStateReader::V2State>> {
                     match IStateReader::readV2Call::abi_decode_returns(raw) {
                         Ok(v) => Some(v),
@@ -1036,25 +1269,35 @@ impl StateRefresher {
                 let (mut idx, provider) = self.endpoint.pool_pick();
                 let mut reader = IStateReader::new(self.state_reader_addr, provider);
                 for chunk in &v2_chunks {
+                    let t = Instant::now();
                     let res = tokio::time::timeout(
                         self.call_deadline,
                         reader.readV2(chunk.clone()).call_raw(),
                     )
                     .await;
                     match res {
-                        Ok(Ok(raw)) => match decode(&raw[..]) {
-                            Some(v) => all.extend(v),
-                            None => {
-                                warn!(chunk_size = chunk.len(), "V2 chunk decode failed — neither 6-field nor legacy 5-field layout matched");
-                                contract_fail = true;
-                                break;
+                        Ok(Ok(raw)) => {
+                            self.note_rpc("readV2", idx, t.elapsed());
+                            let _dt = self.decode_timer("readV2");
+                            match decode(&raw[..]) {
+                                Some(v) => all.extend(v),
+                                None => {
+                                    warn!(chunk_size = chunk.len(), "V2 chunk decode failed — neither 6-field nor legacy 5-field layout matched");
+                                    contract_fail = true;
+                                    break;
+                                }
                             }
-                        },
+                        }
                         outcome => {
+                            self.note_rpc("readV2", idx, t.elapsed());
                             if let Ok(Err(e)) = &outcome {
                                 warn!(chunk_size = chunk.len(), "V2 chunk read failed: {}", e);
                             } else {
-                                warn!(chunk_size = chunk.len(), "V2 chunk read timed out ({}ms)", self.call_deadline.as_millis());
+                                warn!(
+                                    chunk_size = chunk.len(),
+                                    "V2 chunk read timed out ({}ms)",
+                                    self.call_deadline.as_millis()
+                                );
                             }
                             let transport_fail = match &outcome {
                                 Ok(Err(e)) => arb_rpc::is_contract_transport_error(e),
@@ -1066,20 +1309,35 @@ impl StateRefresher {
                                 let (nidx, np) = self.endpoint.pool_pick();
                                 idx = nidx;
                                 reader = IStateReader::new(self.state_reader_addr, np);
-                                match tokio::time::timeout(self.call_deadline, reader.readV2(chunk.clone()).call_raw()).await {
+                                let t2 = Instant::now();
+                                match tokio::time::timeout(
+                                    self.call_deadline,
+                                    reader.readV2(chunk.clone()).call_raw(),
+                                )
+                                .await
+                                {
                                     Ok(Ok(raw)) => {
+                                        self.note_rpc("readV2", idx, t2.elapsed());
+                                        let _dt = self.decode_timer("readV2");
                                         match decode(&raw[..]) {
                                             Some(v) => all.extend(v),
                                             None => {
-                                                warn!(chunk_size = chunk.len(), "V2 chunk retry decode failed");
+                                                warn!(
+                                                    chunk_size = chunk.len(),
+                                                    "V2 chunk retry decode failed"
+                                                );
                                                 contract_fail = true;
                                             }
                                         }
                                     }
                                     outcome2 => {
+                                        self.note_rpc("readV2", idx, t2.elapsed());
                                         match &outcome2 {
                                             Ok(Err(e2)) => {
-                                                warn!(chunk_size = chunk.len(), "V2 chunk retry failed: {}", e2);
+                                                warn!(
+                                                    chunk_size = chunk.len(),
+                                                    "V2 chunk retry failed: {}", e2
+                                                );
                                                 if arb_rpc::is_contract_transport_error(e2) {
                                                     self.endpoint.blacklist_read(idx);
                                                 } else {
@@ -1087,14 +1345,19 @@ impl StateRefresher {
                                                 }
                                             }
                                             Err(_) => {
-                                                warn!(chunk_size = chunk.len(), "V2 chunk retry timed out");
+                                                warn!(
+                                                    chunk_size = chunk.len(),
+                                                    "V2 chunk retry timed out"
+                                                );
                                                 self.endpoint.blacklist_read(idx);
                                             }
                                             _ => {}
                                         }
                                     }
                                 }
-                                if contract_fail { break; }
+                                if contract_fail {
+                                    break;
+                                }
                             } else {
                                 contract_fail = true;
                                 break;
@@ -1103,26 +1366,51 @@ impl StateRefresher {
                     }
                 }
                 if contract_fail && all.is_empty() {
-                    self.note_reader_contract_failure("V2");
+                    self.note_reader_contract_failure("readV2");
                 } else if !all.is_empty() {
-                    self.clear_reader_failure("V2");
+                    self.clear_reader_failure("readV2");
                 }
                 all
             },
             async {
-                if v3_dead { Vec::new() } else { chunk_loop!("V3", v3_chunks, readV3) }
+                if v3_dead {
+                    Vec::new()
+                } else {
+                    chunk_loop!("readV3", v3_chunks, readV3, readV3Call)
+                }
             },
             async {
-                if algebra_dead { Vec::new() } else { chunk_loop!("Algebra", algebra_chunks, readAlgebra) }
+                if algebra_dead {
+                    Vec::new()
+                } else {
+                    chunk_loop!("readAlgebra", algebra_chunks, readAlgebra, readAlgebraCall)
+                }
             },
             async {
-                if aero_dead { Vec::new() } else { chunk_loop!("AeroV2", aero_chunks, readAeroV2) }
+                if aero_dead {
+                    Vec::new()
+                } else {
+                    chunk_loop!("readAeroV2", aero_chunks, readAeroV2, readAeroV2Call)
+                }
             },
             async {
-                if pcs_dead { Vec::new() } else { chunk_loop!("PCS Stable", pcs_chunks, readPcsStable) }
+                if pcs_dead {
+                    Vec::new()
+                } else {
+                    chunk_loop!(
+                        "readPcsStable",
+                        pcs_chunks,
+                        readPcsStable,
+                        readPcsStableCall
+                    )
+                }
             },
             async {
-                if dodo_dead { Vec::new() } else { chunk_loop!("DODO", dodo_chunks, readDodoV2) }
+                if dodo_dead {
+                    Vec::new()
+                } else {
+                    chunk_loop!("readDodoV2", dodo_chunks, readDodoV2, readDodoV2Call)
+                }
             },
             async {
                 if wombat_dead || wombat_pools.is_empty() {
@@ -1130,12 +1418,32 @@ impl StateRefresher {
                 }
                 let (idx, provider) = self.endpoint.pool_pick();
                 let reader = IStateReader::new(self.state_reader_addr, provider);
-                match tokio::time::timeout(self.call_deadline, reader.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
-                    Ok(Ok(states)) => {
-                        self.clear_reader_failure("Wombat");
-                        states
+                let t = Instant::now();
+                match tokio::time::timeout(
+                    self.call_deadline,
+                    reader
+                        .readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone())
+                        .call_raw(),
+                )
+                .await
+                {
+                    Ok(Ok(raw)) => {
+                        self.note_rpc("readWombat", idx, t.elapsed());
+                        let _dt = self.decode_timer("readWombat");
+                        match <IStateReader::readWombatCall as alloy_sol_types::SolCall>::abi_decode_returns(&raw[..]) {
+                            Ok(states) => {
+                                self.clear_reader_failure("readWombat");
+                                states
+                            }
+                            Err(e) => {
+                                warn!("Wombat decode failed: {e}");
+                                self.note_reader_contract_failure("readWombat");
+                                Vec::new()
+                            }
+                        }
                     }
                     outcome => {
+                        self.note_rpc("readWombat", idx, t.elapsed());
                         if let Ok(Err(e)) = &outcome {
                             warn!("Wombat read failed: {e}");
                         } else {
@@ -1148,16 +1456,40 @@ impl StateRefresher {
                         };
                         if transport_fail {
                             self.endpoint.blacklist_read(idx);
-                            let (_, np) = self.endpoint.pool_pick();
+                            let (ridx, np) = self.endpoint.pool_pick();
                             let retry = IStateReader::new(self.state_reader_addr, np);
-                            match tokio::time::timeout(self.call_deadline, retry.readWombat(wombat_pools.clone(), wombat_t0s.clone(), wombat_t1s.clone()).call()).await {
-                                Ok(Ok(states)) => states,
+                            let t2 = Instant::now();
+                            match tokio::time::timeout(
+                                self.call_deadline,
+                                retry
+                                    .readWombat(
+                                        wombat_pools.clone(),
+                                        wombat_t0s.clone(),
+                                        wombat_t1s.clone(),
+                                    )
+                                    .call_raw(),
+                            )
+                            .await
+                            {
+                                Ok(Ok(raw)) => {
+                                    self.note_rpc("readWombat", ridx, t2.elapsed());
+                                    let _dt = self.decode_timer("readWombat");
+                                    match <IStateReader::readWombatCall as alloy_sol_types::SolCall>::abi_decode_returns(&raw[..]) {
+                                        Ok(states) => states,
+                                        Err(e) => {
+                                            warn!("Wombat retry decode failed: {e}");
+                                            self.note_reader_contract_failure("readWombat");
+                                            Vec::new()
+                                        }
+                                    }
+                                }
                                 outcome2 => {
+                                    self.note_rpc("readWombat", ridx, t2.elapsed());
                                     match &outcome2 {
                                         Ok(Err(e2)) => {
                                             warn!("Wombat retry failed: {e2}");
                                             if !arb_rpc::is_contract_transport_error(e2) {
-                                                self.note_reader_contract_failure("Wombat");
+                                                self.note_reader_contract_failure("readWombat");
                                             }
                                         }
                                         Err(_) => warn!("Wombat retry timed out"),
@@ -1167,7 +1499,7 @@ impl StateRefresher {
                                 }
                             }
                         } else {
-                            self.note_reader_contract_failure("Wombat");
+                            self.note_reader_contract_failure("readWombat");
                             Vec::new()
                         }
                     }
@@ -1178,21 +1510,25 @@ impl StateRefresher {
                 if !v2_dead {
                     return Vec::new();
                 }
-                let mut out = Vec::new();
-                for chunk in v2_addrs.chunks(Self::CHUNK_SIZE) {
-                    out.extend(self.multicall_v2(chunk).await);
-                }
-                out
+                let parts = futures::future::join_all(
+                    v2_addrs
+                        .chunks(Self::CHUNK_SIZE)
+                        .map(|c| self.multicall_v2(c)),
+                )
+                .await;
+                parts.concat()
             },
             async {
                 if !v3_dead {
                     return Vec::new();
                 }
-                let mut out = Vec::new();
-                for chunk in v3_addrs.chunks(Self::CHUNK_SIZE) {
-                    out.extend(self.multicall_v3(chunk).await);
-                }
-                out
+                let parts = futures::future::join_all(
+                    v3_addrs
+                        .chunks(Self::CHUNK_SIZE)
+                        .map(|c| self.multicall_v3(c)),
+                )
+                .await;
+                parts.concat()
             },
             async {
                 // Same deployless read for Algebra (globalState) when the
@@ -1200,21 +1536,25 @@ impl StateRefresher {
                 if !algebra_dead {
                     return Vec::new();
                 }
-                let mut out = Vec::new();
-                for chunk in algebra_addrs.chunks(Self::CHUNK_SIZE) {
-                    out.extend(self.multicall_algebra(chunk).await);
-                }
-                out
+                let parts = futures::future::join_all(
+                    algebra_addrs
+                        .chunks(Self::CHUNK_SIZE)
+                        .map(|c| self.multicall_algebra(c)),
+                )
+                .await;
+                parts.concat()
             },
             async {
                 if !aero_dead {
                     return Vec::new();
                 }
-                let mut out = Vec::new();
-                for chunk in aero_addrs.chunks(Self::CHUNK_SIZE) {
-                    out.extend(self.multicall_aero(chunk).await);
-                }
-                out
+                let parts = futures::future::join_all(
+                    aero_addrs
+                        .chunks(Self::CHUNK_SIZE)
+                        .map(|c| self.multicall_aero(c)),
+                )
+                .await;
+                parts.concat()
             },
             async {
                 tokio::time::timeout(self.call_deadline, self.endpoint.block_number())
@@ -1224,6 +1564,12 @@ impl StateRefresher {
                     .unwrap_or(0)
             },
         );
+
+        // PoolStore update section: wall time minus the rpc/decode time any
+        // Multicall3 salvage inside it still spends.
+        let store_start = Instant::now();
+        let pre_rpc_ns = self.rpc_ns.load(Ordering::Relaxed);
+        let pre_decode_ns = self.decode_ns.load(Ordering::Relaxed);
 
         for s in &v2_results {
             let onchain_fee = s.fee as u32;
@@ -1450,8 +1796,11 @@ impl StateRefresher {
             use std::collections::HashSet;
             let mut seen_v2: HashSet<Address> = v2_results.iter().map(|s| s.pool).collect();
             seen_v2.extend(v2_mc.iter().map(|t| t.0));
-            let missing_v2: Vec<Address> =
-                v2_addrs.iter().copied().filter(|a| !seen_v2.contains(a)).collect();
+            let missing_v2: Vec<Address> = v2_addrs
+                .iter()
+                .copied()
+                .filter(|a| !seen_v2.contains(a))
+                .collect();
             if !missing_v2.is_empty() {
                 let mut salvaged = 0usize;
                 for chunk in missing_v2.chunks(Self::CHUNK_SIZE) {
@@ -1472,14 +1821,21 @@ impl StateRefresher {
                     }
                 }
                 if salvaged > 0 {
-                    debug!(salvaged, missing = missing_v2.len(), "Multicall3 V2 salvage");
+                    debug!(
+                        salvaged,
+                        missing = missing_v2.len(),
+                        "Multicall3 V2 salvage"
+                    );
                 }
             }
 
             let mut seen_v3: HashSet<Address> = v3_results.iter().map(|s| s.pool).collect();
             seen_v3.extend(v3_mc.iter().map(|t| t.0));
-            let missing_v3: Vec<Address> =
-                v3_addrs.iter().copied().filter(|a| !seen_v3.contains(a)).collect();
+            let missing_v3: Vec<Address> = v3_addrs
+                .iter()
+                .copied()
+                .filter(|a| !seen_v3.contains(a))
+                .collect();
             if !missing_v3.is_empty() {
                 let mut salvaged = 0usize;
                 for chunk in missing_v3.chunks(Self::CHUNK_SIZE) {
@@ -1505,7 +1861,11 @@ impl StateRefresher {
                     }
                 }
                 if salvaged > 0 {
-                    debug!(salvaged, missing = missing_v3.len(), "Multicall3 V3 salvage");
+                    debug!(
+                        salvaged,
+                        missing = missing_v3.len(),
+                        "Multicall3 V3 salvage"
+                    );
                 }
             }
 
@@ -1544,12 +1904,15 @@ impl StateRefresher {
                     }
                 }
                 if salvaged > 0 {
-                    debug!(salvaged, missing = missing_algebra.len(), "Multicall3 Algebra salvage");
+                    debug!(
+                        salvaged,
+                        missing = missing_algebra.len(),
+                        "Multicall3 Algebra salvage"
+                    );
                 }
             }
 
-            let mut seen_aero: HashSet<Address> =
-                aero_results.iter().map(|s| s.pool).collect();
+            let mut seen_aero: HashSet<Address> = aero_results.iter().map(|s| s.pool).collect();
             seen_aero.extend(aero_mc.iter().map(|t| t.0));
             let missing_aero: Vec<Address> = aero_addrs
                 .iter()
@@ -1581,17 +1944,48 @@ impl StateRefresher {
                     }
                 }
                 if salvaged > 0 {
-                    debug!(salvaged, missing = missing_aero.len(), "Multicall3 AeroV2 salvage");
+                    debug!(
+                        salvaged,
+                        missing = missing_aero.len(),
+                        "Multicall3 AeroV2 salvage"
+                    );
                 }
             }
         }
 
         store.set_block(block);
 
+        let store_phase = store_start
+            .elapsed()
+            .checked_sub(std::time::Duration::from_nanos(
+                self.rpc_ns.load(Ordering::Relaxed) - pre_rpc_ns,
+            ))
+            .and_then(|d| {
+                d.checked_sub(std::time::Duration::from_nanos(
+                    self.decode_ns.load(Ordering::Relaxed) - pre_decode_ns,
+                ))
+            })
+            .unwrap_or_default();
+
         let elapsed = start.elapsed();
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["rpc"])
+            .observe(self.rpc_ns.load(Ordering::Relaxed) as f64 / 1e9);
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["decode"])
+            .observe(self.decode_ns.load(Ordering::Relaxed) as f64 / 1e9);
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["store"])
+            .observe(store_phase.as_secs_f64());
+        REFRESH_PHASE_SECONDS
+            .with_label_values(&["wall"])
+            .observe(elapsed.as_secs_f64());
         debug!(
             updated,
             elapsed_ms = elapsed.as_millis(),
+            rpc_ms = (self.rpc_ns.load(Ordering::Relaxed) / 1_000_000),
+            decode_ms = (self.decode_ns.load(Ordering::Relaxed) / 1_000_000),
+            store_ms = store_phase.as_millis(),
             block,
             "State refresh completed"
         );
@@ -1599,8 +1993,17 @@ impl StateRefresher {
         Ok((updated, elapsed))
     }
 
-    fn partition_by_type(&self) -> (Vec<Address>, Vec<Address>, Vec<Address>, Vec<Address>,
-                                     Vec<Address>, Vec<Address>, Vec<Address>) {
+    fn partition_by_type(
+        &self,
+    ) -> (
+        Vec<Address>,
+        Vec<Address>,
+        Vec<Address>,
+        Vec<Address>,
+        Vec<Address>,
+        Vec<Address>,
+        Vec<Address>,
+    ) {
         partition_pools(&self.pool_configs)
     }
 
@@ -1623,37 +2026,49 @@ mod tests {
 
     #[test]
     fn test_default_fee_pancakeswap_v2_bsc() {
-        let factory: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".parse().unwrap();
+        let factory: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 56), Some(25));
     }
 
     #[test]
     fn test_default_fee_biswap_bsc() {
-        let factory: Address = "0x858E3312ed3A876947EA49d572A7C42DE08af7EE".parse().unwrap();
+        let factory: Address = "0x858E3312ed3A876947EA49d572A7C42DE08af7EE"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 56), Some(10));
     }
 
     #[test]
     fn test_default_fee_mdex_bsc() {
-        let factory: Address = "0x3CD1C46068dAEa5Ebb0d3f55F6915B10648062b8".parse().unwrap();
+        let factory: Address = "0x3CD1C46068dAEa5Ebb0d3f55F6915B10648062b8"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 56), Some(30));
     }
 
     #[test]
     fn test_default_fee_apeswap_bsc() {
-        let factory: Address = "0x0841BD0B734E4F5853f0dD8d7Ea989891DBdcFb5".parse().unwrap();
+        let factory: Address = "0x0841BD0B734E4F5853f0dD8d7Ea989891DBdcFb5"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 56), Some(20));
     }
 
     #[test]
     fn test_default_fee_baseswap_base() {
-        let factory: Address = "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB".parse().unwrap();
+        let factory: Address = "0xFDa619b6d20975be80A10332cD39b9a4b0FAa8BB"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 8453), Some(25));
     }
 
     #[test]
     fn test_default_fee_sushiswap_base() {
-        let factory: Address = "0x71524B4f93c58fcbF659783284E38825f0622859".parse().unwrap();
+        let factory: Address = "0x71524B4f93c58fcbF659783284E38825f0622859"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 8453), Some(30));
     }
 
@@ -1665,22 +2080,78 @@ mod tests {
 
     #[test]
     fn test_default_fee_unknown_chain() {
-        let factory: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73".parse().unwrap();
+        let factory: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73"
+            .parse()
+            .unwrap();
         assert_eq!(default_fee_for_factory(factory, 1), None);
     }
 
     #[test]
     fn test_partition_routes_correctly() {
         let configs = vec![
-            PoolConfig { address: addr(1), protocol: Protocol::UniswapV2, fee_bps: 25, token0: None, token1: None },
-            PoolConfig { address: addr(2), protocol: Protocol::UniswapV3, fee_bps: 0, token0: None, token1: None },
-            PoolConfig { address: addr(3), protocol: Protocol::Algebra, fee_bps: 0, token0: None, token1: None },
-            PoolConfig { address: addr(4), protocol: Protocol::AerodromeV2, fee_bps: 30, token0: None, token1: None },
-            PoolConfig { address: addr(5), protocol: Protocol::PancakeStable, fee_bps: 0, token0: None, token1: None },
-            PoolConfig { address: addr(6), protocol: Protocol::Wombat, fee_bps: 0, token0: Some(addr(10)), token1: Some(addr(11)) },
-            PoolConfig { address: addr(7), protocol: Protocol::DodoV2, fee_bps: 0, token0: None, token1: None },
-            PoolConfig { address: addr(8), protocol: Protocol::UniswapV4, fee_bps: 0, token0: None, token1: None },
-            PoolConfig { address: addr(9), protocol: Protocol::AerodromeSlipstream, fee_bps: 0, token0: None, token1: None },
+            PoolConfig {
+                address: addr(1),
+                protocol: Protocol::UniswapV2,
+                fee_bps: 25,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(2),
+                protocol: Protocol::UniswapV3,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(3),
+                protocol: Protocol::Algebra,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(4),
+                protocol: Protocol::AerodromeV2,
+                fee_bps: 30,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(5),
+                protocol: Protocol::PancakeStable,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(6),
+                protocol: Protocol::Wombat,
+                fee_bps: 0,
+                token0: Some(addr(10)),
+                token1: Some(addr(11)),
+            },
+            PoolConfig {
+                address: addr(7),
+                protocol: Protocol::DodoV2,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(8),
+                protocol: Protocol::UniswapV4,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
+            PoolConfig {
+                address: addr(9),
+                protocol: Protocol::AerodromeSlipstream,
+                fee_bps: 0,
+                token0: None,
+                token1: None,
+            },
         ];
         let (v2, v3, algebra, aero, pcs, wombat, dodo) = partition_pools(&configs);
         assert_eq!(v2, vec![addr(1)]);
@@ -1694,12 +2165,23 @@ mod tests {
 
     #[test]
     fn test_v4_excluded_from_all_partitions() {
-        let configs = vec![
-            PoolConfig { address: addr(1), protocol: Protocol::UniswapV4, fee_bps: 0, token0: None, token1: None },
-        ];
+        let configs = vec![PoolConfig {
+            address: addr(1),
+            protocol: Protocol::UniswapV4,
+            fee_bps: 0,
+            token0: None,
+            token1: None,
+        }];
         let (v2, v3, algebra, aero, pcs, wombat, dodo) = partition_pools(&configs);
-        assert!(v2.is_empty() && v3.is_empty() && algebra.is_empty() && aero.is_empty()
-                && pcs.is_empty() && wombat.is_empty() && dodo.is_empty());
+        assert!(
+            v2.is_empty()
+                && v3.is_empty()
+                && algebra.is_empty()
+                && aero.is_empty()
+                && pcs.is_empty()
+                && wombat.is_empty()
+                && dodo.is_empty()
+        );
     }
 
     #[test]

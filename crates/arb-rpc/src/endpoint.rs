@@ -47,6 +47,16 @@ lazy_static::lazy_static! {
         "Physical HTTP RPC attempts per endpoint (each retry counts)",
         &["endpoint", "outcome"]
     ).unwrap();
+
+    /// Physical round-trip time per endpoint per JSON-RPC method. This is
+    /// the wire+gateway time — node execution is inside it but dominates
+    /// only for heavy eth_calls; decode/store happen client-side after.
+    static ref RPC_HTTP_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
+        "arb_rpc_http_seconds",
+        "Physical HTTP RPC round-trip latency per endpoint and method",
+        &["endpoint", "method"],
+        vec![0.005, 0.01, 0.02, 0.04, 0.07, 0.1, 0.15, 0.25, 0.4, 0.8, 2.0]
+    ).unwrap();
 }
 
 /// Tower layer that counts every physical request round-trip per endpoint.
@@ -59,7 +69,10 @@ impl<S> tower::Layer<S> for MetricsLayer {
     type Service = MetricsService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        MetricsService { inner, endpoint: self.endpoint.clone() }
+        MetricsService {
+            inner,
+            endpoint: self.endpoint.clone(),
+        }
     }
 }
 
@@ -90,18 +103,31 @@ where
     }
 
     fn call(&mut self, req: alloy::rpc::json_rpc::RequestPacket) -> Self::Future {
+        let method = request_method(&req);
         let fut = self.inner.call(req);
         let endpoint = self.endpoint.clone();
         Box::pin(async move {
+            let start = Instant::now();
             let result = fut.await;
+            RPC_HTTP_SECONDS
+                .with_label_values(&[&endpoint, &method])
+                .observe(start.elapsed().as_secs_f64());
             RPC_HTTP_ATTEMPTS
-                .with_label_values(&[
-                    &endpoint,
-                    if result.is_ok() { "ok" } else { "err" },
-                ])
+                .with_label_values(&[&endpoint, if result.is_ok() { "ok" } else { "err" }])
                 .inc();
             result
         })
+    }
+}
+
+/// JSON-RPC method name for labeling — "batch" for multi-request packets.
+fn request_method(req: &alloy::rpc::json_rpc::RequestPacket) -> String {
+    match req {
+        alloy::rpc::json_rpc::RequestPacket::Single(r) => r.method().to_string(),
+        alloy::rpc::json_rpc::RequestPacket::Batch(rs) => rs
+            .first()
+            .map(|r| r.method().to_string())
+            .unwrap_or_else(|| "batch".to_string()),
     }
 }
 
@@ -130,15 +156,39 @@ struct PoolState {
     blacklist_until: Vec<Option<Instant>>,
     /// Round-robin cursor for read distribution.
     rr_cursor: usize,
+    /// Per-endpoint smoothed latency (EWMA, ms). 0 = unmeasured.
+    ewma_ms: Vec<f64>,
 }
 
 impl PoolState {
     /// Pick the next non-blacklisted index; falls back to the cursor if all are benched.
+    /// Endpoints whose measured latency is far above the pool's best are
+    /// skipped (latency-biased round-robin): refresh wall time is bound by
+    /// the picked endpoint's RTT, so slow endpoints cost real time every
+    /// block even when they never error.
     fn pick(&mut self, n: usize) -> usize {
         let now = Instant::now();
-        for off in 0..n {
-            let idx = (self.rr_cursor + off) % n;
-            if self.blacklist_until[idx].is_none_or(|t| t <= now) {
+        let healthy: Vec<usize> = (0..n)
+            .filter(|&i| self.blacklist_until[i].is_none_or(|t| t <= now))
+            .collect();
+        let candidates: &[usize] = if healthy.is_empty() { &[] } else { &healthy };
+        // Best measured latency among candidates; unmeasured endpoints stay
+        // eligible so new pool members still get probed.
+        let best = candidates
+            .iter()
+            .map(|&i| self.ewma_ms[i])
+            .filter(|&e| e > 0.0)
+            .fold(f64::MAX, f64::min);
+        for off in 0..candidates.len().max(1).max(n) {
+            let idx = if candidates.is_empty() {
+                (self.rr_cursor + off) % n
+            } else {
+                candidates[(self.rr_cursor + off) % candidates.len()]
+            };
+            let fast_enough = best == f64::MAX
+                || self.ewma_ms[idx] == 0.0
+                || self.ewma_ms[idx] <= best * 1.5 + 20.0;
+            if fast_enough {
                 self.rr_cursor = (idx + 1) % n;
                 return idx;
             }
@@ -146,6 +196,13 @@ impl PoolState {
         let idx = self.rr_cursor % n;
         self.rr_cursor = (idx + 1) % n;
         idx
+    }
+
+    /// Fold one observed round-trip into the endpoint's EWMA.
+    fn note(&mut self, idx: usize, dur: Duration) {
+        let ms = dur.as_secs_f64() * 1000.0;
+        let e = &mut self.ewma_ms[idx];
+        *e = if *e == 0.0 { ms } else { 0.7 * *e + 0.3 * ms };
     }
 }
 
@@ -160,8 +217,7 @@ pub fn is_transport_error<E>(e: &RpcError<TransportErrorKind, E>) -> bool {
         RpcError::Transport(_) => true,
         RpcError::ErrorResp(p) => {
             p.code == -32601
-                || (p.code == -32000
-                    && p.message.to_ascii_lowercase().contains("not supported"))
+                || (p.code == -32000 && p.message.to_ascii_lowercase().contains("not supported"))
         }
         _ => false,
     }
@@ -244,7 +300,9 @@ impl Endpoint {
                     blacklist.push(None);
                     kept_urls.push(url);
                 }
-                Some(d) => warn!(endpoint = %url, expected = chain_id, got = d, "Read endpoint dropped: chain id mismatch"),
+                Some(d) => {
+                    warn!(endpoint = %url, expected = chain_id, got = d, "Read endpoint dropped: chain id mismatch")
+                }
                 None => warn!(endpoint = %url, "Read endpoint unreachable at startup — skipped"),
             }
         }
@@ -266,7 +324,11 @@ impl Endpoint {
                         "Chain ID mismatch on trader endpoint: expected {chain_id}, got {trader_chain}"
                     );
                 }
-                info!(chain_id, endpoint = turl, "Trader endpoint connected (tx submission only)");
+                info!(
+                    chain_id,
+                    endpoint = turl,
+                    "Trader endpoint connected (tx submission only)"
+                );
                 Some(tp)
             }
         } else {
@@ -274,6 +336,7 @@ impl Endpoint {
             None
         };
 
+        let pool_len = read_pool.len();
         Ok(Self {
             read_urls: kept_urls,
             wss_url: wss_url.to_string(),
@@ -281,6 +344,7 @@ impl Endpoint {
             pool_state: Mutex::new(PoolState {
                 blacklist_until: blacklist,
                 rr_cursor: 0,
+                ewma_ms: vec![0.0; pool_len],
             }),
             trader_provider,
             trader_url: trader_url.map(String::from),
@@ -306,6 +370,13 @@ impl Endpoint {
         (idx, self.read_pool[idx].clone())
     }
 
+    /// Report a successful round-trip time for endpoint `idx` — feeds the
+    /// latency-biased pick so wall-critical reads prefer measured-fast
+    /// endpoints while unmeasured ones stay eligible.
+    pub fn note_latency(&self, idx: usize, dur: Duration) {
+        self.pool_state.lock().unwrap().note(idx, dur);
+    }
+
     /// Bench a read endpoint for 60s after a transport failure (429/timeout).
     /// Failover is just a provider swap — sub-millisecond, no paused cycle.
     pub fn blacklist_read(&self, idx: usize) {
@@ -323,6 +394,11 @@ impl Endpoint {
 
     pub fn read_pool_size(&self) -> usize {
         self.read_pool.len()
+    }
+
+    /// URL of read-pool endpoint `idx` — for per-endpoint metric labels.
+    pub fn endpoint_url(&self, idx: usize) -> &str {
+        &self.read_urls[idx]
     }
 
     pub fn http_url(&self) -> &str {
@@ -344,7 +420,10 @@ impl Endpoint {
     /// Run `f` against the read pool with failover: on transport error the
     /// endpoint is blacklisted for 60s and `f` is retried on the next one,
     /// without pausing execution. RPC-level errors (reverts) return immediately.
-    async fn with_failover<T, E, F, Fut>(&self, mut f: F) -> Result<T, RpcError<TransportErrorKind, E>>
+    async fn with_failover<T, E, F, Fut>(
+        &self,
+        mut f: F,
+    ) -> Result<T, RpcError<TransportErrorKind, E>>
     where
         F: FnMut(HttpProvider) -> Fut,
         Fut: std::future::Future<Output = Result<T, RpcError<TransportErrorKind, E>>>,
@@ -369,11 +448,7 @@ impl Endpoint {
     }
 
     /// eth_call against the read pool. Used for state refresh, simulations, etc.
-    pub async fn eth_call_timed(
-        &self,
-        to: Address,
-        data: Bytes,
-    ) -> Result<(Bytes, Duration)> {
+    pub async fn eth_call_timed(&self, to: Address, data: Bytes) -> Result<(Bytes, Duration)> {
         let start = Instant::now();
 
         let data2 = data.clone();
@@ -401,7 +476,9 @@ impl Endpoint {
 
     /// Block number from the read pool.
     pub async fn block_number(&self) -> Result<u64> {
-        Ok(self.with_failover(|p| async move { p.get_block_number().await }).await?)
+        Ok(self
+            .with_failover(|p| async move { p.get_block_number().await })
+            .await?)
     }
 
     /// Nonce: returns cached value if warm, otherwise fetches from chain.
@@ -418,7 +495,11 @@ impl Endpoint {
             .await?;
         let mut guard = self.nonce_cache.lock().unwrap();
         *guard = Some(chain_nonce);
-        debug!(chain_id = self.chain_id, nonce = chain_nonce, "Nonce fetched from chain (cold start)");
+        debug!(
+            chain_id = self.chain_id,
+            nonce = chain_nonce,
+            "Nonce fetched from chain (cold start)"
+        );
         Ok(chain_nonce)
     }
 
@@ -449,11 +530,16 @@ impl Endpoint {
 
     /// Gas price from the read pool.
     pub async fn gas_price(&self) -> Result<u128> {
-        Ok(self.with_failover(|p| async move { p.get_gas_price().await }).await?)
+        Ok(self
+            .with_failover(|p| async move { p.get_gas_price().await })
+            .await?)
     }
 
     /// Get transaction receipt from the read pool.
-    pub async fn get_receipt(&self, tx_hash: alloy_primitives::B256) -> Result<Option<alloy::rpc::types::TransactionReceipt>> {
+    pub async fn get_receipt(
+        &self,
+        tx_hash: alloy_primitives::B256,
+    ) -> Result<Option<alloy::rpc::types::TransactionReceipt>> {
         Ok(self
             .with_failover(|p| async move { p.get_transaction_receipt(tx_hash).await })
             .await?)
@@ -480,14 +566,13 @@ impl Endpoint {
     ) -> Result<(Vec<alloy::rpc::types::TransactionReceipt>, u64)> {
         let raw: Option<serde_json::Value> = self
             .with_failover(|p| async move {
-                p.raw_request(
-                    "eth_getBlockReceipts".into(),
-                    (format!("0x{block:x}"),),
-                )
-                .await
+                p.raw_request("eth_getBlockReceipts".into(), (format!("0x{block:x}"),))
+                    .await
             })
             .await?;
-        let Some(raw) = raw else { return Ok((vec![], 0)) };
+        let Some(raw) = raw else {
+            return Ok((vec![], 0));
+        };
         let arr = raw.as_array().cloned().unwrap_or_default();
         let mut out = Vec::with_capacity(arr.len());
         let mut skipped = 0u64;
@@ -523,7 +608,9 @@ impl Endpoint {
 
     /// Get native balance from the read pool.
     pub async fn get_balance(&self, address: Address) -> Result<U256> {
-        Ok(self.with_failover(|p| async move { p.get_balance(address).await }).await?)
+        Ok(self
+            .with_failover(|p| async move { p.get_balance(address).await })
+            .await?)
     }
 
     /// Send raw transaction via the TRADER endpoint (costs $0.15/call on Chainstack Trader).
@@ -627,7 +714,10 @@ mod tests {
             -32602,
             "request is too complex/large, try lesser input"
         )));
-        assert!(!is_transport_error(&err_resp(-32000, "some other server error")));
+        assert!(!is_transport_error(&err_resp(
+            -32000,
+            "some other server error"
+        )));
         assert!(!is_transport_error(&err_resp(
             -32001,
             "usage limit for current plan"
@@ -636,8 +726,7 @@ mod tests {
 
     #[test]
     fn transport_failures_bench() {
-        let e: RpcError<TransportErrorKind> =
-            RpcError::Transport(TransportErrorKind::BackendGone);
+        let e: RpcError<TransportErrorKind> = RpcError::Transport(TransportErrorKind::BackendGone);
         assert!(is_transport_error(&e));
     }
 }

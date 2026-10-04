@@ -50,3 +50,12 @@ having read it.
 | Flashbots documentation | https://docs.flashbots.net/ | [recommended] | — |
 | Flashbots research | https://writings.flashbots.net/ | [recommended] | — |
 | Flash Boys 2.0 | https://arxiv.org/abs/1904.05234 | [recommended] | — |
+
+## RPC latency & transports (2026-10-04)
+
+| source | url | status | reviewed |
+|---|---|---|---|
+| blazed.sh ETH RPC benchmark | https://blazed.sh/blog/benchmarking-eth-rpc-providers | [recommended] | — |
+| Chainstack node-latency methodology | https://chainstack.com/ | [recommended] | — |
+| Multicall3 (aggregate3) | https://github.com/mds1/multicall | [verified — fallback read path] | 2026-10-04 |
+| BNB Chain public endpoints | https://docs.bnbchain.org/bnb-smart-chain/developers/json-rpc-api/ | [verified — read pool + latency_bench] | 2026-10-04 |

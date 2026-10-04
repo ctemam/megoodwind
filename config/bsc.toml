@@ -2,12 +2,10 @@
 chain_id = 56
 name = "BSC"
 rpc_https = "${BSC_RPC_URL}"
-# Free read pool — round-robin, 60s blacklist on 429/timeout (spec §Network Resiliency).
+# Free read pool — latency-biased round-robin (EWMA pick), 60s blacklist on
+# 429/timeout (spec §Network Resiliency). Pruned 2026-10-04 by latency_bench:
+# dwellir fails every eth_call; blastapi + both 48.club bench >85ms p50.
 rpc_https_pool = [
-    "https://bsc-mainnet.public.blastapi.io",
-    "https://rpc-bsc.48.club",
-    "https://0.48.club",
-    "https://api-bsc-mainnet-full.n.dwellir.com/2ccf18bf-2916-4198-8856-42172854353c",
     "https://bsc-dataseed.binance.org",
     "https://bsc-dataseed.bnbchain.org",
     "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
