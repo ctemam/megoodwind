@@ -125,7 +125,9 @@ export default function Strategies() {
     if (copy.fidelity != null && copy.chains.length > 1)
       copy.fidelity = copy.fidelity / copy.chains.length
 
-    const out = [...lanes.map(l => ({
+    const out = [...lanes.map(l => {
+      const net = l.any && l.net_usd !== 0 ? l.net_usd : (l.any ? 0 : null)
+      return {
       strategy: l.strategy,
       chain_list: l.chains.join(' · ') || D,
       status: l.live ? 'Live' : 'Measure',
@@ -134,10 +136,11 @@ export default function Strategies() {
       fill_rate: l.submitted > 0 ? l.landed / l.submitted : null,
       avg_latency: null,
       gas_usd: l.any && l.gas_usd != null && l.gas_usd > 0 ? l.gas_usd : null,
-      net_usd: l.any && l.net_usd !== 0 ? l.net_usd : (l.any ? 0 : null),
+      net_usd: net,
+      pnl_per_trade: net != null && l.submitted > 0 ? net / l.submitted : null,
       copy_fidelity: null,
       kill: Object.entries(l.kills).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
-    })), {
+    }}), {
       strategy: copy.strategy,
       chain_list: copy.chains.join(' · ') || D,
       status: 'Shadow',
@@ -147,6 +150,7 @@ export default function Strategies() {
       avg_latency: null,
       gas_usd: null,
       net_usd: null,
+      pnl_per_trade: null,
       copy_fidelity: copy.fidelity,
       kill: Object.entries(copy.kills).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
     }]
@@ -197,7 +201,7 @@ export default function Strategies() {
                 {th('strategy', 'Strategy')}{th('chain_list', 'Chains')}{th('status', 'Status')}
                 {th('signals', 'Signals')}{th('submitted', 'Submitted')}{th('fill_rate', 'Fill rate')}
                 {th('avg_latency', 'Avg latency')}{th('gas_usd', 'Gas spent')}
-                {th('net_usd', 'Net P&L')}{th('copy_fidelity', 'Copy fidelity')}
+                {th('net_usd', 'Net P&L')}{th('pnl_per_trade', 'P&L/trade')}{th('copy_fidelity', 'Copy fidelity')}
                 {th('kill', 'Top kill stage')}
               </tr></thead>
               <tbody>
@@ -213,6 +217,8 @@ export default function Strategies() {
                     <td className="num">{usd0(r.gas_usd, currency, prices)}</td>
                     <td className={`num ${r.net_usd > 0 ? 'pos' : r.net_usd < 0 ? 'neg' : ''}`}>
                       {usd0(r.net_usd, currency, prices)}</td>
+                    <td className={`num ${r.pnl_per_trade > 0 ? 'pos' : r.pnl_per_trade < 0 ? 'neg' : ''}`}>
+                      {usd0(r.pnl_per_trade, currency, prices)}</td>
                     <td className="num">{pct(r.copy_fidelity)}</td>
                     <td className="dim">{r.kill || D}</td>
                   </tr>
