@@ -102,6 +102,12 @@ pub struct GateConfig {
     pub safety_margin_bps: u32,
     #[serde(default = "default_stable_extra_margin")]
     pub stable_pool_extra_margin_bps: u32,
+    /// Per-protocol extra safety margins (ported pattern: per-(chain,DEX)
+    /// calibrated gates). Keys are PoolEntry protocol strings (e.g.
+    /// "pcs_stable", "v3", "dodo"). The largest margin across a path's hops
+    /// is added to safety_margin_bps. Values stay conservative until realized
+    /// fills provide sim-vs-live divergence data to calibrate against.
+    pub protocol_margins: Option<std::collections::HashMap<String, u32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,7 +183,14 @@ pub struct PoolEntry {
 
 impl PoolEntry {
     pub fn parse_protocol(&self) -> Protocol {
-        match self.protocol.as_str() {
+        parse_protocol_name(&self.protocol)
+    }
+}
+
+/// Protocol-name string -> Protocol (config key space, e.g. "v3", "pcs_stable").
+/// Shared by PoolEntry::parse_protocol and gate protocol-margin parsing.
+pub fn parse_protocol_name(s: &str) -> Protocol {
+    match s {
             "v2" | "uniswap_v2" | "pancake_v2" | "biswap" => Protocol::UniswapV2,
             "v3" | "uniswap_v3" | "pancake_v3" => Protocol::UniswapV3,
             "v4" | "uniswap_v4" => Protocol::UniswapV4,
@@ -188,7 +201,6 @@ impl PoolEntry {
             "aero_v2" | "aerodrome" | "velodrome" => Protocol::AerodromeV2,
             "aero_slipstream" | "slipstream" => Protocol::AerodromeSlipstream,
             _ => Protocol::UniswapV2,
-        }
     }
 }
 

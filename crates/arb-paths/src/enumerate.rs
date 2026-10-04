@@ -14,6 +14,10 @@ pub struct PoolInfo {
     pub protocol: Protocol,
     pub token0: Address,
     pub token1: Address,
+    /// Depth proxy (USD liquidity when known, 0.0 otherwise) used to order
+    /// each token's adjacency edges: the per-token and per-flash-token caps
+    /// then keep deep pools first instead of declaration order.
+    pub liquidity_hint: f64,
 }
 
 pub struct PathEnumerator {
@@ -70,6 +74,22 @@ impl PathEnumerator {
                 .entry(pool.token1)
                 .or_default()
                 .push((idx, pool.token0));
+        }
+
+        // Liquidity-ranked adjacency (ported from the GOODWIND winner_graph
+        // pattern): sort each token's edges by depth proxy descending so the
+        // max_paths_through_token / max_paths_per_flash_token caps keep deep
+        // pools rather than whichever pools were declared first. Deterministic
+        // tie-break: pool address asc, then neighbor token asc.
+        for edges in adjacency.values_mut() {
+            edges.sort_by(|(ia, ta), (ib, tb)| {
+                let (pa, pb) = (&self.pools[*ia], &self.pools[*ib]);
+                pb.liquidity_hint
+                    .partial_cmp(&pa.liquidity_hint)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| pa.address.cmp(&pb.address))
+                    .then_with(|| ta.cmp(tb))
+            });
         }
 
         for &flash_token in &self.flash_tokens {
@@ -239,18 +259,21 @@ mod tests {
                 protocol: Protocol::UniswapV2,
                 token0: addr(1),
                 token1: addr(2),
+                liquidity_hint: 0.0,
             },
             PoolInfo {
                 address: addr(11),
                 protocol: Protocol::UniswapV2,
                 token0: addr(2),
                 token1: addr(3),
+                liquidity_hint: 0.0,
             },
             PoolInfo {
                 address: addr(12),
                 protocol: Protocol::UniswapV2,
                 token0: addr(1),
                 token1: addr(3),
+                liquidity_hint: 0.0,
             },
         ];
 
@@ -269,11 +292,11 @@ mod tests {
     #[test]
     fn test_enumerate_respects_max_hops() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(4) },
-            PoolInfo { address: addr(13), protocol: Protocol::UniswapV2, token0: addr(4), token1: addr(5) },
-            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(5), token1: addr(1) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(4), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(13), protocol: Protocol::UniswapV2, token0: addr(4), token1: addr(5), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(5), token1: addr(1), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -296,8 +319,8 @@ mod tests {
     #[test]
     fn test_enumerate_two_hop() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -316,8 +339,8 @@ mod tests {
     #[test]
     fn test_enumerate_no_cycle() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -332,12 +355,12 @@ mod tests {
     #[test]
     fn test_enumerate_max_paths_per_flash_token() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(13), protocol: Protocol::UniswapV3, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(3) },
-            PoolInfo { address: addr(15), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(3) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(13), protocol: Protocol::UniswapV3, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(15), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(3), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -353,9 +376,9 @@ mod tests {
     #[test]
     fn test_enumerate_skips_v4_pools() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV4, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(3) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV4, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(3), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -378,10 +401,10 @@ mod tests {
     #[test]
     fn test_enumerate_four_hop() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(4) },
-            PoolInfo { address: addr(13), protocol: Protocol::UniswapV2, token0: addr(4), token1: addr(1) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(4), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(13), protocol: Protocol::UniswapV2, token0: addr(4), token1: addr(1), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();
@@ -398,12 +421,12 @@ mod tests {
     #[test]
     fn test_all_paths_valid() {
         let pools = vec![
-            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2) },
-            PoolInfo { address: addr(11), protocol: Protocol::UniswapV3, token0: addr(2), token1: addr(3) },
-            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(1) },
-            PoolInfo { address: addr(13), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(3) },
-            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(4) },
-            PoolInfo { address: addr(15), protocol: Protocol::UniswapV3, token0: addr(4), token1: addr(1) },
+            PoolInfo { address: addr(10), protocol: Protocol::UniswapV2, token0: addr(1), token1: addr(2), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(11), protocol: Protocol::UniswapV3, token0: addr(2), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(12), protocol: Protocol::UniswapV2, token0: addr(3), token1: addr(1), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(13), protocol: Protocol::UniswapV3, token0: addr(1), token1: addr(3), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(14), protocol: Protocol::UniswapV2, token0: addr(2), token1: addr(4), liquidity_hint: 0.0 },
+            PoolInfo { address: addr(15), protocol: Protocol::UniswapV3, token0: addr(4), token1: addr(1), liquidity_hint: 0.0 },
         ];
 
         let mut amounts = HashMap::new();

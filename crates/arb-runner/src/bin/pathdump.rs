@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
+                liquidity_hint: 0.0,
         })
         .collect();
 
@@ -82,6 +83,7 @@ async fn main() -> Result<()> {
                 protocol,
                 token0: t0,
                 token1: t1,
+                liquidity_hint: dp.liquidity_usd,
             });
         }
     }

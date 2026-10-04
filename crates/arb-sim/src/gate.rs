@@ -19,6 +19,11 @@ pub struct ProfitGate {
     pub min_profit_usd: f64,
     pub safety_margin_bps: u32,
     pub stable_pool_extra_margin_bps: u32,
+    /// Per-protocol extra margins (per-(chain,DEX) calibration point).
+    /// The largest margin across a path's hops is added to safety_margin_bps.
+    /// stable_pool_extra_margin_bps is applied as the PancakeStable entry
+    /// unless the map supplies an explicit PancakeStable value.
+    pub protocol_margins: HashMap<Protocol, u32>,
     pub token_usd_prices: HashMap<Address, f64>,
     pub token_decimals: HashMap<Address, u32>,
 }
@@ -32,11 +37,35 @@ impl ProfitGate {
         token_usd_prices: HashMap<Address, f64>,
         token_decimals: HashMap<Address, u32>,
     ) -> Self {
+        Self::with_protocol_margins(
+            min_profit_bps,
+            min_profit_usd,
+            safety_margin_bps,
+            stable_pool_extra_margin_bps,
+            HashMap::new(),
+            token_usd_prices,
+            token_decimals,
+        )
+    }
+
+    pub fn with_protocol_margins(
+        min_profit_bps: u32,
+        min_profit_usd: f64,
+        safety_margin_bps: u32,
+        stable_pool_extra_margin_bps: u32,
+        mut protocol_margins: HashMap<Protocol, u32>,
+        token_usd_prices: HashMap<Address, f64>,
+        token_decimals: HashMap<Address, u32>,
+    ) -> Self {
+        protocol_margins
+            .entry(Protocol::PancakeStable)
+            .or_insert(stable_pool_extra_margin_bps);
         Self {
             min_profit_bps,
             min_profit_usd,
             safety_margin_bps,
             stable_pool_extra_margin_bps,
+            protocol_margins,
             token_usd_prices,
             token_decimals,
         }
@@ -66,17 +95,17 @@ impl ProfitGate {
         // Extra margin for protocols with approximate off-chain math.
         // PancakeStable (Curve-style) has complex Newton iteration that may differ from on-chain.
         // AerodromeV2 volatile pools are wei-exact (validated). Aerodrome stable pools are also
-        // wei-exact after the _f/_d/_get_y fix. We keep extra margin only for PancakeStable.
-        let has_stable = path.hops.iter().any(|h| {
-            matches!(h.protocol, Protocol::PancakeStable)
-        });
+        // wei-exact after the _f/_d/_get_y fix. Per-protocol margins come from
+        // config; the least-exact hop sets the margin (max, not sum).
+        let protocol_extra = path
+            .hops
+            .iter()
+            .filter_map(|h| self.protocol_margins.get(&h.protocol))
+            .copied()
+            .max()
+            .unwrap_or(0);
 
-        let total_margin = self.safety_margin_bps
-            + if has_stable {
-                self.stable_pool_extra_margin_bps
-            } else {
-                0
-            };
+        let total_margin = self.safety_margin_bps + protocol_extra;
 
         if result.profit_bps <= total_margin {
             return Decision {

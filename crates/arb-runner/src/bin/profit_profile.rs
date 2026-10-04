@@ -221,6 +221,7 @@ async fn main() -> Result<()> {
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
+                liquidity_hint: 0.0,
         })
         .collect();
 
@@ -283,11 +284,20 @@ async fn main() -> Result<()> {
     println!("PROFILER paths={} max_hops={}", paths.len(), config::spec::MAX_PATH_HOPS);
 
     // Production gate and the permissive counterfactual (no margin/floor).
-    let real_gate = ProfitGate::new(
+    let real_gate = ProfitGate::with_protocol_margins(
         cfg.scanner.min_profit_bps,
         config::min_profit_usd_floor(cfg.gate.min_profit_usd),
         cfg.gate.safety_margin_bps,
         cfg.gate.stable_pool_extra_margin_bps,
+        cfg.gate
+            .protocol_margins
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, &v)| (config::parse_protocol_name(k), v))
+                    .collect()
+            })
+            .unwrap_or_default(),
         token_usd_prices.clone(),
         token_decimals.clone(),
     );

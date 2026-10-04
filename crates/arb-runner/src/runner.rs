@@ -1044,6 +1044,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
+                liquidity_hint: 0.0,
         })
         .collect();
 
@@ -1114,6 +1115,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 protocol,
                 token0: t0,
                 token1: t1,
+                liquidity_hint: dp.liquidity_usd,
             });
             merged += 1;
         }
@@ -1432,12 +1434,26 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
     info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
 
+    // Per-protocol extra margins from [gate.protocol_margins] — the
+    // per-(chain,DEX) calibration slot; defaults preserve prior behavior.
+    let protocol_margins: HashMap<arb_core::types::Protocol, u32> = cfg
+        .gate
+        .protocol_margins
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .map(|(k, &v)| (crate::config::parse_protocol_name(k), v))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut profit_gate = if smoke_test {
         ProfitGate::new(0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone())
     } else {
-        ProfitGate::new(
+        ProfitGate::with_protocol_margins(
             cfg.scanner.min_profit_bps, crate::config::min_profit_usd_floor(cfg.gate.min_profit_usd),
             cfg.gate.safety_margin_bps, cfg.gate.stable_pool_extra_margin_bps,
+            protocol_margins,
             token_usd_prices.clone(), token_decimals.clone(),
         )
     };
