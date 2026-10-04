@@ -101,21 +101,23 @@ granularity (tick-level detail is not read, same as every V3 pool here).
 the exec-probe `eth_call` will validate `executeV4Arbitrage` on the next
 live run; no V4 arb candidate has settled yet.
 
-## Premium RPC — procurement note (Commander action)
+## RPC — free-public-only guidance (Commander constraint)
 
 Measured earlier (`2026-10-04-rpc-latency-transports.md`): ~59ms p50
 best public endpoint from this vantage; vantage dominates endpoint
-choice. To take resting-state arb live:
+choice. Commander constraint: the project runs on free public RPC — no
+paid tiers, no dedicated nodes. Within that scope:
 
-1. **Co-located BSC archive node** (the industry-standard answer):
-   a dedicated node in the same region/AZ as the fleet VM — sub-5ms
-   reads. Vendors: NodeReal dedicated tier, Chainstack dedicated, or a
-   self-hosted erigon-bsc on the fleet's own host.
-2. **Drop-in interim**: move a premium endpoint (NodeReal/QuickNode/Ankr
-   paid tier) to the front of `rpc_https_pool` — EWMA pick already
-   prefers the fastest responder, no code change.
-3. **Private orderflow feed**: set `BSC_MEMPOOL_WSS`/`BSC_MEMPOOL_AUTH`
-   for the chosen provider (NodeReal mev-namespace, bloXroute BDN,
-   48 Club partner feed) — the watcher consumes them as-is.
+1. `rpc_https_pool` + `${VAR}` env expansion already does the wiring —
+   keep the pool pruned to verified-fast public endpoints (the EWMA
+   read-pool pick automatically prefers the fastest responder; no code
+   change needed).
+2. Free WSS endpoints (publicnode/drpc already in config) carry the
+   block-header + pending streams at zero extra cost.
+3. Private orderflow: `private_mempool_wss`/`private_mempool_auth` are
+   env-gated and inert until a feed URL is supplied; a free-tier feed
+   can drop in later if one is ever provisioned — or stay empty
+   forever at no cost.
 
-None of these require another code change; all are env/config-only.
+Nothing in this change requires spending; everything runs on the
+current free endpoints.
