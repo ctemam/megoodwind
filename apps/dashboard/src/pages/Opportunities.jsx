@@ -144,11 +144,11 @@ export default function Opportunities() {
           <thead><tr>
             {th('time', 'Time')}{th('feed_pair', 'Pair')}{th('chain', 'Chain')}
             {th('feed_dex_in', 'Dex route')}{th('feed_price_hi', 'Price')}
-            {th('profit_bps', 'Spread')}{th('feed_h1_txns', 'Txns 1h')}
-            {th('feed_liquidity_usd', 'Liquidity')}{th('buy_pool', 'Buy → Sell')}
-            {th('edge', 'Edge est.')}{th('gas_usd', 'Gas')}
-            {th('simulation_status', 'Verify')}{th('execution_status', 'Outcome')}
-            {th('rejection_reason', 'Kill stage')}{th('lane', 'Lane')}
+            {th('profit_bps', 'Price gap')}{th('feed_h1_txns', 'Trades 1h')}
+            {th('feed_liquidity_usd', 'Pool depth')}{th('buy_pool', 'Cheap pool → Dear pool')}
+            {th('edge', 'Est. profit')}{th('gas_usd', 'Gas cost')}
+            {th('simulation_status', 'On-chain check')}{th('execution_status', 'Result')}
+            {th('rejection_reason', 'Stop reason')}{th('lane', 'Lane')}
           </tr></thead>
           <tbody>
             {sorted.length === 0 && (
