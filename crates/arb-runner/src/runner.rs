@@ -1771,12 +1771,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             0.0
         });
     if cfg.feed.enabled {
-        let watch: HashMap<Address, String> = cfg
-            .feed
-            .tokens
-            .iter()
-            .filter_map(|n| tokens.get(n).map(|&a| (a, n.clone())))
-            .collect();
         let flash_quotes: HashMap<Address, (f64, u8)> = cfg
             .feed
             .flash_quotes
@@ -1788,9 +1782,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 Some((a, (price, dec.min(30) as u8)))
             })
             .collect();
-        if watch.is_empty() || flash_quotes.is_empty() {
+        if flash_quotes.is_empty() {
             warn!(chain = %chain_label,
-                "feed enabled but watch/quote token sets are empty — lane off");
+                "feed enabled but flash-quote set is empty — lane off");
         } else {
             crate::feed_lane::spawn(crate::feed_lane::FeedArgs {
                 cfg: cfg.feed.clone(),
@@ -1802,9 +1796,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 router: Arc::clone(&router),
                 arb_contract,
                 account: copy_account,
-                watch_tokens: watch,
                 flash_quotes,
                 token_usd_prices: token_usd_prices.clone(),
+                blocked: blocked.clone(),
                 data_dir: format!("data/leaders/{chain_label}"),
                 submit_enabled: feed_submit,
             });

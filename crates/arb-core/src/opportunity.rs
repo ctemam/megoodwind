@@ -95,6 +95,31 @@ pub struct ActionableOpportunity {
     pub settled_net_usd: f64,
     #[serde(default)]
     pub unix_ms: u64,
+    // ---- Aggregated-feed context (DEXScreener-mirrored columns) ----------
+    /// Pair label as the feed renders it, e.g. "CAKE / WBNB".
+    #[serde(default)]
+    pub feed_pair: String,
+    /// Dex ids of the two legs, e.g. "pancakeswap-v3-bsc" → "pancakeswap_v2".
+    #[serde(default)]
+    pub feed_dex_in: String,
+    #[serde(default)]
+    pub feed_dex_out: String,
+    /// Cheapest pool (where the borrow leg buys) and dearest pool.
+    #[serde(default)]
+    pub buy_pool: String,
+    #[serde(default)]
+    pub sell_pool: String,
+    /// Price band across the pair's pools, quote-denominated.
+    #[serde(default)]
+    pub feed_price_lo: f64,
+    #[serde(default)]
+    pub feed_price_hi: f64,
+    /// Shallower leg's liquidity, USD.
+    #[serde(default)]
+    pub feed_liquidity_usd: f64,
+    /// h1 transaction count on the shallower leg.
+    #[serde(default)]
+    pub feed_h1_txns: u64,
 }
 
 impl ActionableOpportunity {
@@ -126,6 +151,15 @@ impl ActionableOpportunity {
             execution_status: ExecutionStatus::None,
             rejection_reason: String::new(),
             settled_net_usd: 0.0,
+            feed_pair: String::new(),
+            feed_dex_in: String::new(),
+            feed_dex_out: String::new(),
+            buy_pool: String::new(),
+            sell_pool: String::new(),
+            feed_price_lo: 0.0,
+            feed_price_hi: 0.0,
+            feed_liquidity_usd: 0.0,
+            feed_h1_txns: 0,
             unix_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)

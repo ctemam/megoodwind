@@ -15,14 +15,21 @@ const EXEC_STYLE = {
   landed: 'live', settled: 'live', reverted: '', dropped: '',
 }
 
-// Strategy from the record id: engine rows are <...>/backrun/<...> or
-// <...>/classic/<...>; everything else is a leader (wallet-copy) signal.
+// Strategy from the record id: feed_geckoterminal rows are pre-built feed
+// imports; engine rows are <...>/backrun/<...> or <...>/classic/<...>;
+// everything else is a leader (wallet-copy) signal.
 function laneOf(o) {
   const id = o.opportunity_id || ''
+  if (id.includes('/feed_geckoterminal/')) return 'feed'
   if (id.includes('/backrun/')) return 'backrun'
   if (id.includes('/classic/')) return 'atomic arb'
   return 'wallet copy'
 }
+
+// Mirror of a DEXScreener pair-table row: Pair / DEX badges / Price band /
+// Spread / Txns / Liquidity, then our exec context appended on the right.
+const dexBadge = id => (id || '').replace(/-(bsc|eth|polygon_pos|ethereum|base|arbitrum)$/, '')
+const priceFmt = v => (v == null || v === 0 ? D : v >= 1 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v.toPrecision(3))
 
 export default function Opportunities() {
   const { refreshMs } = useApp()
@@ -97,7 +104,7 @@ export default function Opportunities() {
               <button key={c} className={`tab${c === chain ? ' on' : ''}`} onClick={() => setChain(c)}>{c.toUpperCase()}</button>
             ))}
             <span className="dim">|</span>
-            {['all', 'wallet copy', 'backrun', 'atomic arb'].map(l => (
+            {['all', 'feed', 'wallet copy', 'backrun', 'atomic arb'].map(l => (
               <button key={l} className={`tab${l === lane ? ' on' : ''}`} onClick={() => setLane(l)}>{l}</button>
             ))}
             <button className={`tab${showRejected ? ' on' : ''}`} onClick={() => setShowRejected(v => !v)}>
@@ -107,27 +114,49 @@ export default function Opportunities() {
         </div>
         <table className="tbl">
           <thead><tr>
-            {th('time', 'Time')}{th('source_wallet', 'Source')}{th('lane', 'Strategy')}
-            {th('chain', 'Chain')}{th('route_n', 'Route')}{th('edge', 'Edge est.')}
-            {th('confidence', 'Conf')}{th('simulation_status', 'Sim')}
-            {th('execution_status', 'Outcome')}{th('rejection_reason', 'Kill stage')}
+            {th('time', 'Time')}{th('feed_pair', 'Pair')}{th('chain', 'Chain')}
+            {th('feed_dex_in', 'Dex route')}{th('feed_price_hi', 'Price')}
+            {th('profit_bps', 'Spread')}{th('feed_h1_txns', 'Txns 1h')}
+            {th('feed_liquidity_usd', 'Liquidity')}{th('buy_pool', 'Buy → Sell')}
+            {th('edge', 'Edge est.')}{th('gas_usd', 'Gas')}
+            {th('simulation_status', 'Verify')}{th('execution_status', 'Outcome')}
+            {th('rejection_reason', 'Kill stage')}{th('lane', 'Lane')}
           </tr></thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan="10" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
+              <tr><td colSpan="15" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
             )}
             {sorted.map((o, i) => (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
-                <td title={`${o.source_wallet} · ${o.source_tx}`}>{trunc(o.source_wallet || o.victim_tx)}</td>
-                <td>{o.lane}</td>
+                <td title={`${o.token_in || ''} → ${o.token_out || ''}`}>
+                  {o.feed_pair || `${trunc(o.token_in)}/${trunc(o.token_out)}`}
+                </td>
                 <td>{o.chain}</td>
-                <td title={o.route_pools?.join('\n')}>{o.route_pools?.length || 0} pools</td>
+                <td className="dim">
+                  {o.feed_dex_in || o.feed_dex_out
+                    ? `${dexBadge(o.feed_dex_in)} → ${dexBadge(o.feed_dex_out)}`
+                    : o.lane}
+                </td>
+                <td className="num">
+                  {o.feed_price_lo && o.feed_price_hi
+                    ? `${priceFmt(o.feed_price_lo)} – ${priceFmt(o.feed_price_hi)}`
+                    : D}
+                </td>
+                <td className="num pos">{o.profit_bps ? `${(o.profit_bps / 100).toFixed(1)}%` : D}</td>
+                <td className="num">{o.feed_h1_txns || D}</td>
+                <td className="num">{usd(o.feed_liquidity_usd)}</td>
+                <td className="mono dim" title={o.route_pools?.join('\n')}>
+                  {o.buy_pool && o.sell_pool
+                    ? `${trunc(o.buy_pool)} → ${trunc(o.sell_pool)}`
+                    : `${o.route_pools?.length || 0} pools`}
+                </td>
                 <td className="num pos">{usd(o.edge)}</td>
-                <td className="num">{o.confidence != null ? pct(o.confidence) : D}</td>
+                <td className="num">{usd(o.gas_usd)}</td>
                 <td><span className={`tag ${SIM_STYLE[o.simulation_status] || ''}`}>{o.simulation_status || D}</span></td>
                 <td><span className={`tag ${EXEC_STYLE[o.execution_status] || ''}`}>{o.execution_status || D}</span></td>
                 <td className="muted">{o.rejection_reason || D}</td>
+                <td className="dim">{o.lane}</td>
               </tr>
             ))}
           </tbody>
@@ -135,12 +164,13 @@ export default function Opportunities() {
             <tr style={{ borderTop: '2px solid var(--line)', fontWeight: 600 }}>
               <td>TOTAL</td>
               <td className="dim">{rows.length} opportunities</td>
-              <td className="dim" colSpan={3}></td>
+              <td className="dim" colSpan={7}></td>
               <td className={`num ${rows.reduce((s, o) => s + (o.edge || 0), 0) > 0 ? 'pos' : ''}`}>
                 {usd(rows.reduce((s, o) => s + (o.edge || 0), 0)) || '$0.00'}</td>
-              <td className="dim" colSpan={2}></td>
-              <td className="num">{funnel.submitted ?? 0} sub · {funnel.landed ?? 0} landed</td>
               <td className="dim"></td>
+              <td className="dim"></td>
+              <td className="num">{funnel.submitted ?? 0} sub · {funnel.landed ?? 0} landed</td>
+              <td className="dim" colSpan={2}></td>
             </tr>
           </tfoot>
         </table>
