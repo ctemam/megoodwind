@@ -2904,7 +2904,20 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                     userop = %serde_json::to_string(&op_json).unwrap_or_default(),
                                     "DRY RUN: ERC-4337 UserOperation assembled (not broadcast)"
                                 ),
-                                Err(e) => warn!(error = %e, "DRY RUN: 4337 assembly failed"),
+                                Err(e) => {
+                                    warn!(error = %e, "DRY RUN: 4337 assembly failed");
+                                    // A preview exec_revert is an on-chain sim rejection —
+                                    // the same signal as a real revert, but no tx is ever
+                                    // sent so no receipt feeds the breakers. Without this,
+                                    // a phantom-edge path re-tests every block forever
+                                    // (each preview is a bundler call + seconds of budget).
+                                    if e.to_string().contains("exec_revert") {
+                                        circuit_breaker.record_revert(best.path_id, block_number);
+                                        if let Some(p) = paths.iter().find(|p| p.id == best.path_id) {
+                                            token_breaker.record_revert_for_path(p, block_number);
+                                        }
+                                    }
+                                }
                             },
                             Err(e) => warn!(error = %e, "DRY RUN: bundle build failed"),
                         }
