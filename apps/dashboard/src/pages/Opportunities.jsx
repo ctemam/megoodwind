@@ -51,6 +51,19 @@ export default function Opportunities() {
   }, [refreshMs])
 
   const chains = Object.keys(data?.chains || {})
+  // addr → symbol from the chain token maps (server-provided).
+  // Placeholder names from leader-scan merges (TK_0x…) aren't symbols.
+  const symOf = a => {
+    const s = a ? (data?.symbols || {})[a.toLowerCase()] : null
+    return s && !s.startsWith('TK_0x') ? s : null
+  }
+  const pairOf = o => {
+    if (o.feed_pair) return o.feed_pair
+    const a = symOf(o.token_in) || (o.token_in ? trunc(o.token_in) : null)
+    const b = symOf(o.token_out) || (o.token_out ? trunc(o.token_out) : null)
+    if (a && b && a !== b) return `${a} / ${b}`
+    return a || D
+  }
 
   // Single merged feed across chains — one chronological list where a
   // wallet-copy signal and a pool-scan arb sit side by side.
@@ -137,12 +150,8 @@ export default function Opportunities() {
             {pageRows.map((o, i) => (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
-                <td title={`${o.token_in || ''} → ${o.token_out || ''}`} className="mono">
-                  {o.feed_pair
-                    ? <span style={{ fontWeight: 400 }}>{o.feed_pair}</span>
-                    : o.token_in && o.token_out && o.token_in !== o.token_out
-                      ? `${trunc(o.token_in)} → ${trunc(o.token_out)}`
-                      : trunc(o.token_in) || D}
+                <td title={`${o.token_in || ''} → ${o.token_out || ''}`}>
+                  {pairOf(o)}
                 </td>
                 <td>{o.chain}</td>
                 <td className="dim">

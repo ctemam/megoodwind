@@ -1733,7 +1733,16 @@ app.get('/api/wallet-intelligence', async (req, res) => {
 // Reads data/leaders/<chain>/_opportunities.jsonl, dedupes by id keeping the
 // latest record, plus the live arb_opportunity_* funnel counters.
 app.get('/api/opportunities', async (req, res) => {
-  const out = { live: isLive(), chains: {} }
+  const out = { live: isLive(), chains: {}, symbols: {} }
+  // addr(lowercase) → symbol, unioned across chains so the table can render
+  // "USDT / WBNB" instead of raw 0x addresses.
+  for (const c of Object.keys(CHAINS)) {
+    try {
+      const t = readToml(c)
+      for (const m of tomlSection(t, 'tokens').matchAll(/^\s*([A-Za-z0-9_]+)\s*=\s*"(0x[0-9a-fA-F]+)"/gm))
+        out.symbols[m[2].toLowerCase()] = m[1]
+    } catch {}
+  }
   for (const [c, cfg] of Object.entries(CHAINS)) {
     const dir = path.join(REPO, 'data', 'leaders', cfg.label)
     const byId = {}
