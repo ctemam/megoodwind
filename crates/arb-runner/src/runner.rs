@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
@@ -1011,7 +1011,86 @@ fn write_status_json(
     let _ = std::fs::write(path, serde_json::to_string_pretty(&status).unwrap_or_default());
 }
 
-pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
+/// Hot-reload loop: leader_scan merges newly discovered leader pools into
+/// the config file continuously, but the boot snapshot above would
+/// otherwise stay frozen for the process lifetime — leader routes through
+/// pools we never tracked die silently at projection. Every interval,
+/// re-parse the config, register pools not yet known with the refresher
+/// (they join the next refresh cycle) and the pair/token indexes, then
+/// warm their state immediately. The classic-arb path enumerator is NOT
+/// rebuilt — hot pools serve projection/copy routing only.
+#[allow(clippy::too_many_arguments)]
+fn spawn_pool_hot_reload(
+    refresher: Arc<StateRefresher>,
+    store: Arc<PoolStore>,
+    pair_to_pools: Arc<RwLock<HashMap<(Address, Address), Vec<(Address, u32)>>>>,
+    pool_tokens: Arc<RwLock<HashMap<Address, (Address, Address)>>>,
+    config_path: String,
+    chain: String,
+    known_pools: HashSet<Address>,
+) {
+    tokio::spawn(async move {
+        let mut known = known_pools;
+        loop {
+            tokio::time::sleep(Duration::from_secs(180)).await;
+            let Ok(re_cfg) = crate::config::load_config(&config_path) else {
+                continue;
+            };
+            let re_tokens: HashMap<String, Address> = re_cfg
+                .tokens
+                .iter()
+                .filter_map(|(name, addr)| {
+                    addr.parse::<Address>().ok().map(|a| (name.clone(), a))
+                })
+                .collect();
+            let mut new_cfgs: Vec<PoolConfig> = Vec::new();
+            let mut new_addrs: Vec<Address> = Vec::new();
+            for p in &re_cfg.pools {
+                let Ok(addr) = p.pseudo_address() else { continue };
+                if !known.insert(addr) {
+                    continue;
+                }
+                let (Some(&t0), Some(&t1)) =
+                    (re_tokens.get(&p.token0), re_tokens.get(&p.token1))
+                else {
+                    continue;
+                };
+                let protocol = p.parse_protocol();
+                // Hot-loaded pools have no V4 pool spec (pool_id/manager) —
+                // a merged V4 entry could not be read anyway.
+                if protocol == Protocol::UniswapV4 {
+                    continue;
+                }
+                new_addrs.push(addr);
+                new_cfgs.push(PoolConfig {
+                    address: addr,
+                    protocol,
+                    fee_bps: p.fee_bps,
+                    token0: Some(t0),
+                    token1: Some(t1),
+                });
+                let key = if t0 < t1 { (t0, t1) } else { (t1, t0) };
+                pair_to_pools
+                    .write()
+                    .unwrap()
+                    .entry(key)
+                    .or_default()
+                    .push((addr, p.fee_bps));
+                pool_tokens.write().unwrap().insert(addr, (t0, t1));
+            }
+            if new_addrs.is_empty() {
+                continue;
+            }
+            let added = new_addrs.len();
+            refresher.add_pools(new_cfgs);
+            let warmed = refresher.refresh_pools(&store, &new_addrs).await;
+            metrics::POOLS_HOT.with_label_values(&[&chain]).inc_by(added as f64);
+            info!(added, warmed, tracked = known.len(), "Hot-loaded discovered pools");
+        }
+    });
+}
+
+pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<()> {
     use rayon::prelude::*;
     let started = chrono::Utc::now();
     let chain_name = cfg.chain.name.clone();
@@ -1296,6 +1375,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         Some(ms) => refresher.with_call_deadline(ms),
         None => refresher,
     };
+    let refresher = Arc::new(refresher);
 
     let (count, elapsed) = refresher.refresh(&store).await?;
     info!(pools = count, elapsed_ms = elapsed.as_millis(), "Initial state refresh complete");
@@ -1347,6 +1427,20 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         .iter()
         .map(|p| (p.address, (p.token0, p.token1)))
         .collect();
+    // Shared, mutable views — the hot-reload loop below extends them as
+    // leader_scan merges new pools into the config file.
+    let pair_to_pools = Arc::new(RwLock::new(pair_to_pools));
+    let pool_tokens = Arc::new(RwLock::new(pool_tokens));
+    let known_pools: HashSet<Address> = pool_infos.iter().map(|p| p.address).collect();
+    spawn_pool_hot_reload(
+        Arc::clone(&refresher),
+        Arc::clone(&store),
+        Arc::clone(&pair_to_pools),
+        Arc::clone(&pool_tokens),
+        config_path.to_string(),
+        chain_name.clone(),
+        known_pools,
+    );
     let mut quarantined: std::collections::HashSet<Address> =
         std::collections::HashSet::new();
 
@@ -1742,7 +1836,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             // pools too, not just the first.
             let Some((projected, hit_pools, victim_usd, max_move)) =
                 arb_mempool::impact::project_pending_path(
-                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                    &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
                     &token_usd_prices, &token_decimals,
                 )
             else { continue };
@@ -2028,7 +2122,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     None
                 } else {
                     arb_mempool::impact::project_pending_path(
-                        &store, &pending.decoded, amount_in, &pair_to_pools,
+                        &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
                         &token_usd_prices, &token_decimals,
                     ).map(|(s, _, _, _)| s)
                 };
@@ -2340,7 +2434,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 // same-pair peers — broken/exhausted state fabricates
                 // phantom arb legs on otherwise-real pending swaps.
                 quarantined = arb_mempool::impact::quarantine_outlier_pools(
-                    &store, &pair_to_pools, &pool_tokens, 3.0);
+                    &store, &pair_to_pools.read().unwrap(), &pool_tokens.read().unwrap(), 3.0);
             }
             Err(e) => {
                 warn!(block = block_number, error = %e, "State refresh failed");

@@ -21,7 +21,7 @@
 //! skipped and retried on the leader's next signal.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{Address, B256, U256};
@@ -72,7 +72,8 @@ impl CopyMode {
 }
 
 /// (tokenA, tokenB) sorted → [(pool, fee_bps)] — mirrors the runner's
-/// pair_to_pools index built at startup.
+/// pair_to_pools index — shared with the runner so hot-reloaded pools
+/// (leader-scan merges mid-run) are visible without a restart.
 pub type PairPools = HashMap<(Address, Address), Vec<(Address, u32)>>;
 
 pub struct CopyLane {
@@ -94,7 +95,7 @@ pub struct CopyLane {
     /// V2 routers allowed to carry copies.
     v2_routers: HashSet<Address>,
     store: Arc<PoolStore>,
-    pair_to_pools: PairPools,
+    pair_to_pools: Arc<RwLock<PairPools>>,
     router: Arc<VenueRouter>,
     account: Option<Address>,
     endpoint: Arc<Endpoint>,
@@ -130,7 +131,7 @@ impl CopyLane {
         chain_id: u64,
         registry: Arc<LeaderRegistry>,
         store: Arc<PoolStore>,
-        pair_to_pools: PairPools,
+        pair_to_pools: Arc<RwLock<PairPools>>,
         blocked: HashSet<Address>,
         prices: HashMap<Address, f64>,
         decimals: HashMap<Address, u32>,
@@ -317,7 +318,8 @@ impl CopyLane {
         for pair in path.windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let key = if a < b { (a, b) } else { (b, a) };
-            let candidates = self.pair_to_pools.get(&key)?;
+            let candidates = self.pair_to_pools.read().unwrap().get(&key)?.clone();
+            let candidates = &candidates;
             let pool = candidates
                 .iter()
                 .filter(|(p, _)| self.store.get(p).is_some())

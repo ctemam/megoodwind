@@ -86,6 +86,12 @@ lazy_static::lazy_static! {
         &["chain", "result"]
     ).unwrap();
 
+    pub static ref POOLS_HOT: CounterVec = register_counter_vec!(
+        "arb_pools_hot_added_total",
+        "Pools hot-loaded into the live set from config reloads",
+        &["chain"]
+    ).unwrap();
+
     pub static ref WARP_SPEND_USD: Counter = register_counter!(
         "arb_warp_spend_usd_total",
         "Total USD spent on Warp/Trader calls at $0.15 each"

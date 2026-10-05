@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use alloy::sol;
@@ -395,7 +395,7 @@ impl MethodCircuitBreaker {
 pub struct StateRefresher {
     endpoint: Arc<Endpoint>,
     state_reader_addr: Address,
-    pool_configs: Vec<PoolConfig>,
+    pool_configs: RwLock<Vec<PoolConfig>>,
     /// V4 pool identities (pseudo addr → poolId + PoolManager). Kept off
     /// pool_configs so the protocol partition and its tests are untouched.
     v4_pools: Vec<V4PoolSpec>,
@@ -434,7 +434,7 @@ impl StateRefresher {
         Self {
             endpoint,
             state_reader_addr,
-            pool_configs,
+            pool_configs: RwLock::new(pool_configs),
             v4_pools: Vec::new(),
             chain_id,
             call_deadline: Self::CALL_DEADLINE,
@@ -598,8 +598,16 @@ impl StateRefresher {
         })
     }
 
+    /// Hot-add pools discovered mid-run (leader-scan merge). They join the
+    /// next refresh cycle and become visible to refresh_pools immediately.
+    pub fn add_pools(&self, mut add: Vec<PoolConfig>) {
+        self.pool_configs.write().unwrap().append(&mut add);
+    }
+
     fn pool_tokens(&self, pool: &Address) -> Option<(Address, Address)> {
         self.pool_configs
+            .read()
+            .unwrap()
             .iter()
             .find(|pc| pc.address == *pool)
             .and_then(|pc| pc.token0.zip(pc.token1))
@@ -607,6 +615,8 @@ impl StateRefresher {
 
     fn pool_protocol(&self, pool: &Address) -> Option<Protocol> {
         self.pool_configs
+            .read()
+            .unwrap()
             .iter()
             .find(|pc| pc.address == *pool)
             .map(|pc| pc.protocol)
@@ -735,6 +745,8 @@ impl StateRefresher {
     /// in raw hundredths-of-a-bip units (config bps × 100).
     fn pool_config_fee_raw(&self, pool: &Address) -> Option<u32> {
         self.pool_configs
+            .read()
+            .unwrap()
             .iter()
             .find(|pc| pc.address == *pool)
             .map(|pc| pc.fee_bps)
@@ -1287,8 +1299,13 @@ impl StateRefresher {
         let wombat_data: Vec<(Address, Address, Address)> = wombat_addrs
             .iter()
             .filter_map(|addr| {
-                let cfg = self.pool_configs.iter().find(|c| c.address == *addr)?;
-                Some((*addr, cfg.token0?, cfg.token1?))
+                self.pool_configs
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c.address == *addr)
+                    .and_then(|c| c.token0.zip(c.token1))
+                    .map(|(t0, t1)| (*addr, t0, t1))
             })
             .collect();
         let wombat_pools: Vec<Address> = wombat_data.iter().map(|d| d.0).collect();
@@ -2349,11 +2366,13 @@ impl StateRefresher {
         Vec<Address>,
         Vec<Address>,
     ) {
-        partition_pools(&self.pool_configs)
+        partition_pools(&self.pool_configs.read().unwrap())
     }
 
     fn fee_for_pool(&self, pool: &Address) -> u32 {
         self.pool_configs
+            .read()
+            .unwrap()
             .iter()
             .find(|pc| pc.address == *pool)
             .map(|pc| pc.fee_bps)
