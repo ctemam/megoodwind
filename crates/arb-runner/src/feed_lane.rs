@@ -522,11 +522,16 @@ async fn run(args: FeedArgs) {
                 ingest.push(*t);
             }
         }
+        let mut ds_added = 0u64;
         for chunk in ingest.chunks(30) {
             let pairs = ds_fetch_quote_pools(&client, ds_slug, chunk).await;
             for dp in &pairs {
                 if let Some(p) = dp.normalize() {
+                    if bait_set.contains(&p.pool) {
+                        continue;
+                    }
                     if seen.insert(p.pool) {
+                        ds_added += 1;
                         norm.push(p);
                     }
                 }
@@ -538,7 +543,7 @@ async fn run(args: FeedArgs) {
             .inc_by(gt_norm as f64);
         metrics::FEED_INGESTED
             .with_label_values(&[&args.chain, "ds"])
-            .inc_by((norm.len() - gt_norm) as f64);
+            .inc_by(ds_added as f64);
 
         if norm.is_empty() {
             tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
