@@ -580,6 +580,12 @@ async fn run(args: FeedArgs) {
             by_pair.entry((p.base, p.quote)).or_default().push(p);
         }
 
+        // Collect candidates across all pair groups first — then ONE
+        // merged pool registration + ONE merged refresh + ONE gas read
+        // cover every verify in the cycle (same two-pass discipline as
+        // the backrun lane; probes stay serial, they need the account
+        // context and can't be batched).
+        let mut todo: Vec<FeedCandidate> = Vec::new();
         for ((base, quote), mut group) in by_pair {
             if group.len() < 2 {
                 continue;
@@ -665,19 +671,69 @@ async fn run(args: FeedArgs) {
                 .with_label_values(&[&args.chain])
                 .inc();
             cooldown.insert(key, Instant::now());
-            let fails = verify_and_submit(&args, &cand, &mut next_id, &mut registered)
-                .await;
-            if let Some((pool, strikes)) = fails {
-                let (n, _) = suppressed.get(&pool).copied().unwrap_or((0, Instant::now()));
-                let n = n + strikes;
-                if n >= 2 {
-                    suppressed.insert(
-                        pool,
-                        (n, Instant::now() + Duration::from_secs(3600)),
-                    );
-                    warn!(pool = %pool, "feed lane suppressing reverting pool 1h");
-                } else {
-                    suppressed.insert(pool, (n, Instant::now() + Duration::from_secs(60)));
+            todo.push(cand);
+        }
+
+        if !todo.is_empty() {
+            // Register every candidate's pools, then ONE merged refresh
+            // and ONE gas read for the whole cycle.
+            let mut add = Vec::new();
+            for c in &todo {
+                for (addr, proto) in
+                    [(c.pool_in, c.proto_in), (c.pool_out, c.proto_out)]
+                {
+                    if registered.insert(addr) {
+                        add.push(PoolConfig {
+                            address: addr,
+                            protocol: proto,
+                            fee_bps: 0, // StateReader supplies real fee
+                            token0: None,
+                            token1: None,
+                        });
+                    }
+                }
+            }
+            if !add.is_empty() {
+                args.refresher.add_pools(add);
+            }
+            let mut all_pools: Vec<Address> = Vec::new();
+            for c in &todo {
+                for a in [c.pool_in, c.pool_out] {
+                    if !all_pools.contains(&a) {
+                        all_pools.push(a);
+                    }
+                }
+            }
+            args.refresher.refresh_pools(&args.store, &all_pools).await;
+            let gas_usd = match args.endpoint.gas_price().await {
+                Ok(gp) => {
+                    // ~600k gas round trip × gas price × native price —
+                    // max-priced tracked token is wrong (BTCB ~= 130x BNB).
+                    gp as f64 * 600_000.0 / 1e18 * args.native_usd
+                }
+                Err(_) => 0.0,
+            };
+            for cand in &todo {
+                let fails =
+                    verify_and_submit(&args, cand, &mut next_id, gas_usd).await;
+                if let Some((pool, strikes)) = fails {
+                    let (n, _) = suppressed
+                        .get(&pool)
+                        .copied()
+                        .unwrap_or((0, Instant::now()));
+                    let n = n + strikes;
+                    if n >= 2 {
+                        suppressed.insert(
+                            pool,
+                            (n, Instant::now() + Duration::from_secs(3600)),
+                        );
+                        warn!(pool = %pool, "feed lane suppressing reverting pool 1h");
+                    } else {
+                        suppressed.insert(
+                            pool,
+                            (n, Instant::now() + Duration::from_secs(60)),
+                        );
+                    }
                 }
             }
         }
@@ -718,13 +774,15 @@ async fn fetch(client: &reqwest::Client, url: &str) -> FetchOutcome {
     }
 }
 
-/// Steps 3+4: fresh state → local sim → eth_call probe → venue submit.
+/// Steps 3+4: local sim on the cycle's merged refresh → eth_call probe →
+/// venue submit. `gas_usd` is the cycle-level gas estimate — pools were
+/// already registered and refreshed once for all candidates.
 /// Returns Some((pool, strikes)) when a pool should accrue a suppress strike.
 async fn verify_and_submit(
     args: &FeedArgs,
     c: &FeedCandidate,
     next_id: &mut u32,
-    registered: &mut HashSet<Address>,
+    gas_usd: f64,
 ) -> Option<(Address, u32)> {
     let mut opp = ActionableOpportunity::new(
         &args.chain,
@@ -747,35 +805,8 @@ async fn verify_and_submit(
     opp.feed_liquidity_usd = c.min_liquidity_usd;
     opp.feed_h1_txns = c.h1_min;
 
-    // Register the pools with the state refresher once, then pull state.
-    let mut add = Vec::new();
-    for (addr, proto) in [(c.pool_in, c.proto_in), (c.pool_out, c.proto_out)] {
-        if registered.insert(addr) {
-            add.push(PoolConfig {
-                address: addr,
-                protocol: proto,
-                fee_bps: 0, // StateReader supplies real fee on-chain
-                token0: None,
-                token1: None,
-            });
-        }
-    }
-    if !add.is_empty() {
-        args.refresher.add_pools(add);
-    }
-    let warmed = args
-        .refresher
-        .refresh_pools(&args.store, &[c.pool_in, c.pool_out])
-        .await;
-    if warmed < 2 {
-        opp.simulation_status = SimulationStatus::Unusable;
-        opp.rejection_reason = "state_unreadable".into();
-        let _ = opp.append_jsonl(&args.data_dir);
-        metrics::FEED_VERIFIED
-            .with_label_values(&[&args.chain, "state_fail"])
-            .inc();
-        return None;
-    }
+    // Pools were registered and refreshed once for the whole cycle — a
+    // pool that still lacks state fails the fresh-state sim below.
 
     // Size the flash: min(notional cap, share of the shallower pool's liq)
     // converted to borrow-token wei.
@@ -835,15 +866,7 @@ async fn verify_and_submit(
         .with_label_values(&[&args.chain, "pass"])
         .inc();
 
-    // Step 4 — abort if gross can't cover gas.
-    let gas_usd = match args.endpoint.gas_price().await {
-        Ok(gp) => {
-            // ~600k gas round trip × gas price × the chain's native price —
-            // max-priced tracked token is wrong (BTCB ~= 130x BNB).
-            gp as f64 * 600_000.0 / 1e18 * args.native_usd
-        }
-        Err(_) => 0.0,
-    };
+    // Step 4 — abort if gross can't cover gas (cycle-level estimate).
     opp.gas_usd = gas_usd;
     if gross_usd - gas_usd < args.cfg.min_net_usd {
         opp.rejection_reason = "negative_net_after_gas".into();
