@@ -2343,7 +2343,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 }
                 tgt.truncate(256);
                 let t_refresh = Instant::now();
-                let n = refresher.refresh_pools(&store, &tgt).await;
+                // Refresh + receipts are independent — overlap them.
+                // Serial used to stack a full RTT (~300-500ms on public
+                // RPC) onto every victim's critical path.
+                let receipts_fut = futures::future::join_all(
+                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
+                );
+                let (n, landed_raw) = futures::future::join(
+                    refresher.refresh_pools(&store, &tgt),
+                    receipts_fut,
+                )
+                .await;
                 debug!(victims = prepped.len(), pools = tgt.len(), updated = n,
                     ms = t_refresh.elapsed().as_millis(),
                     "backrun merged targeted refresh");
@@ -2351,13 +2361,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 // Parallel receipt batch — victims that already landed
                 // skip re-projection (the refreshed store IS the
                 // post-victim state); serial receipts added ~1 RTT each.
-                let landed: Vec<bool> = futures::future::join_all(
-                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
-                )
-                .await
-                .into_iter()
-                .map(|r| r.ok().flatten().is_some())
-                .collect();
+                let landed: Vec<bool> = landed_raw
+                    .into_iter()
+                    .map(|r| r.ok().flatten().is_some())
+                    .collect();
 
                 // ── Pass C: re-verify + submit each victim in order ──
                 for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
