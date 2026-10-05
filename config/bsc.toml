@@ -392,6 +392,11 @@ BUSD = "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56"
 # === V2 Pools (PancakeSwap V2 + BiSwap) ===
 CAKE = "0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82"
 FDUSD = "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409"
+LINK = "0xF8A0BF9cF54Bb92F17374d9e9A321E6a111a51bD"
+ADA  = "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47"
+DOT  = "0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402"
+XRP  = "0x1D2F0da169ceB9fC7B4a0F0B91a2d5b1B5F64743"
+DOGE = "0xbA2aE424d960c26247Dd6c32edC70B295c744C43"
 
 TK_0x00541ab4c72593734aa09bdd66b29818faff1111 = "0x00541ab4c72593734aa09bdd66b29818faff1111"
 TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc = "0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
@@ -968,10 +973,10 @@ classic_arb = true
 backrun     = true
 [feed]
 enabled      = true
-tokens       = ["WBNB", "ETH", "BTCB", "CAKE"]
+tokens       = ["WBNB", "ETH", "BTCB", "CAKE", "LINK", "ADA", "DOT", "XRP", "DOGE"]
 flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD"]
 interval_secs      = 15
-min_spread_bps     = 50.0
+min_spread_bps     = 30.0  # BSC gas ~$0.4 — 30bps x $2k notional still nets >$5
 max_spread_bps     = 200.0
 min_liquidity_usd  = 50000.0
 min_h1_txns        = 3
