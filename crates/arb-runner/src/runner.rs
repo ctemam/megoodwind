@@ -1229,6 +1229,795 @@ fn spawn_pool_hot_reload(
     });
 }
 
+
+/// Shared context for the detached backrun lane. Every field the
+/// per-victim pipeline touches lives here so the lane runs as its own
+/// task: a pending victim is evaluated when it ARRIVES on the mempool
+/// socket, not when the next block header lands — the block-gated drain
+/// used to leave victims ~1-2s old at first eval, which is the race
+/// window competitors close in.
+///
+/// The mutable singletons (breakers, profit gate, smart account) sit
+/// behind std::sync::Mutex shared with the block loop; every use is a
+/// statement-scoped CPU op, never held across .await.
+struct BackrunCtx {
+    store: Arc<PoolStore>,
+    refresher: Arc<StateRefresher>,
+    endpoint: Arc<Endpoint>,
+    cfg: Arc<AppConfig>,
+    paths: Arc<Vec<PathTemplate>>,
+    ready_templates: Arc<Vec<(String, std::collections::HashSet<Address>)>>,
+    leader_observer: Option<arb_leaders::LeaderObserver>,
+    copy_lane: Option<crate::copy_lane::CopyLane>,
+    pair_to_pools: Arc<RwLock<HashMap<(Address, Address), Vec<(Address, u32)>>>>,
+    token_usd_prices: Arc<RwLock<HashMap<Address, f64>>>,
+    token_decimals: Arc<RwLock<HashMap<Address, u32>>>,
+    flash_bounds: Arc<HashMap<Address, (U256, U256)>>,
+    quarantined: Arc<RwLock<HashSet<Address>>>,
+    pool_to_paths: Arc<HashMap<Address, Vec<usize>>>,
+    optimization_iterations: usize,
+    dry_run: bool,
+    router: Arc<arb_submit::router::VenueRouter>,
+    presign_pool: Arc<PresignPool>,
+    signers: Arc<Vec<PrivateKeySigner>>,
+    signer_rot: Arc<std::sync::atomic::AtomicUsize>,
+    pimlico_venue: Option<PimlicoSubmitter>,
+    settle_ctx: SettleCtx,
+    cb_tx: mpsc::Sender<(u32, TxOutcome, u64)>,
+    arb_contract: Address,
+    chain_label: &'static str,
+    profit_gate: Arc<std::sync::Mutex<ProfitGate>>,
+    circuit_breaker: Arc<std::sync::Mutex<PathCircuitBreaker>>,
+    token_breaker: Arc<std::sync::Mutex<TokenCircuitBreaker>>,
+    smart_account: Arc<std::sync::Mutex<Option<Address>>>,
+    latest_block: Arc<std::sync::atomic::AtomicU64>,
+}
+
+async fn backrun_pass(
+    ctx: &BackrunCtx,
+    pending_events: Vec<arb_mempool::watcher::PendingSwap>,
+) {
+    use rayon::prelude::*;
+    let store = &ctx.store;
+    let refresher = &ctx.refresher;
+    let endpoint = &ctx.endpoint;
+    let cfg = &ctx.cfg;
+    let paths = &ctx.paths;
+    let ready_templates = &ctx.ready_templates;
+    let leader_observer = &ctx.leader_observer;
+    let copy_lane = &ctx.copy_lane;
+    let pair_to_pools = &ctx.pair_to_pools;
+    let token_usd_prices = ctx.token_usd_prices.read().unwrap().clone();
+    let token_decimals = ctx.token_decimals.read().unwrap().clone();
+    let flash_bounds = &ctx.flash_bounds;
+    let quarantined = &ctx.quarantined;
+    let pool_to_paths = &ctx.pool_to_paths;
+    let optimization_iterations = ctx.optimization_iterations;
+    let dry_run = ctx.dry_run;
+    let router = &ctx.router;
+    let presign_pool = &ctx.presign_pool;
+    let signers = &ctx.signers;
+    let signer_rot = &ctx.signer_rot;
+    let pimlico_venue = &ctx.pimlico_venue;
+    let settle_ctx = &ctx.settle_ctx;
+    let cb_tx = &ctx.cb_tx;
+    let arb_contract = ctx.arb_contract;
+    let chain_label = ctx.chain_label;
+    let scan_start = Instant::now();
+    let block_number = ctx.latest_block.load(std::sync::atomic::Ordering::Relaxed);
+            /// Per-victim CPU-eval output carried into the merged
+            /// refresh + submit passes below.
+            struct PreppedBackrun {
+                pending: arb_mempool::watcher::PendingSwap,
+                amount_in: U256,
+                hit_pools: Vec<Address>,
+                /// Indices into ready_templates (leader routes matched).
+                matched: Vec<usize>,
+                scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)>,
+            }
+            let mut prepped: Vec<PreppedBackrun> = Vec::new();
+
+            // ── Pass A: pure-CPU eval for every pending victim. No RPC
+            // here — the serial per-victim refresh+receipt used to put
+            // ~1.3s on the critical path per victim and the queue tail
+            // arrived a full block late.
+            // Process pending mempool swaps for backrun opportunities
+            for pending in pending_events {
+            if let Some(obs) = &leader_observer {
+                obs.observe(&pending);
+            }
+            if let Some(lane) = &copy_lane {
+                lane.on_swap(&pending);
+            }
+            // Direct pool calls carry no input amount in calldata (it's
+            // recovered inside projection); router decodes need one.
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => continue,
+            };
+
+            // Project every hop of the pending swap's path onto the tracked
+            // pools it touches: the resting state has no spread — the pending
+            // swap creates one. Later hops of a multi-hop victim move our
+            // pools too, not just the first.
+            let Some((projected, hit_pools, victim_usd, max_move)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
+
+            // Dust victims cannot leave an extractable edge — a $1 swap
+            // "projected" to yield $0.30+ is the constant-product model
+            // over-stating impact, and every such candidate dies at the
+            // post-refresh re-check anyway. Skip before the pipeline spend.
+            if let Some(v) = victim_usd {
+                if v < 25.0 {
+                    debug!(victim_usd = v, tx = %pending.tx_hash,
+                        "backrun skipped — victim below dust floor");
+                    continue;
+                }
+            }
+
+            let mut candidate_ids: Vec<usize> = Vec::new();
+            for pool_addr in &hit_pools {
+                if quarantined.read().unwrap().contains(pool_addr) { continue; }
+                if let Some(ids) = pool_to_paths.get(pool_addr) {
+                    candidate_ids.extend_from_slice(ids);
+                }
+            }
+            if candidate_ids.is_empty() { continue; }
+            candidate_ids.sort_unstable();
+            candidate_ids.dedup();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.read().unwrap().contains(&h.pool)));
+            let stale_n = candidate_ids.len();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
+            let dropped_stale = stale_n - candidate_ids.len();
+            if dropped_stale > 0 {
+                metrics::STALE_SUPPRESSED.inc_by(dropped_stale as f64);
+                debug!(skipped = dropped_stale, "backrun candidates skipped — stale pool state");
+            }
+            if candidate_ids.is_empty() { continue; }
+            metrics::BACKRUN_CANDIDATES.inc();
+            // Phase-1 latency budget: how long from seeing the victim to
+            // starting candidate evaluation — this is the race window.
+            metrics::PENDING_TO_EVAL.observe(pending.seen_at.elapsed().as_secs_f64());
+
+            {
+                // Rank candidates by cheap single-point profit so the 20
+                // full optimizations go to the most promising routes,
+                // not the first 20 by path index.
+                // Cheap single-point screen is pure CPU — parallel.
+                let mut screened: Vec<(usize, U256)> = candidate_ids
+                    .par_iter()
+                    .map(|&i| {
+                        let p = &paths[i];
+                        let min_a = flash_bounds
+                            .get(&p.flash_token)
+                            .map(|b| b.0)
+                            .unwrap_or(p.flash_amount);
+                        let hi_probe = (min_a * U256::from(10u32))
+                            .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                                .unwrap_or(p.flash_amount * U256::from(10u32)));
+                        let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                            .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                        (i, s)
+                    })
+                    .collect();
+                screened.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Opportunity bridge: a pending victim touching a sim-verified
+                // leader route template gets template-overlapping paths
+                // evaluated first — the leader's proven geometry takes the
+                // limited optimization slots over generic enumeration.
+                let matched_idx: Vec<usize> = ready_templates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, pools))| hit_pools.iter().any(|p| pools.contains(p)))
+                    .map(|(i, _)| i)
+                    .collect();
+                let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                    matched_idx.iter().map(|&i| &ready_templates[i]).collect();
+                if !matched.is_empty() {
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[chain_label, "matched_live"])
+                        .inc();
+                    // Template overlap first, sim-probe score breaks ties.
+                    screened.sort_by(|a, b| {
+                        let ov = |i: usize| paths[i].hops.iter()
+                            .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                            .count();
+                        ov(b.0).cmp(&ov(a.0)).then(b.1.cmp(&a.1))
+                    });
+                    debug!(
+                        victim = %pending.tx_hash,
+                        templates = matched.len(),
+                        "OPPORTUNITY_MATCH victim touches verified leader route"
+                    );
+                }
+                // Evaluate all screened candidates first — gate-passers are
+                // ranked by route_score (leader-template overlap, freshness
+                // decay, breaker revert history) before we spend the
+                // re-verify RPC call and a submission on any of them.
+                let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
+                // Projected USD counts once per victim event — every accepted
+                // path for one victim extracts the same dislocation, so the
+                // counter takes the best candidate, not the sum.
+                let mut best_accepted_usd = 0.0f64;
+                // Evaluate screened candidates in PARALLEL — the ternary
+                // search is pure CPU against the projected snapshot, and a
+                // serial ~20-candidate sweep burned the victim's race
+                // window. Metrics and the scored queue are applied serially
+                // in candidate order below, so ordering semantics are
+                // unchanged.
+                struct CandEval {
+                    pidx: usize,
+                    opt_amount: U256,
+                    sim: arb_sim::SimResult,
+                    /// decision.accept at gate time — counted in metrics even
+                    /// when the anti-phantom drop below discards the score.
+                    gate_accepted: bool,
+                    effective_usd: f64,
+                    /// Some(score) = passed every gate and the phantom drop.
+                    score: Option<f64>,
+                }
+                let evals: Vec<CandEval> = screened
+                    .par_iter()
+                    .take(20)
+                    .filter_map(|&(pidx, _)| {
+                        let path = &paths[pidx];
+                        if ctx.circuit_breaker.lock().unwrap().is_suppressed(path.id, block_number) {
+                            return None;
+                        }
+
+                        // Evaluate against the projected post-swap state — that is
+                        // the state our tx would see if it lands right after the
+                        // pending swap in the same block.
+                        let (opt_amount, opt_profit) = arb_sim::optimize::find_optimal_amount(
+                            path, &projected,
+                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
+                            {
+                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
+                                    .unwrap_or(path.flash_amount * U256::from(10u32));
+                                let liq_max = arb_sim::optimize::path_max_flash(path, &projected, 0.05, token_max);
+                                token_max.min(liq_max)
+                            },
+                            optimization_iterations,
+                        )?;
+
+                        let profit_bps: u32 = if !opt_amount.is_zero() {
+                            ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
+                        } else { 0 };
+
+                        let sim = arb_sim::SimResult {
+                            path_id: path.id,
+                            flash_token: path.flash_token,
+                            flash_amount: opt_amount,
+                            final_amount: opt_amount + opt_profit,
+                            gross_profit: opt_profit,
+                            profit_bps,
+                        };
+
+                        let decision = ctx.profit_gate.lock().unwrap().should_submit(&sim, path);
+                        // A backrun extracts value from the dislocation the
+                        // victim creates — it cannot exceed the victim's own
+                        // input value. Larger "profits" mean the projection
+                        // model overshot (e.g., a same-tick V3 estimate or an
+                        // ambiguous same-pair match).
+                        let mut dropped = false;
+                        if decision.accept {
+                            if victim_usd.map_or(false, |v| v > 1e8) {
+                                debug!(victim_usd, "Backrun dropped: implausible decoded victim size");
+                                dropped = true;
+                            } else if let Some(vusd) = victim_usd {
+                                if decision.effective_profit_usd > vusd {
+                                    debug!(
+                                        path_id = path.id,
+                                        profit_usd = decision.effective_profit_usd,
+                                        victim_usd = vusd,
+                                        "Backrun candidate dropped: profit exceeds victim size"
+                                    );
+                                    dropped = true;
+                                }
+                            }
+                        }
+                        let mut score = None;
+                        if decision.accept && !dropped && !dry_run {
+                            // reproduction_precision: share of OUR hops that
+                            // sit inside a matched leader route's pool set —
+                            // 1.0 when no template matched (nothing to
+                            // reproduce against).
+                            let overlap = path.hops.iter()
+                                .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                                .count();
+                            let repro = if matched.is_empty() { 1.0 } else {
+                                overlap as f64 / path.hops.len().max(1) as f64
+                            };
+                            // route_confidence: leader-verified geometry is
+                            // stronger evidence than generic enumeration.
+                            // Scaled down when the same-tick projection
+                            // pushed a pool far — a >25% move crossed real
+                            // ticks the approximation cannot see, so the
+                            // projected edge is less trustworthy.
+                            let approx_penalty = if max_move > 0.25 {
+                                debug!(victim = %pending.tx_hash, max_move,
+                                    "backrun projection moved pool >25% — confidence penalized");
+                                0.5
+                            } else { 1.0 };
+                            let confidence = (if matched.is_empty() { 0.7 }
+                                else if overlap > 0 { 1.0 } else { 0.5 })
+                                * approx_penalty;
+                            // No gas model yet — gas_risk 0 (constant term
+                            // would not change the ordering anyway).
+                            // revert_risk: this path's realized revert rate
+                            // applied to the stake at risk.
+                            score = Some(arb_core::opportunity::route_score(
+                                decision.effective_profit_usd, repro, 1.0,
+                                pending.seen_at.elapsed().as_millis() as u64,
+                                confidence, 0.0,
+                                ctx.circuit_breaker.lock().unwrap().revert_rate(path.id)
+                                    * decision.effective_profit_usd,
+                            ));
+                        }
+                        Some(CandEval {
+                            pidx, opt_amount, sim,
+                            gate_accepted: decision.accept,
+                            effective_usd: decision.effective_profit_usd,
+                            score,
+                        })
+                    })
+                    .collect();
+
+                for e in evals {
+                    // Same credibility ceiling as the classic scan: a
+                    // victim projection cannot honestly create a >2% gap —
+                    // that's poisoned pool math, flag the pools outright.
+                    if e.sim.profit_bps > BAIT_GAP_BPS {
+                        metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
+                        ctx.token_breaker.lock().unwrap().flag_bait_pools(&paths[e.pidx], block_number);
+                        continue;
+                    }
+                    if e.gate_accepted {
+                        metrics::GATE_ACCEPTS.inc();
+                        best_accepted_usd = best_accepted_usd.max(e.effective_usd);
+                        metrics::GATE_EFFECTIVE_USD.observe(e.effective_usd);
+                        info!(
+                            path_id = e.sim.path_id,
+                            effective_usd = e.effective_usd,
+                            victim_usd,
+                            "Backrun candidate passed profit gate"
+                        );
+                    }
+                    if let Some(score) = e.score {
+                        scored.push((e.pidx, e.opt_amount, e.sim, e.effective_usd, score));
+                    }
+                }
+                if best_accepted_usd > 0.0 {
+                    metrics::ACCEPTED_PROFIT_USD.inc_by(best_accepted_usd);
+                }
+                // Highest route_score first; stale-victim and revert-prone
+                // candidates sink automatically.
+                scored.sort_by(|a, b| {
+                    b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Scored victims queue for the shared verify pass — the
+                // refresh and receipt RPC work happens ONCE for all
+                // victims below, not serialized per victim.
+                if !scored.is_empty() {
+                    prepped.push(PreppedBackrun {
+                        pending, amount_in, hit_pools,
+                        matched: matched_idx, scored,
+                    });
+                }
+            }
+            }
+
+            // ── Pass B: ONE merged targeted refresh over every victim's
+            // touched pools, then ONE parallel receipt batch. The old
+            // per-victim serial refresh+receipt put ~1 RPC RTT on the
+            // critical path each — 129/156 victims were already >1s old
+            // at first eval and the queue tail arrived a block late.
+            if !prepped.is_empty() {
+                let mut tgt: Vec<Address> = Vec::new();
+                'victims: for pv in &prepped {
+                    for a in &pv.hit_pools {
+                        if !tgt.contains(a) { tgt.push(*a); }
+                    }
+                    for (pidx, _, _, _, _) in &pv.scored {
+                        for h in &paths[*pidx].hops {
+                            if !tgt.contains(&h.pool) { tgt.push(h.pool); }
+                        }
+                        if tgt.len() >= 256 { break 'victims; }
+                    }
+                }
+                tgt.truncate(256);
+                let t_refresh = Instant::now();
+                // Refresh + receipts are independent — overlap them.
+                // Serial used to stack a full RTT (~300-500ms on public
+                // RPC) onto every victim's critical path.
+                let receipts_fut = futures::future::join_all(
+                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
+                );
+                let (n, landed_raw) = futures::future::join(
+                    refresher.refresh_pools(&store, &tgt),
+                    receipts_fut,
+                )
+                .await;
+                debug!(victims = prepped.len(), pools = tgt.len(), updated = n,
+                    ms = t_refresh.elapsed().as_millis(),
+                    "backrun merged targeted refresh");
+
+                // Parallel receipt batch — victims that already landed
+                // skip re-projection (the refreshed store IS the
+                // post-victim state); serial receipts added ~1 RTT each.
+                let landed: Vec<bool> = landed_raw
+                    .into_iter()
+                    .map(|r| r.ok().flatten().is_some())
+                    .collect();
+
+                // ── Pass C: re-verify + submit each victim in order ──
+                for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
+                    let pending = &pv.pending;
+                    let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                        pv.matched.iter().map(|&i| &ready_templates[i]).collect();
+                    let scored = pv.scored;
+                    // If the victim already landed, the refreshed store IS
+                    // the post-victim state — re-projecting the swap would
+                    // double-count its impact. Re-project only while the
+                    // victim is still pending.
+                    let verify_state = if victim_landed {
+                        None
+                    } else {
+                        arb_mempool::impact::project_pending_path(
+                            &store, &pending.decoded, pv.amount_in, &pair_to_pools.read().unwrap(),
+                            &token_usd_prices, &token_decimals,
+                        ).map(|(s, _, _, _)| s)
+                    };
+
+                    // Re-verify + submit in score order; a stale edge falls
+                    // through to the next-best candidate (same as before).
+                    // The re-check itself is pure CPU against the verify
+                    // snapshot — run it in parallel across candidates so the
+                    // serial tail is build+probe+submit only.
+                    //
+                    // Exception: victim still pending AND its swap can't be
+                    // projected -> verify_state is None and the store lacks
+                    // the victim's price impact, so the edge is guaranteed
+                    // to sim dead here even when real. Don't kill what we
+                    // cannot see — let the exec probe (on-chain truth)
+                    // decide instead.
+                    let projection_missing = !victim_landed && verify_state.is_none();
+                    if projection_missing {
+                        metrics::BACKRUN_STAGES
+                            .with_label_values(&["recheck_skipped_no_projection"])
+                            .inc();
+                    }
+                    // One landing re-check per VICTIM, not per candidate —
+                    // this used to sit inside the per-candidate probe block,
+                    // stacking a serial RTT per path while a victim stayed
+                    // pending. Once landed, always landed.
+                    if !victim_landed {
+                        victim_landed = endpoint
+                            .get_receipt(pending.tx_hash)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
+                    }
+                    let recheck_alive: Vec<bool> = scored
+                        .par_iter()
+                        .map(|(pidx, _, _, _, _)| {
+                            if projection_missing {
+                                return true;
+                            }
+                            let path = &paths[*pidx];
+                            let vstore = verify_state.as_ref().unwrap_or(&store);
+                            let verified = arb_sim::optimize::find_optimal_amount(
+                                path, vstore,
+                                flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                    .unwrap_or(path.flash_amount),
+                                {
+                                    let token_max = flash_bounds.get(&path.flash_token)
+                                        .map(|b| b.1)
+                                        .unwrap_or(path.flash_amount * U256::from(10u32));
+                                    let liq_max = arb_sim::optimize::path_max_flash(
+                                        path, vstore, 0.05, token_max);
+                                    token_max.min(liq_max)
+                                },
+                                optimization_iterations,
+                            );
+                            matches!(verified, Some((_, reprofit)) if !reprofit.is_zero())
+                        })
+                        .collect();
+                    for ((pidx, opt_amount, sim, _effective_usd, _score), alive) in
+                        scored.into_iter().zip(recheck_alive)
+                    {
+                    let path = &paths[pidx];
+                    {
+                            if !alive {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["recheck_dead"])
+                                    .inc();
+                                info!(path_id = path.id,
+                                    victim = %pending.tx_hash,
+                                    "Backrun edge gone on re-check");
+                                continue;
+                            }
+
+                            info!(
+                                path_id = path.id, profit_bps = sim.profit_bps,
+                                route_score = _score,
+                                pending_router = pending.decoded.router,
+                                pending_tx = %pending.tx_hash,
+                                victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
+                                "Backrun candidate found"
+                            );
+
+
+                            // Build a true [victim, ours] ordered bundle: the
+                            // watcher streams full pending txs, so the victim's
+                            // signed bytes are available — bundle venues prepend
+                            // them and our tx lands immediately after the victim.
+                            // With the generic backrun lane disabled, a victim
+                            // may still submit when its sender is a live leader
+                            // wallet — the flash-funded displacement copy
+                            // (zero-capital wallet copy, after-signal only).
+                            let leader_copy = copy_lane
+                                .as_ref()
+                                .map(|l| l.allows_copy_backrun(&pending.from))
+                                .unwrap_or(false);
+                            if !cfg.lanes.backrun && !leader_copy {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["lane_disabled"])
+                                    .inc();
+                                continue;
+                            }
+                            if leader_copy && !cfg.lanes.backrun {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["leader_copy_gated"])
+                                    .inc();
+                            }
+                            let target_block = block_number + 1;
+                            let submit_signer = &signers[signer_rot
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                % signers.len()];
+                            if let Ok(mut bundle) = presign_pool.build_fast(
+                                path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
+                            ).await {
+                                if cfg.submission.strict_4337 {
+                                    // No bundle-capable venue exists under
+                                    // strict_4337 (the executor's onlyOwner
+                                    // is the Pimlico smart account) and
+                                    // UserOps cannot be ordered after a
+                                    // victim tx anyway. Submit as a
+                                    // standalone sponsored op: it lands
+                                    // next-block on post-victim state —
+                                    // the dislocations this path targets
+                                    // persist >=1 block. backrun_tx stays
+                                    // for settlement linkage only.
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                } else if !pending.raw_tx.is_empty() {
+                                    bundle.victim_tx = Some(pending.raw_tx.clone());
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                }
+
+                                // Exec-probe (strict_4337): meaningful
+                                // only once the victim has landed, when
+                                // current state includes its impact. While
+                                // the victim is still pending the
+                                // projected state is the operative one,
+                                // and the bundler drops reverting ops at
+                                // no on-chain cost — skip the probe then.
+                                if cfg.submission.strict_4337 {
+                                    // Landing was re-checked once per victim
+                                    // above — reuse the flag.
+                                    if victim_landed {
+                                        if let Some(venue) = &pimlico_venue {
+                                            if ctx.smart_account.lock().unwrap().is_none() {
+                                                *ctx.smart_account.lock().unwrap() =
+                                                    venue.account().await.ok();
+                                            }
+                                        }
+                                        let acct = *ctx.smart_account.lock().unwrap();
+                                        if let (Some(account), Some(call)) =
+                                            (acct, bundle.call.as_ref())
+                                        {
+                                            let probe = alloy::rpc::types::TransactionRequest::default()
+                                                .from(account)
+                                                .to(call.to)
+                                                .input(call.data.clone().into());
+                                            match endpoint.provider().call(probe).await {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    metrics::BACKRUN_STAGES
+                                                        .with_label_values(&["exec_probe_dead"])
+                                                        .inc();
+                                                    if e.as_error_resp().is_some() {
+                                                        let reason = classify_exec_probe_revert(
+                                                            &format!("{e:?}")
+                                                        );
+                                                        warn!(
+                                                            path_id = path.id, reason,
+                                                            error = %e,
+                                                            "exec probe reverted — backrun suppressed"
+                                                        );
+                                                        ctx.circuit_breaker
+                                                            .lock().unwrap()
+                                                            .record_revert(path.id, block_number);
+                                                        // A string revert
+                                                        // bubbling out of the
+                                                        // pool itself
+                                                        // (Nomiswap: D) is
+                                                        // deterministic bait
+                                                        // evidence — convict
+                                                        // instantly, not over
+                                                        // five strikes.
+                                                        if reason == "pool_revert" {
+                                                            ctx.token_breaker
+                                                                .lock().unwrap()
+                                                                .flag_bait_pools_hard(
+                                                                    path, block_number,
+                                                                );
+                                                        } else {
+                                                            ctx.token_breaker
+                                                                .lock().unwrap()
+                                                                .record_revert_for_path(
+                                                                    path, block_number,
+                                                                );
+                                                        }
+                                                    } else {
+                                                        warn!(
+                                                            path_id = path.id, error = %e,
+                                                            "exec probe transport error — backrun skipped"
+                                                        );
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Feed only candidates that cleared the
+                                // re-check AND the exec probe — a row marked
+                                // ready means "every gate stands and this is
+                                // being submitted", never "sim-positive once".
+                                let feed_dir = format!("data/leaders/{chain_label}");
+                                let mut logged_opp = log_accepted_opportunity(
+                                    chain_label, "backrun",
+                                    &format!("{}", pending.from),
+                                    &format!("{}", pending.tx_hash),
+                                    path, _effective_usd,
+                                    sim.profit_bps, !dry_run);
+                                metrics::BACKRUN_SUBMITTED.inc();
+                                endpoint.bump_nonce();
+                                let matched_opp_ids: Vec<String> = matched
+                                    .iter()
+                                    .map(|(id, _)| id.clone())
+                                    .collect();
+                                let mut matched_logged = Vec::new();
+                                if !matched.is_empty() {
+                                    // A verified leader route matched this
+                                    // victim and survived gate+probe to a
+                                    // real submission — count the capture
+                                    // and mark the records submitted so the
+                                    // settlement loop has something to close.
+                                    arb_leaders::OPPORTUNITY_TOTAL
+                                        .with_label_values(&[chain_label, "submitted"])
+                                        .inc();
+                                    let dir = format!("data/leaders/{chain_label}");
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    for o in arb_core::opportunity::load_opportunities(&dir) {
+                                        if matched_opp_ids.contains(&o.opportunity_id) {
+                                            let mut o = o;
+                                            o.unix_ms = now_ms;
+                                            o.execution_status =
+                                                arb_core::opportunity::ExecutionStatus::Submitted;
+                                            let _ = o.append_jsonl(&dir);
+                                            matched_logged.push(o);
+                                        }
+                                    }
+                                }
+                                let our_tx_hash = bundle
+                                    .signed_txs
+                                    .last()
+                                    .map(|t| alloy_primitives::keccak256(t));
+                                let sub_results = router
+                                    .submit_all(
+                                        &bundle, false,
+                                        if cfg.submission.strict_4337 {
+                                            Duration::ZERO
+                                        } else {
+                                            scan_start.elapsed()
+                                        },
+                                    )
+                                    .await;
+                                metrics::PENDING_TO_SUBMIT
+                                    .observe(pending.seen_at.elapsed().as_secs_f64());
+                                let no_results = sub_results.is_empty();
+                                if no_results && bundle.victim_tx.is_some() {
+                                    metrics::BACKRUN_NO_VENUE.inc();
+                                    warn!(
+                                        "Backrun bundle dropped: no bundle-capable venue \
+                                         (strict_4337 leaves only the UserOp bundler, which \
+                                         cannot order after a victim tx)"
+                                    );
+                                }
+                                let mut any_accepted = false;
+                                let mut venue_rejected = false;
+                                let mut venue_errored = false;
+                                let mut settle_opp_ids = matched_opp_ids.clone();
+                                settle_opp_ids.push(logged_opp.opportunity_id.clone());
+                                for r in sub_results {
+                                    match r.result {
+                                        Ok(res) if res.success => {
+                                            any_accepted = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_accept"])
+                                                .inc();
+                                            debug!(venue = r.venue, "Backrun submitted");
+                                            // Settlement: realized P&L feeds
+                                            // the opportunity record +
+                                            // strategy health. Backrun txs
+                                            // also feed the circuit breaker.
+                                            spawn_settlement(
+                                                settle_ctx.clone(), r.venue,
+                                                res.bundle_hash.clone(), our_tx_hash,
+                                                settle_opp_ids.clone(),
+                                                Some((path.id, cb_tx.clone(), block_number)),
+                                            );
+                                        }
+                                        Ok(res) => {
+                                            venue_rejected = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_reject"])
+                                                .inc();
+                                            info!(venue = r.venue, error = ?res.error,
+                                                "Backrun rejected");
+                                        }
+                                        Err(e) => {
+                                            venue_errored = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_error"])
+                                                .inc();
+                                            warn!(venue = r.venue, error = %e,
+                                                "Backrun venue error");
+                                        }
+                                    }
+                                }
+                                if !any_accepted {
+                                    // Never reached a venue — the row must
+                                    // leave the actionable set, with the
+                                    // machine-readable reason it died.
+                                    let reason = if no_results { "no_venue" }
+                                        else if venue_rejected { "builder_reject" }
+                                        else if venue_errored { "venue_error" }
+                                        else { "no_venue" };
+                                    logged_opp.mark_rejected(reason, &feed_dir);
+                                    for mut o in matched_logged {
+                                        o.mark_rejected(reason, &feed_dir);
+                                    }
+                                }
+                            } else {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["bundle_fail"])
+                                    .inc();
+                                warn!(path_id = path.id,
+                                    "backrun bundle build failed");
+                            }
+                            break;
+                        }
+                }
+            }
+            }
+}
+
 pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<()> {
     use rayon::prelude::*;
     let started = chrono::Utc::now();
@@ -1961,7 +2750,80 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         "data/leaders/{chain_label}/_bait_pools.json"
     )));
     token_breaker.load_bait();
+
     let (cb_tx, mut cb_rx) = mpsc::channel::<(u32, TxOutcome, u64)>(256);
+
+    // ── Detached backrun lane (event-driven, not block-gated) ──
+    // Everything the per-victim pipeline needs is shared into a task that
+    // consumes the mempool channel directly: a pending victim is evaluated
+    // when it ARRIVES instead of waiting out a full refresh+scan cycle on
+    // the next block tick (~1-2s of dead latency removed from the race
+    // window). Mutexes are std::sync (CPU-scoped holds, never over .await).
+    let cfg = Arc::new(cfg);
+    let paths = Arc::new(paths);
+    let ready_templates = Arc::new(ready_templates);
+    let pool_to_paths = Arc::new(pool_to_paths);
+    let quarantined = Arc::new(RwLock::new(quarantined));
+    let flash_bounds = Arc::new(flash_bounds);
+    let presign_pool = Arc::new(presign_pool);
+    let signers = Arc::new(signers);
+    let signer_rot = Arc::new(signer_rot);
+    let circuit_breaker = Arc::new(std::sync::Mutex::new(circuit_breaker));
+    let token_breaker = Arc::new(std::sync::Mutex::new(token_breaker));
+    let smart_account = Arc::new(std::sync::Mutex::new(smart_account));
+    let profit_gate = Arc::new(std::sync::Mutex::new(profit_gate));
+    let token_usd_prices = Arc::new(RwLock::new(token_usd_prices));
+    let token_decimals = Arc::new(RwLock::new(token_decimals));
+
+    let backrun_ctx = Arc::new(BackrunCtx {
+        store: store.clone(),
+        refresher: refresher.clone(),
+        endpoint: endpoint.clone(),
+        cfg: cfg.clone(),
+        paths: paths.clone(),
+        ready_templates,
+        leader_observer,
+        copy_lane,
+        pair_to_pools: pair_to_pools.clone(),
+        token_usd_prices: token_usd_prices.clone(),
+        token_decimals: token_decimals.clone(),
+        flash_bounds: flash_bounds.clone(),
+        quarantined: quarantined.clone(),
+        pool_to_paths,
+        optimization_iterations,
+        dry_run,
+        router: router.clone(),
+        presign_pool: presign_pool.clone(),
+        signers: signers.clone(),
+        signer_rot: signer_rot.clone(),
+        pimlico_venue: pimlico_venue.clone(),
+        settle_ctx: settle_ctx.clone(),
+        cb_tx: cb_tx.clone(),
+        arb_contract,
+        chain_label,
+        profit_gate: profit_gate.clone(),
+        circuit_breaker: circuit_breaker.clone(),
+        token_breaker: token_breaker.clone(),
+        smart_account: smart_account.clone(),
+        latest_block: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+    });
+    {
+        let ctx = backrun_ctx.clone();
+        tokio::spawn(async move {
+            while let Some(first) = mempool_rx.recv().await {
+                let mut events = vec![first];
+                while let Ok(p) = mempool_rx.try_recv() {
+                    events.push(p);
+                }
+                if ctx.latest_block.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                    if let Ok(b) = ctx.endpoint.provider().get_block_number().await {
+                        ctx.latest_block.store(b, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                backrun_pass(&ctx, events).await;
+            }
+        });
+    }
 
     // Per-minute summary tracking
     let mut last_summary = Instant::now();
@@ -1987,22 +2849,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     while let Some(block) = block_stream.next().await {
         let block_number = block.inner.number;
         let scan_start = Instant::now();
+        backrun_ctx.latest_block.store(block_number, std::sync::atomic::Ordering::Relaxed);
         metrics::CURRENT_BLOCK.set(block_number as f64);
 
         // Drain async tx outcome feedback into circuit breaker
         while let Ok((path_id, outcome, blk)) = cb_rx.try_recv() {
             match outcome {
-                TxOutcome::Success => circuit_breaker.record_success(path_id),
-                TxOutcome::Revert => circuit_breaker.record_revert(path_id, blk),
+                TxOutcome::Success => circuit_breaker.lock().unwrap().record_success(path_id),
+                TxOutcome::Revert => circuit_breaker.lock().unwrap().record_revert(path_id, blk),
                 TxOutcome::Dropped => {}
             }
-        }
-
-        // Drain the pending-swap queue up front — events that arrive
-        // during the refresh window wait for the next block.
-        let mut pending_events = Vec::new();
-        while let Ok(p) = mempool_rx.try_recv() {
-            pending_events.push(p);
         }
 
         // Backrun lane runs CONCURRENTLY with the full-pool refresh: a
@@ -2011,716 +2867,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         // pipeline spends the edge. The lane projects onto last-block
         // state and re-reads the pools the victim touches itself
         // (targeted refresh inside, before any submission).
-        let backrun_fut = async {
-            /// Per-victim CPU-eval output carried into the merged
-            /// refresh + submit passes below.
-            struct PreppedBackrun {
-                pending: arb_mempool::watcher::PendingSwap,
-                amount_in: U256,
-                hit_pools: Vec<Address>,
-                /// Indices into ready_templates (leader routes matched).
-                matched: Vec<usize>,
-                scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)>,
-            }
-            let mut prepped: Vec<PreppedBackrun> = Vec::new();
-
-            // ── Pass A: pure-CPU eval for every pending victim. No RPC
-            // here — the serial per-victim refresh+receipt used to put
-            // ~1.3s on the critical path per victim and the queue tail
-            // arrived a full block late.
-            // Process pending mempool swaps for backrun opportunities
-            for pending in pending_events {
-            if let Some(obs) = &leader_observer {
-                obs.observe(&pending);
-            }
-            if let Some(lane) = &copy_lane {
-                lane.on_swap(&pending);
-            }
-            // Direct pool calls carry no input amount in calldata (it's
-            // recovered inside projection); router decodes need one.
-            let amount_in = match pending.decoded.amount_in {
-                Some(a) => a,
-                None if pending.decoded.direct.is_some() => U256::ZERO,
-                None => continue,
-            };
-
-            // Project every hop of the pending swap's path onto the tracked
-            // pools it touches: the resting state has no spread — the pending
-            // swap creates one. Later hops of a multi-hop victim move our
-            // pools too, not just the first.
-            let Some((projected, hit_pools, victim_usd, max_move)) =
-                arb_mempool::impact::project_pending_path(
-                    &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
-                    &token_usd_prices, &token_decimals,
-                )
-            else { continue };
-
-            // Dust victims cannot leave an extractable edge — a $1 swap
-            // "projected" to yield $0.30+ is the constant-product model
-            // over-stating impact, and every such candidate dies at the
-            // post-refresh re-check anyway. Skip before the pipeline spend.
-            if let Some(v) = victim_usd {
-                if v < 25.0 {
-                    debug!(victim_usd = v, tx = %pending.tx_hash,
-                        "backrun skipped — victim below dust floor");
-                    continue;
-                }
-            }
-
-            let mut candidate_ids: Vec<usize> = Vec::new();
-            for pool_addr in &hit_pools {
-                if quarantined.contains(pool_addr) { continue; }
-                if let Some(ids) = pool_to_paths.get(pool_addr) {
-                    candidate_ids.extend_from_slice(ids);
-                }
-            }
-            if candidate_ids.is_empty() { continue; }
-            candidate_ids.sort_unstable();
-            candidate_ids.dedup();
-            candidate_ids
-                .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
-            let stale_n = candidate_ids.len();
-            candidate_ids
-                .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
-            let dropped_stale = stale_n - candidate_ids.len();
-            if dropped_stale > 0 {
-                metrics::STALE_SUPPRESSED.inc_by(dropped_stale as f64);
-                debug!(skipped = dropped_stale, "backrun candidates skipped — stale pool state");
-            }
-            if candidate_ids.is_empty() { continue; }
-            metrics::BACKRUN_CANDIDATES.inc();
-            // Phase-1 latency budget: how long from seeing the victim to
-            // starting candidate evaluation — this is the race window.
-            metrics::PENDING_TO_EVAL.observe(pending.seen_at.elapsed().as_secs_f64());
-
-            {
-                // Rank candidates by cheap single-point profit so the 20
-                // full optimizations go to the most promising routes,
-                // not the first 20 by path index.
-                // Cheap single-point screen is pure CPU — parallel.
-                let mut screened: Vec<(usize, U256)> = candidate_ids
-                    .par_iter()
-                    .map(|&i| {
-                        let p = &paths[i];
-                        let min_a = flash_bounds
-                            .get(&p.flash_token)
-                            .map(|b| b.0)
-                            .unwrap_or(p.flash_amount);
-                        let hi_probe = (min_a * U256::from(10u32))
-                            .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
-                                .unwrap_or(p.flash_amount * U256::from(10u32)));
-                        let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
-                            .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
-                        (i, s)
-                    })
-                    .collect();
-                screened.sort_by(|a, b| b.1.cmp(&a.1));
-
-                // Opportunity bridge: a pending victim touching a sim-verified
-                // leader route template gets template-overlapping paths
-                // evaluated first — the leader's proven geometry takes the
-                // limited optimization slots over generic enumeration.
-                let matched_idx: Vec<usize> = ready_templates
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (_, pools))| hit_pools.iter().any(|p| pools.contains(p)))
-                    .map(|(i, _)| i)
-                    .collect();
-                let matched: Vec<&(String, std::collections::HashSet<Address>)> =
-                    matched_idx.iter().map(|&i| &ready_templates[i]).collect();
-                if !matched.is_empty() {
-                    arb_leaders::OPPORTUNITY_TOTAL
-                        .with_label_values(&[chain_label, "matched_live"])
-                        .inc();
-                    // Template overlap first, sim-probe score breaks ties.
-                    screened.sort_by(|a, b| {
-                        let ov = |i: usize| paths[i].hops.iter()
-                            .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
-                            .count();
-                        ov(b.0).cmp(&ov(a.0)).then(b.1.cmp(&a.1))
-                    });
-                    debug!(
-                        victim = %pending.tx_hash,
-                        templates = matched.len(),
-                        "OPPORTUNITY_MATCH victim touches verified leader route"
-                    );
-                }
-                // Evaluate all screened candidates first — gate-passers are
-                // ranked by route_score (leader-template overlap, freshness
-                // decay, breaker revert history) before we spend the
-                // re-verify RPC call and a submission on any of them.
-                let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
-                // Projected USD counts once per victim event — every accepted
-                // path for one victim extracts the same dislocation, so the
-                // counter takes the best candidate, not the sum.
-                let mut best_accepted_usd = 0.0f64;
-                // Evaluate screened candidates in PARALLEL — the ternary
-                // search is pure CPU against the projected snapshot, and a
-                // serial ~20-candidate sweep burned the victim's race
-                // window. Metrics and the scored queue are applied serially
-                // in candidate order below, so ordering semantics are
-                // unchanged.
-                struct CandEval {
-                    pidx: usize,
-                    opt_amount: U256,
-                    sim: arb_sim::SimResult,
-                    /// decision.accept at gate time — counted in metrics even
-                    /// when the anti-phantom drop below discards the score.
-                    gate_accepted: bool,
-                    effective_usd: f64,
-                    /// Some(score) = passed every gate and the phantom drop.
-                    score: Option<f64>,
-                }
-                let evals: Vec<CandEval> = screened
-                    .par_iter()
-                    .take(20)
-                    .filter_map(|&(pidx, _)| {
-                        let path = &paths[pidx];
-                        if circuit_breaker.is_suppressed(path.id, block_number) {
-                            return None;
-                        }
-
-                        // Evaluate against the projected post-swap state — that is
-                        // the state our tx would see if it lands right after the
-                        // pending swap in the same block.
-                        let (opt_amount, opt_profit) = arb_sim::optimize::find_optimal_amount(
-                            path, &projected,
-                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
-                            {
-                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
-                                    .unwrap_or(path.flash_amount * U256::from(10u32));
-                                let liq_max = arb_sim::optimize::path_max_flash(path, &projected, 0.05, token_max);
-                                token_max.min(liq_max)
-                            },
-                            optimization_iterations,
-                        )?;
-
-                        let profit_bps: u32 = if !opt_amount.is_zero() {
-                            ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
-                        } else { 0 };
-
-                        let sim = arb_sim::SimResult {
-                            path_id: path.id,
-                            flash_token: path.flash_token,
-                            flash_amount: opt_amount,
-                            final_amount: opt_amount + opt_profit,
-                            gross_profit: opt_profit,
-                            profit_bps,
-                        };
-
-                        let decision = profit_gate.should_submit(&sim, path);
-                        // A backrun extracts value from the dislocation the
-                        // victim creates — it cannot exceed the victim's own
-                        // input value. Larger "profits" mean the projection
-                        // model overshot (e.g., a same-tick V3 estimate or an
-                        // ambiguous same-pair match).
-                        let mut dropped = false;
-                        if decision.accept {
-                            if victim_usd.map_or(false, |v| v > 1e8) {
-                                debug!(victim_usd, "Backrun dropped: implausible decoded victim size");
-                                dropped = true;
-                            } else if let Some(vusd) = victim_usd {
-                                if decision.effective_profit_usd > vusd {
-                                    debug!(
-                                        path_id = path.id,
-                                        profit_usd = decision.effective_profit_usd,
-                                        victim_usd = vusd,
-                                        "Backrun candidate dropped: profit exceeds victim size"
-                                    );
-                                    dropped = true;
-                                }
-                            }
-                        }
-                        let mut score = None;
-                        if decision.accept && !dropped && !dry_run {
-                            // reproduction_precision: share of OUR hops that
-                            // sit inside a matched leader route's pool set —
-                            // 1.0 when no template matched (nothing to
-                            // reproduce against).
-                            let overlap = path.hops.iter()
-                                .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
-                                .count();
-                            let repro = if matched.is_empty() { 1.0 } else {
-                                overlap as f64 / path.hops.len().max(1) as f64
-                            };
-                            // route_confidence: leader-verified geometry is
-                            // stronger evidence than generic enumeration.
-                            // Scaled down when the same-tick projection
-                            // pushed a pool far — a >25% move crossed real
-                            // ticks the approximation cannot see, so the
-                            // projected edge is less trustworthy.
-                            let approx_penalty = if max_move > 0.25 {
-                                debug!(victim = %pending.tx_hash, max_move,
-                                    "backrun projection moved pool >25% — confidence penalized");
-                                0.5
-                            } else { 1.0 };
-                            let confidence = (if matched.is_empty() { 0.7 }
-                                else if overlap > 0 { 1.0 } else { 0.5 })
-                                * approx_penalty;
-                            // No gas model yet — gas_risk 0 (constant term
-                            // would not change the ordering anyway).
-                            // revert_risk: this path's realized revert rate
-                            // applied to the stake at risk.
-                            score = Some(arb_core::opportunity::route_score(
-                                decision.effective_profit_usd, repro, 1.0,
-                                pending.seen_at.elapsed().as_millis() as u64,
-                                confidence, 0.0,
-                                circuit_breaker.revert_rate(path.id)
-                                    * decision.effective_profit_usd,
-                            ));
-                        }
-                        Some(CandEval {
-                            pidx, opt_amount, sim,
-                            gate_accepted: decision.accept,
-                            effective_usd: decision.effective_profit_usd,
-                            score,
-                        })
-                    })
-                    .collect();
-
-                for e in evals {
-                    // Same credibility ceiling as the classic scan: a
-                    // victim projection cannot honestly create a >2% gap —
-                    // that's poisoned pool math, flag the pools outright.
-                    if e.sim.profit_bps > BAIT_GAP_BPS {
-                        metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
-                        token_breaker.flag_bait_pools(&paths[e.pidx], block_number);
-                        continue;
-                    }
-                    if e.gate_accepted {
-                        metrics::GATE_ACCEPTS.inc();
-                        best_accepted_usd = best_accepted_usd.max(e.effective_usd);
-                        metrics::GATE_EFFECTIVE_USD.observe(e.effective_usd);
-                        info!(
-                            path_id = e.sim.path_id,
-                            effective_usd = e.effective_usd,
-                            victim_usd,
-                            "Backrun candidate passed profit gate"
-                        );
-                    }
-                    if let Some(score) = e.score {
-                        scored.push((e.pidx, e.opt_amount, e.sim, e.effective_usd, score));
-                    }
-                }
-                if best_accepted_usd > 0.0 {
-                    metrics::ACCEPTED_PROFIT_USD.inc_by(best_accepted_usd);
-                }
-                // Highest route_score first; stale-victim and revert-prone
-                // candidates sink automatically.
-                scored.sort_by(|a, b| {
-                    b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                // Scored victims queue for the shared verify pass — the
-                // refresh and receipt RPC work happens ONCE for all
-                // victims below, not serialized per victim.
-                if !scored.is_empty() {
-                    prepped.push(PreppedBackrun {
-                        pending, amount_in, hit_pools,
-                        matched: matched_idx, scored,
-                    });
-                }
-            }
-            }
-
-            // ── Pass B: ONE merged targeted refresh over every victim's
-            // touched pools, then ONE parallel receipt batch. The old
-            // per-victim serial refresh+receipt put ~1 RPC RTT on the
-            // critical path each — 129/156 victims were already >1s old
-            // at first eval and the queue tail arrived a block late.
-            if !prepped.is_empty() {
-                let mut tgt: Vec<Address> = Vec::new();
-                'victims: for pv in &prepped {
-                    for a in &pv.hit_pools {
-                        if !tgt.contains(a) { tgt.push(*a); }
-                    }
-                    for (pidx, _, _, _, _) in &pv.scored {
-                        for h in &paths[*pidx].hops {
-                            if !tgt.contains(&h.pool) { tgt.push(h.pool); }
-                        }
-                        if tgt.len() >= 256 { break 'victims; }
-                    }
-                }
-                tgt.truncate(256);
-                let t_refresh = Instant::now();
-                // Refresh + receipts are independent — overlap them.
-                // Serial used to stack a full RTT (~300-500ms on public
-                // RPC) onto every victim's critical path.
-                let receipts_fut = futures::future::join_all(
-                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
-                );
-                let (n, landed_raw) = futures::future::join(
-                    refresher.refresh_pools(&store, &tgt),
-                    receipts_fut,
-                )
-                .await;
-                debug!(victims = prepped.len(), pools = tgt.len(), updated = n,
-                    ms = t_refresh.elapsed().as_millis(),
-                    "backrun merged targeted refresh");
-
-                // Parallel receipt batch — victims that already landed
-                // skip re-projection (the refreshed store IS the
-                // post-victim state); serial receipts added ~1 RTT each.
-                let landed: Vec<bool> = landed_raw
-                    .into_iter()
-                    .map(|r| r.ok().flatten().is_some())
-                    .collect();
-
-                // ── Pass C: re-verify + submit each victim in order ──
-                for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
-                    let pending = &pv.pending;
-                    let matched: Vec<&(String, std::collections::HashSet<Address>)> =
-                        pv.matched.iter().map(|&i| &ready_templates[i]).collect();
-                    let scored = pv.scored;
-                    // If the victim already landed, the refreshed store IS
-                    // the post-victim state — re-projecting the swap would
-                    // double-count its impact. Re-project only while the
-                    // victim is still pending.
-                    let verify_state = if victim_landed {
-                        None
-                    } else {
-                        arb_mempool::impact::project_pending_path(
-                            &store, &pending.decoded, pv.amount_in, &pair_to_pools.read().unwrap(),
-                            &token_usd_prices, &token_decimals,
-                        ).map(|(s, _, _, _)| s)
-                    };
-
-                    // Re-verify + submit in score order; a stale edge falls
-                    // through to the next-best candidate (same as before).
-                    // The re-check itself is pure CPU against the verify
-                    // snapshot — run it in parallel across candidates so the
-                    // serial tail is build+probe+submit only.
-                    //
-                    // Exception: victim still pending AND its swap can't be
-                    // projected -> verify_state is None and the store lacks
-                    // the victim's price impact, so the edge is guaranteed
-                    // to sim dead here even when real. Don't kill what we
-                    // cannot see — let the exec probe (on-chain truth)
-                    // decide instead.
-                    let projection_missing = !victim_landed && verify_state.is_none();
-                    if projection_missing {
-                        metrics::BACKRUN_STAGES
-                            .with_label_values(&["recheck_skipped_no_projection"])
-                            .inc();
-                    }
-                    // One landing re-check per VICTIM, not per candidate —
-                    // this used to sit inside the per-candidate probe block,
-                    // stacking a serial RTT per path while a victim stayed
-                    // pending. Once landed, always landed.
-                    if !victim_landed {
-                        victim_landed = endpoint
-                            .get_receipt(pending.tx_hash)
-                            .await
-                            .ok()
-                            .flatten()
-                            .is_some();
-                    }
-                    let recheck_alive: Vec<bool> = scored
-                        .par_iter()
-                        .map(|(pidx, _, _, _, _)| {
-                            if projection_missing {
-                                return true;
-                            }
-                            let path = &paths[*pidx];
-                            let vstore = verify_state.as_ref().unwrap_or(&store);
-                            let verified = arb_sim::optimize::find_optimal_amount(
-                                path, vstore,
-                                flash_bounds.get(&path.flash_token).map(|b| b.0)
-                                    .unwrap_or(path.flash_amount),
-                                {
-                                    let token_max = flash_bounds.get(&path.flash_token)
-                                        .map(|b| b.1)
-                                        .unwrap_or(path.flash_amount * U256::from(10u32));
-                                    let liq_max = arb_sim::optimize::path_max_flash(
-                                        path, vstore, 0.05, token_max);
-                                    token_max.min(liq_max)
-                                },
-                                optimization_iterations,
-                            );
-                            matches!(verified, Some((_, reprofit)) if !reprofit.is_zero())
-                        })
-                        .collect();
-                    for ((pidx, opt_amount, sim, _effective_usd, _score), alive) in
-                        scored.into_iter().zip(recheck_alive)
-                    {
-                    let path = &paths[pidx];
-                    {
-                            if !alive {
-                                metrics::BACKRUN_STAGES
-                                    .with_label_values(&["recheck_dead"])
-                                    .inc();
-                                info!(path_id = path.id,
-                                    victim = %pending.tx_hash,
-                                    "Backrun edge gone on re-check");
-                                continue;
-                            }
-
-                            info!(
-                                path_id = path.id, profit_bps = sim.profit_bps,
-                                route_score = _score,
-                                pending_router = pending.decoded.router,
-                                pending_tx = %pending.tx_hash,
-                                victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
-                                "Backrun candidate found"
-                            );
-
-
-                            // Build a true [victim, ours] ordered bundle: the
-                            // watcher streams full pending txs, so the victim's
-                            // signed bytes are available — bundle venues prepend
-                            // them and our tx lands immediately after the victim.
-                            // With the generic backrun lane disabled, a victim
-                            // may still submit when its sender is a live leader
-                            // wallet — the flash-funded displacement copy
-                            // (zero-capital wallet copy, after-signal only).
-                            let leader_copy = copy_lane
-                                .as_ref()
-                                .map(|l| l.allows_copy_backrun(&pending.from))
-                                .unwrap_or(false);
-                            if !cfg.lanes.backrun && !leader_copy {
-                                metrics::BACKRUN_STAGES
-                                    .with_label_values(&["lane_disabled"])
-                                    .inc();
-                                continue;
-                            }
-                            if leader_copy && !cfg.lanes.backrun {
-                                metrics::BACKRUN_STAGES
-                                    .with_label_values(&["leader_copy_gated"])
-                                    .inc();
-                            }
-                            let target_block = block_number + 1;
-                            let submit_signer = &signers[signer_rot
-                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                % signers.len()];
-                            if let Ok(mut bundle) = presign_pool.build_fast(
-                                path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
-                            ).await {
-                                if cfg.submission.strict_4337 {
-                                    // No bundle-capable venue exists under
-                                    // strict_4337 (the executor's onlyOwner
-                                    // is the Pimlico smart account) and
-                                    // UserOps cannot be ordered after a
-                                    // victim tx anyway. Submit as a
-                                    // standalone sponsored op: it lands
-                                    // next-block on post-victim state —
-                                    // the dislocations this path targets
-                                    // persist >=1 block. backrun_tx stays
-                                    // for settlement linkage only.
-                                    bundle.backrun_tx = Some(pending.tx_hash);
-                                } else if !pending.raw_tx.is_empty() {
-                                    bundle.victim_tx = Some(pending.raw_tx.clone());
-                                    bundle.backrun_tx = Some(pending.tx_hash);
-                                }
-
-                                // Exec-probe (strict_4337): meaningful
-                                // only once the victim has landed, when
-                                // current state includes its impact. While
-                                // the victim is still pending the
-                                // projected state is the operative one,
-                                // and the bundler drops reverting ops at
-                                // no on-chain cost — skip the probe then.
-                                if cfg.submission.strict_4337 {
-                                    // Landing was re-checked once per victim
-                                    // above — reuse the flag.
-                                    if victim_landed {
-                                        if let Some(venue) = &pimlico_venue {
-                                            if smart_account.is_none() {
-                                                smart_account = venue.account().await.ok();
-                                            }
-                                        }
-                                        if let (Some(account), Some(call)) =
-                                            (smart_account, bundle.call.as_ref())
-                                        {
-                                            let probe = alloy::rpc::types::TransactionRequest::default()
-                                                .from(account)
-                                                .to(call.to)
-                                                .input(call.data.clone().into());
-                                            match endpoint.provider().call(probe).await {
-                                                Ok(_) => {}
-                                                Err(e) => {
-                                                    metrics::BACKRUN_STAGES
-                                                        .with_label_values(&["exec_probe_dead"])
-                                                        .inc();
-                                                    if e.as_error_resp().is_some() {
-                                                        let reason = classify_exec_probe_revert(
-                                                            &format!("{e:?}")
-                                                        );
-                                                        warn!(
-                                                            path_id = path.id, reason,
-                                                            error = %e,
-                                                            "exec probe reverted — backrun suppressed"
-                                                        );
-                                                        circuit_breaker.record_revert(
-                                                            path.id, block_number,
-                                                        );
-                                                        // A string revert
-                                                        // bubbling out of the
-                                                        // pool itself
-                                                        // (Nomiswap: D) is
-                                                        // deterministic bait
-                                                        // evidence — convict
-                                                        // instantly, not over
-                                                        // five strikes.
-                                                        if reason == "pool_revert" {
-                                                            token_breaker
-                                                                .flag_bait_pools_hard(
-                                                                    path, block_number,
-                                                                );
-                                                        } else {
-                                                            token_breaker
-                                                                .record_revert_for_path(
-                                                                    path, block_number,
-                                                                );
-                                                        }
-                                                    } else {
-                                                        warn!(
-                                                            path_id = path.id, error = %e,
-                                                            "exec probe transport error — backrun skipped"
-                                                        );
-                                                    }
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // Feed only candidates that cleared the
-                                // re-check AND the exec probe — a row marked
-                                // ready means "every gate stands and this is
-                                // being submitted", never "sim-positive once".
-                                let feed_dir = format!("data/leaders/{chain_label}");
-                                let mut logged_opp = log_accepted_opportunity(
-                                    chain_label, "backrun",
-                                    &format!("{}", pending.from),
-                                    &format!("{}", pending.tx_hash),
-                                    path, _effective_usd,
-                                    sim.profit_bps, !dry_run);
-                                metrics::BACKRUN_SUBMITTED.inc();
-                                endpoint.bump_nonce();
-                                let matched_opp_ids: Vec<String> = matched
-                                    .iter()
-                                    .map(|(id, _)| id.clone())
-                                    .collect();
-                                let mut matched_logged = Vec::new();
-                                if !matched.is_empty() {
-                                    // A verified leader route matched this
-                                    // victim and survived gate+probe to a
-                                    // real submission — count the capture
-                                    // and mark the records submitted so the
-                                    // settlement loop has something to close.
-                                    arb_leaders::OPPORTUNITY_TOTAL
-                                        .with_label_values(&[chain_label, "submitted"])
-                                        .inc();
-                                    let dir = format!("data/leaders/{chain_label}");
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis() as u64)
-                                        .unwrap_or(0);
-                                    for o in arb_core::opportunity::load_opportunities(&dir) {
-                                        if matched_opp_ids.contains(&o.opportunity_id) {
-                                            let mut o = o;
-                                            o.unix_ms = now_ms;
-                                            o.execution_status =
-                                                arb_core::opportunity::ExecutionStatus::Submitted;
-                                            let _ = o.append_jsonl(&dir);
-                                            matched_logged.push(o);
-                                        }
-                                    }
-                                }
-                                let our_tx_hash = bundle
-                                    .signed_txs
-                                    .last()
-                                    .map(|t| alloy_primitives::keccak256(t));
-                                let sub_results = router
-                                    .submit_all(
-                                        &bundle, false,
-                                        if cfg.submission.strict_4337 {
-                                            Duration::ZERO
-                                        } else {
-                                            scan_start.elapsed()
-                                        },
-                                    )
-                                    .await;
-                                metrics::PENDING_TO_SUBMIT
-                                    .observe(pending.seen_at.elapsed().as_secs_f64());
-                                let no_results = sub_results.is_empty();
-                                if no_results && bundle.victim_tx.is_some() {
-                                    metrics::BACKRUN_NO_VENUE.inc();
-                                    warn!(
-                                        "Backrun bundle dropped: no bundle-capable venue \
-                                         (strict_4337 leaves only the UserOp bundler, which \
-                                         cannot order after a victim tx)"
-                                    );
-                                }
-                                let mut any_accepted = false;
-                                let mut venue_rejected = false;
-                                let mut venue_errored = false;
-                                let mut settle_opp_ids = matched_opp_ids.clone();
-                                settle_opp_ids.push(logged_opp.opportunity_id.clone());
-                                for r in sub_results {
-                                    match r.result {
-                                        Ok(res) if res.success => {
-                                            any_accepted = true;
-                                            metrics::BACKRUN_STAGES
-                                                .with_label_values(&["venue_accept"])
-                                                .inc();
-                                            debug!(venue = r.venue, "Backrun submitted");
-                                            // Settlement: realized P&L feeds
-                                            // the opportunity record +
-                                            // strategy health. Backrun txs
-                                            // also feed the circuit breaker.
-                                            spawn_settlement(
-                                                settle_ctx.clone(), r.venue,
-                                                res.bundle_hash.clone(), our_tx_hash,
-                                                settle_opp_ids.clone(),
-                                                Some((path.id, cb_tx.clone(), block_number)),
-                                            );
-                                        }
-                                        Ok(res) => {
-                                            venue_rejected = true;
-                                            metrics::BACKRUN_STAGES
-                                                .with_label_values(&["venue_reject"])
-                                                .inc();
-                                            info!(venue = r.venue, error = ?res.error,
-                                                "Backrun rejected");
-                                        }
-                                        Err(e) => {
-                                            venue_errored = true;
-                                            metrics::BACKRUN_STAGES
-                                                .with_label_values(&["venue_error"])
-                                                .inc();
-                                            warn!(venue = r.venue, error = %e,
-                                                "Backrun venue error");
-                                        }
-                                    }
-                                }
-                                if !any_accepted {
-                                    // Never reached a venue — the row must
-                                    // leave the actionable set, with the
-                                    // machine-readable reason it died.
-                                    let reason = if no_results { "no_venue" }
-                                        else if venue_rejected { "builder_reject" }
-                                        else if venue_errored { "venue_error" }
-                                        else { "no_venue" };
-                                    logged_opp.mark_rejected(reason, &feed_dir);
-                                    for mut o in matched_logged {
-                                        o.mark_rejected(reason, &feed_dir);
-                                    }
-                                }
-                            } else {
-                                metrics::BACKRUN_STAGES
-                                    .with_label_values(&["bundle_fail"])
-                                    .inc();
-                                warn!(path_id = path.id,
-                                    "backrun bundle build failed");
-                            }
-                            break;
-                        }
-                }
-            }
-            }
-        };
-        let (refresh_res, ()) = tokio::join!(refresher.refresh(&store), backrun_fut);
+        // Backrun lane is detached (spawned above): pending victims are
+        // evaluated on mempool arrival, not block cadence. The block
+        // loop's only shared job is the full-pool refresh.
+        let refresh_res = refresher.refresh(&store).await;
 
         match refresh_res {
             Ok((count, elapsed)) => {
@@ -2729,7 +2879,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 // Quarantine pools whose implied price diverges >3x from
                 // same-pair peers — broken/exhausted state fabricates
                 // phantom arb legs on otherwise-real pending swaps.
-                quarantined = arb_mempool::impact::quarantine_outlier_pools(
+                *quarantined.write().unwrap() = arb_mempool::impact::quarantine_outlier_pools(
                     &store, &pair_to_pools.read().unwrap(), &pool_tokens.read().unwrap(), 3.0);
             }
             Err(e) => {
@@ -2738,9 +2888,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         }
 
         if block_number >= last_pricing_block + pricing_refresh_blocks {
-            let derived = crate::pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
+            let derived = crate::pricing::derive_prices(&store, &mut *token_usd_prices.write().unwrap(), &token_decimals.read().unwrap());
             if derived > 0 {
-                profit_gate.token_usd_prices = token_usd_prices.clone();
+                profit_gate.lock().unwrap().token_usd_prices = token_usd_prices.read().unwrap().clone();
                 debug!(derived, block = block_number, "Periodic price derivation");
             }
             // Net-of-gas feed: live gas price × est executor gas × native
@@ -2748,10 +2898,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             if let Ok(gp) = endpoint.provider().get_gas_price().await {
                 let native_px = ["WBNB", "WETH", "WPOL", "ETH"].iter()
                     .find_map(|s| tokens.get(*s))
-                    .and_then(|a| token_usd_prices.get(a).copied())
+                    .and_then(|a| token_usd_prices.read().unwrap().get(a).copied())
                     .unwrap_or(native_usd);
                 let gas_usd = gp as f64 * cfg.gate.est_tx_gas as f64 / 1e18 * native_px;
-                profit_gate.set_gas_cost_usd(gas_usd);
+                profit_gate.lock().unwrap().set_gas_cost_usd(gas_usd);
             }
             last_pricing_block = block_number;
         }
@@ -2767,8 +2917,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         // to reject on-chain. Skip them before optimization.
         let stale_filtered = initial_results.into_iter()
             .filter(|r| r.profit_bps >= min_initial_bps)
-            .filter(|r| !circuit_breaker.is_suppressed(r.path_id, block_number))
-            .filter(|r| !token_breaker.is_path_token_suppressed(&paths[r.path_id as usize], block_number))
+            .filter(|r| !circuit_breaker.lock().unwrap().is_suppressed(r.path_id, block_number))
+            .filter(|r| !token_breaker.lock().unwrap().is_path_token_suppressed(&paths[r.path_id as usize], block_number))
             .collect::<Vec<_>>();
         let (stale_hit, candidates): (Vec<_>, Vec<_>) = stale_filtered
             .into_iter()
@@ -2834,7 +2984,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                             gross_profit: final_profit, profit_bps,
                         };
 
-                        let decision = profit_gate.should_submit(&opt_result, path);
+                        let decision = profit_gate.lock().unwrap().should_submit(&opt_result, path);
                         (Some((opt_result, decision)), extra)
                     })
                     .collect();
@@ -2855,7 +3005,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 // path family stops producing vapor, and never accept.
                 if opt_result.profit_bps > BAIT_GAP_BPS {
                     metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
-                    token_breaker.flag_bait_pools(path, block_number);
+                    token_breaker.lock().unwrap().flag_bait_pools(path, block_number);
                     continue;
                 }
                 if decision.accept {
@@ -2918,14 +3068,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                             // here instead of at the bundler — count it as
                             // a revert so the breaker suppresses the path.
                             if let Some(venue) = &pimlico_venue {
-                                if smart_account.is_none() {
-                                    smart_account = venue.account().await.ok();
-                                    if let Some(a) = smart_account {
+                                if smart_account.lock().unwrap().is_none() {
+                                    *smart_account.lock().unwrap() = venue.account().await.ok();
+                                    if let Some(a) = *smart_account.lock().unwrap() {
                                         info!(account = %a, "Smart account resolved for exec probes");
                                     }
                                 }
+                                let acct = *smart_account.lock().unwrap();
                                 if let (Some(account), Some(call)) =
-                                    (smart_account, bundle.call.as_ref())
+                                    (acct, bundle.call.as_ref())
                                 {
                                     // The tx sender depends on venue mix:
                                     // EOA-signed builder bundles are sent
@@ -2966,22 +3117,20 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                     error = %e,
                                                     "exec probe reverted — path suppressed, no submission"
                                                 );
-                                                circuit_breaker.record_revert(
-                                                    best.path_id,
-                                                    block_number,
-                                                );
+                                                circuit_breaker.lock().unwrap()
+                                                    .record_revert(best.path_id, block_number);
                                                 // Same conviction as the
                                                 // backrun lane — a pool that
                                                 // reverts on-chain is bait,
                                                 // not a bad path.
                                                 if reason == "pool_revert" {
-                                                    token_breaker
+                                                    token_breaker.lock().unwrap()
                                                         .flag_bait_pools_hard(
                                                             &paths[best_path_idx],
                                                             block_number,
                                                         );
                                                 } else {
-                                                    token_breaker
+                                                    token_breaker.lock().unwrap()
                                                         .record_revert_for_path(
                                                             &paths[best_path_idx],
                                                             block_number,
@@ -3002,7 +3151,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                 }
                             }
                             endpoint.bump_nonce();
-                            circuit_breaker.record_submit(best.path_id);
+                            circuit_breaker.lock().unwrap().record_submit(best.path_id);
                             // Passed gate + exec probe — mark ready at the
                             // moment of submission, per ExecutionStatus::Ready.
                             logged_opp.execution_status =
@@ -3119,7 +3268,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                             }
 
                             if builder_sim_rejected {
-                                circuit_breaker.record_revert(best.path_id, block_number);
+                                circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
                             }
 
                             // No venue accepted — the opportunity was never
@@ -3162,8 +3311,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                         }
                                     };
                                     match res.outcome {
-                                        TxOutcome::Success => circuit_breaker.record_success(best.path_id),
-                                        TxOutcome::Revert => circuit_breaker.record_revert(best.path_id, block_number),
+                                        TxOutcome::Success => circuit_breaker.lock().unwrap().record_success(best.path_id),
+                                        TxOutcome::Revert => circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number),
                                         TxOutcome::Dropped => {}
                                     }
                                     record_settlement(&settle_ctx, hash_venue, &hash, &res,
@@ -3233,9 +3382,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                     // a phantom-edge path re-tests every block forever
                                     // (each preview is a bundler call + seconds of budget).
                                     if e.to_string().contains("exec_revert") {
-                                        circuit_breaker.record_revert(best.path_id, block_number);
+                                        circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
                                         if let Some(p) = paths.iter().find(|p| p.id == best.path_id) {
-                                            token_breaker.record_revert_for_path(p, block_number);
+                                            token_breaker.lock().unwrap().record_revert_for_path(p, block_number);
                                         }
                                     }
                                 }
@@ -3268,7 +3417,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 scans_delta = (scans_now - last_scans) as u64,
                 submitted_delta = (submitted_now - last_submitted) as u64,
                 landed_ok, landed_revert, dropped,
-                paths_suppressed = circuit_breaker.suppressed_count(block_number),
+                paths_suppressed = circuit_breaker.lock().unwrap().suppressed_count(block_number),
                 builder_sim_rejects = metrics::BUILDER_SIM_REJECT.get() as u64,
                 warp_usd = format!("{:.2}", metrics::WARP_SPEND_USD.get()),
                 "[minute summary]"
@@ -3282,7 +3431,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         // Status JSON every 5 seconds
         if last_status_write.elapsed() >= Duration::from_secs(5) {
             let balance_str = balance_rx.borrow().clone();
-            write_status_json(&chain_name, &started, block_number, &balance_str, &circuit_breaker);
+            write_status_json(&chain_name, &started, block_number, &balance_str, &circuit_breaker.lock().unwrap());
             last_status_write = Instant::now();
         }
     }
