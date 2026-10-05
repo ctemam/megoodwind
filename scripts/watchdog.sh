@@ -65,7 +65,10 @@ done
 # Dashboard server.
 if ! pgrep -f "server/index.js" >/dev/null 2>&1; then
   echo "$(ts) relaunch dashboard server :9205" >> "$LOG"
-  NODE=$(command -v node || echo "$HOME/.nvm/versions/node/v24.19.0/bin/node")
+  # Prefer the nvm v24 build — the system /usr/bin/node is v12 and cannot
+  # parse the dashboard server's syntax.
+  NODE="$HOME/.nvm/versions/node/v24.19.0/bin/node"
+  [ -x "$NODE" ] || NODE=$(command -v node)
   (cd apps/dashboard && DASHBOARD_PORT=9205 setsid "$NODE" server/index.js \
     >> ../../logs/dashboard.log 2>&1 < /dev/null &)
 fi

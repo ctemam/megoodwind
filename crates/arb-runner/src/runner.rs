@@ -1930,6 +1930,10 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     let blacklist_path = std::path::Path::new("discovery")
         .join(format!("blacklist.{}.json", chain_name.to_lowercase()));
     token_breaker.load_blacklist(&blacklist_path);
+    token_breaker.set_bait_path(std::path::PathBuf::from(format!(
+        "data/leaders/{chain_label}/_bait_pools.json"
+    )));
+    token_breaker.load_bait();
     let (cb_tx, mut cb_rx) = mpsc::channel::<(u32, TxOutcome, u64)>(256);
 
     // Per-minute summary tracking
