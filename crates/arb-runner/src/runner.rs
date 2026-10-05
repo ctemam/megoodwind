@@ -1889,6 +1889,22 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         // state and re-reads the pools the victim touches itself
         // (targeted refresh inside, before any submission).
         let backrun_fut = async {
+            /// Per-victim CPU-eval output carried into the merged
+            /// refresh + submit passes below.
+            struct PreppedBackrun {
+                pending: arb_mempool::watcher::PendingSwap,
+                amount_in: U256,
+                hit_pools: Vec<Address>,
+                /// Indices into ready_templates (leader routes matched).
+                matched: Vec<usize>,
+                scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)>,
+            }
+            let mut prepped: Vec<PreppedBackrun> = Vec::new();
+
+            // ── Pass A: pure-CPU eval for every pending victim. No RPC
+            // here — the serial per-victim refresh+receipt used to put
+            // ~1.3s on the critical path per victim and the queue tail
+            // arrived a full block late.
             // Process pending mempool swaps for backrun opportunities
             for pending in pending_events {
             if let Some(obs) = &leader_observer {
@@ -1981,10 +1997,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 // leader route template gets template-overlapping paths
                 // evaluated first — the leader's proven geometry takes the
                 // limited optimization slots over generic enumeration.
+                let matched_idx: Vec<usize> = ready_templates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, pools))| hit_pools.iter().any(|p| pools.contains(p)))
+                    .map(|(i, _)| i)
+                    .collect();
                 let matched: Vec<&(String, std::collections::HashSet<Address>)> =
-                    ready_templates.iter()
-                        .filter(|(_, pools)| hit_pools.iter().any(|p| pools.contains(p)))
-                        .collect();
+                    matched_idx.iter().map(|&i| &ready_templates[i]).collect();
                 if !matched.is_empty() {
                     arb_leaders::OPPORTUNITY_TOTAL
                         .with_label_values(&[chain_label, "matched_live"])
@@ -2168,78 +2188,103 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                     b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
                 });
 
-                // One fresh pool read per victim event, shared by the
-                // whole scored queue — a full refresh serialized per
-                // candidate (~1.3s each under RPC churn) had the queue
-                // tail reaching ~16s of victim age before the first
-                // submission attempt. Targeted refresh reads only the
-                // pools the victim moved plus the candidate path pools —
-                // one aggregate3 batch per protocol instead of a full
-                // partition sweep.
-                {
-                    let mut tgt: Vec<Address> = hit_pools.clone();
-                    for (pidx, _, _, _, _) in &scored {
+                // Scored victims queue for the shared verify pass — the
+                // refresh and receipt RPC work happens ONCE for all
+                // victims below, not serialized per victim.
+                if !scored.is_empty() {
+                    prepped.push(PreppedBackrun {
+                        pending, amount_in, hit_pools,
+                        matched: matched_idx, scored,
+                    });
+                }
+            }
+            }
+
+            // ── Pass B: ONE merged targeted refresh over every victim's
+            // touched pools, then ONE parallel receipt batch. The old
+            // per-victim serial refresh+receipt put ~1 RPC RTT on the
+            // critical path each — 129/156 victims were already >1s old
+            // at first eval and the queue tail arrived a block late.
+            if !prepped.is_empty() {
+                let mut tgt: Vec<Address> = Vec::new();
+                'victims: for pv in &prepped {
+                    for a in &pv.hit_pools {
+                        if !tgt.contains(a) { tgt.push(*a); }
+                    }
+                    for (pidx, _, _, _, _) in &pv.scored {
                         for h in &paths[*pidx].hops {
                             if !tgt.contains(&h.pool) { tgt.push(h.pool); }
                         }
-                        if tgt.len() >= 64 { break; }
+                        if tgt.len() >= 256 { break 'victims; }
                     }
-                    tgt.truncate(64);
-                    let t_refresh = Instant::now();
-                    let n = refresher.refresh_pools(&store, &tgt).await;
-                    debug!(pools = tgt.len(), updated = n,
-                        ms = t_refresh.elapsed().as_millis(),
-                        "backrun targeted refresh");
                 }
-                // If the victim already landed, the refreshed store IS
-                // the post-victim state — re-projecting the swap would
-                // double-count its impact. Re-project only while the
-                // victim is still pending.
-                let mut victim_landed = endpoint
-                    .get_receipt(pending.tx_hash)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some();
-                let verify_state = if victim_landed {
-                    None
-                } else {
-                    arb_mempool::impact::project_pending_path(
-                        &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
-                        &token_usd_prices, &token_decimals,
-                    ).map(|(s, _, _, _)| s)
-                };
+                tgt.truncate(256);
+                let t_refresh = Instant::now();
+                let n = refresher.refresh_pools(&store, &tgt).await;
+                debug!(victims = prepped.len(), pools = tgt.len(), updated = n,
+                    ms = t_refresh.elapsed().as_millis(),
+                    "backrun merged targeted refresh");
 
-                // Re-verify + submit in score order; a stale edge falls
-                // through to the next-best candidate (same as before).
-                // The re-check itself is pure CPU against the verify
-                // snapshot — run it in parallel across candidates so the
-                // serial tail is build+probe+submit only.
-                let recheck_alive: Vec<bool> = scored
-                    .par_iter()
-                    .map(|(pidx, _, _, _, _)| {
-                        let path = &paths[*pidx];
-                        let vstore = verify_state.as_ref().unwrap_or(&store);
-                        let verified = arb_sim::optimize::find_optimal_amount(
-                            path, vstore,
-                            flash_bounds.get(&path.flash_token).map(|b| b.0)
-                                .unwrap_or(path.flash_amount),
-                            {
-                                let token_max = flash_bounds.get(&path.flash_token)
-                                    .map(|b| b.1)
-                                    .unwrap_or(path.flash_amount * U256::from(10u32));
-                                let liq_max = arb_sim::optimize::path_max_flash(
-                                    path, vstore, 0.05, token_max);
-                                token_max.min(liq_max)
-                            },
-                            optimization_iterations,
-                        );
-                        matches!(verified, Some((_, reprofit)) if !reprofit.is_zero())
-                    })
-                    .collect();
-                for ((pidx, opt_amount, sim, _effective_usd, _score), alive) in
-                    scored.into_iter().zip(recheck_alive)
-                {
+                // Parallel receipt batch — victims that already landed
+                // skip re-projection (the refreshed store IS the
+                // post-victim state); serial receipts added ~1 RTT each.
+                let landed: Vec<bool> = futures::future::join_all(
+                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
+                )
+                .await
+                .into_iter()
+                .map(|r| r.ok().flatten().is_some())
+                .collect();
+
+                // ── Pass C: re-verify + submit each victim in order ──
+                for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
+                    let pending = &pv.pending;
+                    let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                        pv.matched.iter().map(|&i| &ready_templates[i]).collect();
+                    let scored = pv.scored;
+                    // If the victim already landed, the refreshed store IS
+                    // the post-victim state — re-projecting the swap would
+                    // double-count its impact. Re-project only while the
+                    // victim is still pending.
+                    let verify_state = if victim_landed {
+                        None
+                    } else {
+                        arb_mempool::impact::project_pending_path(
+                            &store, &pending.decoded, pv.amount_in, &pair_to_pools.read().unwrap(),
+                            &token_usd_prices, &token_decimals,
+                        ).map(|(s, _, _, _)| s)
+                    };
+
+                    // Re-verify + submit in score order; a stale edge falls
+                    // through to the next-best candidate (same as before).
+                    // The re-check itself is pure CPU against the verify
+                    // snapshot — run it in parallel across candidates so the
+                    // serial tail is build+probe+submit only.
+                    let recheck_alive: Vec<bool> = scored
+                        .par_iter()
+                        .map(|(pidx, _, _, _, _)| {
+                            let path = &paths[*pidx];
+                            let vstore = verify_state.as_ref().unwrap_or(&store);
+                            let verified = arb_sim::optimize::find_optimal_amount(
+                                path, vstore,
+                                flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                    .unwrap_or(path.flash_amount),
+                                {
+                                    let token_max = flash_bounds.get(&path.flash_token)
+                                        .map(|b| b.1)
+                                        .unwrap_or(path.flash_amount * U256::from(10u32));
+                                    let liq_max = arb_sim::optimize::path_max_flash(
+                                        path, vstore, 0.05, token_max);
+                                    token_max.min(liq_max)
+                                },
+                                optimization_iterations,
+                            );
+                            matches!(verified, Some((_, reprofit)) if !reprofit.is_zero())
+                        })
+                        .collect();
+                    for ((pidx, opt_amount, sim, _effective_usd, _score), alive) in
+                        scored.into_iter().zip(recheck_alive)
+                    {
                     let path = &paths[pidx];
                     {
                             if !alive {
