@@ -296,6 +296,11 @@ fn classify_exec_probe_revert(detail: &str) -> &'static str {
         "safe_erc20_failed"
     } else if s.contains("0x2c5211c6") {
         "invalid_amount"
+    } else if s.contains("0x08c379a0") {
+        // Error(string) bubbling up from the pool itself (e.g.
+        // "Nomiswap: D") — the executor passed its own checks and the
+        // swap leg reverted on-chain: real bait signature.
+        "pool_revert"
     } else {
         "unknown_revert"
     }
@@ -2500,6 +2505,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                         circuit_breaker.record_revert(
                                                             path.id, block_number,
                                                         );
+                                                        // On-chain revert =
+                                                        // the pools lied —
+                                                        // convict them at the
+                                                        // breaker so they stop
+                                                        // feeding other paths
+                                                        // (and persist).
+                                                        token_breaker
+                                                            .record_revert_for_path(
+                                                                path, block_number,
+                                                            );
                                                     } else {
                                                         warn!(
                                                             path_id = path.id, error = %e,
@@ -2898,6 +2913,15 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                     best.path_id,
                                                     block_number,
                                                 );
+                                                // Same conviction as the
+                                                // backrun lane — a pool that
+                                                // reverts on-chain is bait,
+                                                // not a bad path.
+                                                token_breaker
+                                                    .record_revert_for_path(
+                                                        &paths[best_path_idx],
+                                                        block_number,
+                                                    );
                                                 logged_opp.mark_rejected(
                                                     "simulation_revert", &feed_dir);
                                             } else {
