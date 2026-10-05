@@ -42,6 +42,11 @@ const CIRCUIT_BREAKER_DECAY_BLOCKS: u64 = 100;
 /// A pool whose last successful state read is older than this is stale —
 /// candidate paths through it are suppressed before optimization.
 const STALE_STATE_MAX_AGE_MS: u64 = 90_000;
+// Credibility ceiling on simulated edge: real cross-DEX spreads live in
+// basis points (< ~1-2%). A path simulating a larger gap is poisoned pool
+// math (scam fees / fake reserves), not an opportunity — its pools get
+// bait-flagged at the source instead of passing the sim gate.
+const BAIT_GAP_BPS: u32 = 200;
 
 mod quote_uni {
     alloy::sol! {
@@ -471,6 +476,28 @@ impl TokenCircuitBreaker {
                 || self.is_token_suppressed(hop.token_out, current_block)
                 || self.is_pool_bait_flagged(hop.pool, current_block)
         })
+    }
+
+    // A simulated gap above the credibility ceiling is itself the bait
+    // signature — suppress the path's pools outright; revert history is
+    // not needed to convict impossible math.
+    fn flag_bait_pools(&mut self, path: &PathTemplate, block: u64) {
+        for hop in &path.hops {
+            let s = self
+                .pool_stats
+                .entry(hop.pool)
+                .or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+            if block >= s.suppressed_until_block {
+                s.suppressed_until_block = block + self.suppression_blocks;
+                metrics::BAIT_SUSPECT.inc();
+                warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
+                    "Bait pool suppressed — simulated gap above credibility ceiling");
+            }
+        }
     }
 
     fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
@@ -2601,6 +2628,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
                 if let Some(reason) = decision.reject_reason {
                     metrics::GATE_REJECTS.with_label_values(&[reason]).inc();
+                }
+                // Credibility gate: a simulated gap past BAIT_GAP_BPS means
+                // the pool math is poisoned — flag the pools so the whole
+                // path family stops producing vapor, and never accept.
+                if opt_result.profit_bps > BAIT_GAP_BPS {
+                    metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
+                    token_breaker.flag_bait_pools(path, block_number);
+                    continue;
                 }
                 if decision.accept {
                     metrics::GATE_ACCEPTS.inc();
