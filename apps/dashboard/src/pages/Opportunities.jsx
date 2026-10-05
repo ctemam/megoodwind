@@ -137,8 +137,12 @@ export default function Opportunities() {
             {pageRows.map((o, i) => (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
-                <td title={`${o.token_in || ''} → ${o.token_out || ''}`}>
-                  {o.feed_pair || `${trunc(o.token_in)}/${trunc(o.token_out)}`}
+                <td title={`${o.token_in || ''} → ${o.token_out || ''}`} className="mono">
+                  {o.feed_pair
+                    ? <span style={{ fontWeight: 400 }}>{o.feed_pair}</span>
+                    : o.token_in && o.token_out && o.token_in !== o.token_out
+                      ? `${trunc(o.token_in)} → ${trunc(o.token_out)}`
+                      : trunc(o.token_in) || D}
                 </td>
                 <td>{o.chain}</td>
                 <td className="dim">
