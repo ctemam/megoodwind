@@ -88,3 +88,47 @@ eth_call probe) are ~90% of the critical path.
 - Paid RPC tiers (Alchemy pending stream, BDN) — excluded by mandate.
 - Valid items that remain free: local sim, batching, regional VPS,
   bloXroute *free* Cloud API tier.
+
+## Round 2 — three more systems
+
+**Paradigm Artemis** (github.com/paradigmxyz/artemis): the framework
+shape for production MEV — Collectors (pending txs / blocks / orderflow)
+→ Strategies (opportunity logic) → Executors (public mempool / Flashbots /
+offchain). allbright already mirrors it 1:1 (arb-mempool watcher =
+collector, backrun/feed/leader lanes = strategies, arb-submit venues =
+executors). No latency number published; the lesson is architectural —
+separation lets each domain's latency be tuned independently. Confirmed:
+our structure is the right shape; no reorganization needed.
+
+**evm-fork-cache** (github.com/KaiCode2/evm-fork-cache, revm + alloy +
+foundry-fork-db): the current OSS answer to "local sim without slow
+lazy RPC fetches". The mechanism that makes revm fork sim fast on a
+remote node is a proactive *storage batch fetcher*: the runtime applies
+canonical state updates itself and batch-prefetches touched storage
+slots, instead of letting AlloyDB fetch lazily mid-EVM-run. This is the
+missing piece my earlier assessment needed — lazy CacheDB on public RPC
+loses to eth_call; CacheDB with batch-preheated slots beats it.
+Feasible follow-up for allbright: keep the exec probe, but prewarm a
+local CacheDB with the exact storage slots the FlashArb exec touches
+(pool slots, balances, contract code — all enumerable from the path +
+the reserve-tracker writes we already apply).
+
+**solidquant "art of mempool watching" part 2** (revm mempool sim): the
+canonical searcher pattern — simulate victim + our tx locally on a revm
+fork at the *top-of-block state*, decide, submit bundle. Same lesson as
+aether: the probe decision must not wait on a remote node. Also
+documents the trap-token caveat — eth_call screening for bait tokens is
+exactly what our exec probe + conviction loop already does.
+
+**EigenPhi leaderboard data**: 91.7% of BNB-chain arbitrages are
+UniV3-fork style arbs (post-PancakeSwapV3 launch). Confirms the DS
+`labels:["v3"]` work and the v3-router lane are aimed at the dominant
+arb type on our highest-throughput chain.
+
+### Updated decision
+The local-sim move is feasible *if* we prewarm storage slots
+(batch-fetch the known slot set per path at refresh time), not via lazy
+AlloyDB. That makes it a bounded build: enumerate slots from path +
+StateReader mapping, batch-fetch once per block alongside refresh,
+run revm for the probe. Until then the shipped wins stand: merged
+refresh, refresh+receipt overlap, hoisted landing re-check.
