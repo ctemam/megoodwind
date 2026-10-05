@@ -143,68 +143,54 @@ export default function Opportunities() {
         <table className="tbl">
           <thead><tr>
             {th('time', 'Time', 'When the opportunity was detected. Freshness drives profit — edge decays every block, so older rows are less likely to still be real.')}
-            {th('feed_pair', 'Pair', 'The two assets being priced against each other across pools. A spread only counts when the SAME pair trades at different prices on different venues.')}
-            {th('chain', 'Chain', 'Which network the pools and the executor live on. Execution is atomic per chain — a spread only exists if both pools are on this chain.')}
-            {th('feed_dex_in', 'Dex route', 'The two exchanges involved: where we buy cheap → where we sell dear. Only same-interface DEX pairs are executable; exotic venues are filtered out before this column fills.')}
-            {th('feed_price_hi', 'Price', 'The low–high price band the feed reports for this pair across its pools. The gap between them is the raw opportunity; everything else tests whether it survives to execution.')}
-            {th('profit_bps', 'Price gap', 'The % difference between the cheapest and dearest pool. This is the gross edge — it must exceed fees, slippage, and gas to become profit. Too-large gaps are usually fake pools, not free money.')}
-            {th('feed_h1_txns', 'Trades 1h', 'How many swaps the pair did in the last hour on the shallower pool. Dead pools are filtered out — a spread nobody trades is a spread you cannot capture.')}
+            {th('feed_pair', 'Pair', 'The two assets being priced against each other across pools, and which chain they live on. A spread only counts when the SAME pair trades at different prices on different venues of the same chain.')}
+            {th('feed_dex_in', 'Dex route', 'Where we buy cheap → where we sell dear. Only same-interface DEX pairs are executable; exotic venues are filtered out before this column fills.')}
+            {th('profit_bps', 'Price gap', 'The % difference between the cheapest and dearest pool — the gross edge. It must exceed fees, slippage, and gas to become profit. Too-large gaps are usually fake pools, not free money.')}
             {th('feed_liquidity_usd', 'Pool depth', 'Dollar depth of the shallower pool. Sets the max safe flash size — borrowing more than ~15% of depth moves the price against you and erases the edge.')}
-            {th('buy_pool', 'Cheap pool → Dear pool', 'The exact on-chain pool contracts: buy leg → sell leg. These are the two addresses the flash transaction actually calls — the audit trail for the route.')}
-            {th('edge', 'Est. profit', 'Simulated net USD if executed at current pool state — after swap fees but before gas. An estimate, not realized money: state can move before the trade lands.')}
-            {th('gas_usd', 'Gas cost', 'Estimated network fee to land the trade in USD. Profit must clear this — a trade whose edge is smaller than its gas burns money, so it aborts instead.')}
-            {th('simulation_status', 'On-chain check', 'Did the route still work when re-verified against fresh on-chain reserves? pass = profitable right now; fail = feed was stale; unusable = pool state unreadable. This gate stops trades that would revert and waste gas.')}
-            {th('execution_status', 'Result', 'Where the trade ended: ready = staged, submitted = sent to a venue, landed/reverted = confirmed on-chain, dropped = venue refused. Only landed/settled rows are real profit.')}
-            {th('rejection_reason', 'Stop reason', 'Why a candidate was killed before/at submission — stale price, thin pool, gas-negative, probe revert. Each rejection is a trade that would have lost money or reverted; this column is the fraud filter working.')}
+            {th('edge', 'Est. profit', 'Simulated net USD if executed at current pool state (gas cost shown beneath). An estimate, not realized money: state can move before the trade lands. Profit must clear gas or the trade aborts.')}
+            {th('execution_status', 'Status', 'The trade\'s fate: the tag shows how far it got (pass = still profitable at fresh on-chain check; landed/settled = real profit). The reason beneath names the gate that stopped it — each stop is a trade that would have lost money or reverted.')}
             {th('lane', 'Lane', 'Which engine found it: feed = aggregated spread import, atomic arb = pool-state scanner, backrun = mempool displacement, wallet copy = leader route. Lets you see which signal source actually produces profit.')}
           </tr></thead>
           <tbody>
             {sorted.length === 0 && (
-              <tr><td colSpan="15" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
+              <tr><td colSpan="8" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
             )}
-            {pageRows.map((o, i) => (
+            {pageRows.map((o, i) => {
+              const status = o.execution_status && o.execution_status !== 'none'
+                ? o.execution_status : o.simulation_status
+              const style = o.execution_status && o.execution_status !== 'none'
+                ? EXEC_STYLE[o.execution_status] : SIM_STYLE[o.simulation_status]
+              return (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
-                <td>{pairOf(o)}</td>
-                <td>{o.chain}</td>
+                <td>{pairOf(o)}<br /><span className="dim" style={{ fontSize: 10 }}>{o.chain}</span></td>
                 <td className="dim">
                   {o.feed_dex_in || o.feed_dex_out
                     ? `${dexBadge(o.feed_dex_in)} → ${dexBadge(o.feed_dex_out)}`
-                    : o.lane}
-                </td>
-                <td className="num">
-                  {o.feed_price_lo && o.feed_price_hi
-                    ? `${priceFmt(o.feed_price_lo)} – ${priceFmt(o.feed_price_hi)}`
                     : D}
                 </td>
                 <td className="num pos">{o.profit_bps ? `${(o.profit_bps / 100).toFixed(1)}%` : D}</td>
-                <td className="num">{o.feed_h1_txns || D}</td>
                 <td className="num">{usd(o.feed_liquidity_usd)}</td>
-                <td className="mono dim" title={o.route_pools?.join('\n')}>
-                  {o.buy_pool && o.sell_pool
-                    ? `${trunc(o.buy_pool)} → ${trunc(o.sell_pool)}`
-                    : `${o.route_pools?.length || 0} pools`}
+                <td className="num pos">{usd(o.edge)}
+                  {o.gas_usd ? <><br /><span className="dim" style={{ fontSize: 10 }}>gas {usd(o.gas_usd)}</span></> : null}</td>
+                <td>
+                  <span className={`tag ${style || ''}`}>{status || D}</span>
+                  {o.rejection_reason ? <><br /><span className="muted" style={{ fontSize: 10 }}>{o.rejection_reason}</span></> : null}
                 </td>
-                <td className="num pos">{usd(o.edge)}</td>
-                <td className="num">{usd(o.gas_usd)}</td>
-                <td><span className={`tag ${SIM_STYLE[o.simulation_status] || ''}`}>{o.simulation_status || D}</span></td>
-                <td><span className={`tag ${EXEC_STYLE[o.execution_status] || ''}`}>{o.execution_status || D}</span></td>
-                <td className="muted">{o.rejection_reason || D}</td>
                 <td className="dim">{o.lane}</td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
           <tfoot>
             <tr style={{ borderTop: '2px solid var(--line)', fontWeight: 600 }}>
               <td>TOTAL</td>
               <td className="dim">{rows.length} opportunities</td>
-              <td className="dim" colSpan={7}></td>
+              <td className="dim" colSpan={3}></td>
               <td className={`num ${rows.reduce((s, o) => s + (o.edge || 0), 0) > 0 ? 'pos' : ''}`}>
                 {usd(rows.reduce((s, o) => s + (o.edge || 0), 0)) || '$0.00'}</td>
-              <td className="dim"></td>
-              <td className="dim"></td>
               <td className="num">{funnel.submitted ?? 0} sub · {funnel.landed ?? 0} landed</td>
-              <td className="dim" colSpan={2}></td>
+              <td className="dim"></td>
             </tr>
           </tfoot>
         </table>
