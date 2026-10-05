@@ -1774,6 +1774,10 @@ app.get('/api/opportunities', async (req, res) => {
     const dir = path.join(REPO, 'data', 'leaders', cfg.label)
     const byId = {}
     for (const o of readJsonl(path.join(dir, '_opportunities.jsonl'))) {
+      // Credibility gate — a simulated gap >200bps is poisoned pool math,
+      // not an opportunity; the engine no longer writes them but stale
+      // rows must never surface either.
+      if ((o?.profit_bps || 0) > 200) continue
       if (o?.opportunity_id) byId[o.opportunity_id] = o
     }
     // Engine records (backrun/classic kinds) fan out to one row per candidate
