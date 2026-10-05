@@ -92,6 +92,14 @@ lazy_static::lazy_static! {
         &["chain"]
     ).unwrap();
 
+    /// Pools ingested per feed source per cycle (gt_geckoterminal /
+    /// ds_dexscreener) — visibility into which host is supplying coverage.
+    pub static ref FEED_INGESTED: CounterVec = register_counter_vec!(
+        "arb_feed_ingested_total",
+        "Feed pools ingested per source",
+        &["chain", "source"]
+    ).unwrap();
+
     pub static ref FEED_SCANNED: CounterVec = register_counter_vec!(
         "arb_feed_scanned_total",
         "Feed lane: token polls completed",

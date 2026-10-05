@@ -475,6 +475,7 @@ async fn run(args: FeedArgs) {
                 }
             }
         }
+        let gt_norm = norm.len();
 
         // DexScreener token-pairs ingest — one call per flash quote covers
         // every pool for that token on the chain, not just GT's top-N tail.
@@ -499,6 +500,12 @@ async fn run(args: FeedArgs) {
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
+        metrics::FEED_INGESTED
+            .with_label_values(&[&args.chain, "gt"])
+            .inc_by(gt_norm as f64);
+        metrics::FEED_INGESTED
+            .with_label_values(&[&args.chain, "ds"])
+            .inc_by((norm.len() - gt_norm) as f64);
 
         if norm.is_empty() {
             tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
