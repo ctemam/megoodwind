@@ -57,10 +57,12 @@ export default function Opportunities() {
     const s = a ? (data?.symbols || {})[a.toLowerCase()] : null
     return s && !s.startsWith('TK_0x') ? s : null
   }
+  // No wallet/pool addresses in the pair field — symbols only; an
+  // unresolved token shows as TKN.
   const pairOf = o => {
     if (o.feed_pair) return o.feed_pair
-    const a = symOf(o.token_in) || (o.token_in ? trunc(o.token_in) : null)
-    const b = symOf(o.token_out) || (o.token_out ? trunc(o.token_out) : null)
+    const a = symOf(o.token_in) || (o.token_in ? 'TKN' : null)
+    const b = symOf(o.token_out) || (o.token_out ? 'TKN' : null)
     if (a && b && a !== b) return `${a} / ${b}`
     return a || D
   }
@@ -155,9 +157,7 @@ export default function Opportunities() {
             {pageRows.map((o, i) => (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
-                <td title={`${o.token_in || ''} → ${o.token_out || ''}`}>
-                  {pairOf(o)}
-                </td>
+                <td>{pairOf(o)}</td>
                 <td>{o.chain}</td>
                 <td className="dim">
                   {o.feed_dex_in || o.feed_dex_out
