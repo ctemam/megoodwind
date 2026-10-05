@@ -2136,6 +2136,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                     .collect();
 
                 for e in evals {
+                    // Same credibility ceiling as the classic scan: a
+                    // victim projection cannot honestly create a >2% gap —
+                    // that's poisoned pool math, flag the pools outright.
+                    if e.sim.profit_bps > BAIT_GAP_BPS {
+                        metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
+                        token_breaker.flag_bait_pools(&paths[e.pidx], block_number);
+                        continue;
+                    }
                     if e.gate_accepted {
                         metrics::GATE_ACCEPTS.inc();
                         best_accepted_usd = best_accepted_usd.max(e.effective_usd);
