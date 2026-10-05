@@ -132,3 +132,52 @@ AlloyDB. That makes it a bounded build: enumerate slots from path +
 StateReader mapping, batch-fetch once per block alongside refresh,
 run revm for the probe. Until then the shipped wins stand: merged
 refresh, refresh+receipt overlap, hoisted landing re-check.
+
+## Round 3 — systems 7–10 (total 10)
+
+**FastLane Atlas** (fastlane.xyz, github.com/FastLane-Labs/atlas):
+order-flow is the product. Apps auction each user op to competing
+solvers; the auction winner's SolverOperation is CallChainHash-bound to
+the user op so nothing reorders it; bloXroute BDN does the low-latency
+aggregation. Lesson for allbright: the durable edge is getting order
+flow nobody else sees, not faster math — which is what private-venue
+submission + our mempool watcher approximate on free infra. Nothing to
+build; reframes where profit comes from.
+
+**Flashbots MEV-Share searcher pattern** (mev-share-rs, simple-searcher):
+three patterns straight from the docs — (a) probabilistic backruns:
+fire bundles on shared orderflow WITHOUT complete simulation, because
+reverted bundles on MEV-Share/Flashbots land nowhere and cost zero;
+(b) on-chain: move searching INTO the contract so it's evaluated at
+inclusion time; (c) event-stream filtering: subscribe SSE, filter swap
+topics first, decode only what survives. Transfer to allbright: under
+strict_4337 the bundler already drops reverting ops free — the
+pending-victim path skips the probe for exactly this reason. The
+probabilistic pattern validates our current design choice.
+
+**ArbitrageV** (rink3y, event-driven TS arb on Sei): the startup-order
+pattern worth stealing — subscribe to market events BEFORE hydrating
+live state, buffer events during hydration, reconcile so the market
+graph never begins one block behind. Check for allbright: does pool
+registration subscribe before first StateReader hydration? If we fetch
+state then subscribe, swaps inside the hydration window are missed —
+a silent first-block blindness. Also models a clean protocol-plugin
+shape (discover/hydrate/events/quote/exec per protocol) mirroring our
+per-pool-type kernels.
+
+**mev_simBundle** (reth #9472 / Flashbots spec): the standardized
+bundle-sim RPC — the venue simulates victim+ours atomically
+pre-inclusion and reports profit/revert without a live tx. Where a
+bundle-capable venue exists (non-strict_4337 configs) this replaces the
+eth_call probe entirely AND simulates post-victim state, which is the
+one thing our probe can't do while the victim is still pending.
+Map: any future bundle venue for us should target mev_simBundle-compat
+endpoints — solves the "can't probe pre-landing" structural hole with
+zero local-EVM build cost.
+
+### Standing verdict after 10 systems
+Laters to rung-ladder allbright correctly: (1) compute — elite already;
+(2) network RTTs — shipped overlap/hoist fixes; remaining: prewarmed
+local sim OR bundle-venue sim (mev_simBundle) OR Frankfurt colocation;
+(3) orderflow — Atlas/MEV-Share lesson: private orderflow access beats
+speed; on public mempool we see what everyone sees, late.
