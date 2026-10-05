@@ -119,15 +119,20 @@ export default function Opportunities() {
       <div className="panel">
         <div className="row" style={{ marginBottom: 8 }}>
           <h3 style={{ margin: 0 }}>Opportunity feed</h3>
-          <div className="tabs">
-            <button className={`tab${chain === 'all' ? ' on' : ''}`} onClick={() => setChain('all')}>ALL</button>
-            {chains.map(c => (
-              <button key={c} className={`tab${c === chain ? ' on' : ''}`} onClick={() => setChain(c)}>{c.toUpperCase()}</button>
-            ))}
-            <span className="dim">|</span>
-            {['all', 'feed', 'wallet copy', 'backrun', 'atomic arb'].map(l => (
-              <button key={l} className={`tab${l === lane ? ' on' : ''}`} onClick={() => setLane(l)}>{l}</button>
-            ))}
+          <div className="tabs" style={{ alignItems: 'center' }}>
+            <select value={chain} onChange={e => setChain(e.target.value)}
+              style={{ textTransform: 'uppercase' }}>
+              <option value="all">ALL CHAINS</option>
+              {chains.map(c => (
+                <option key={c} value={c}>{c.toUpperCase()}</option>
+              ))}
+            </select>
+            <select value={lane} onChange={e => setLane(e.target.value)}>
+              <option value="all">ALL LANES</option>
+              {['feed', 'wallet copy', 'backrun', 'atomic arb'].map(l => (
+                <option key={l} value={l}>{l.toUpperCase()}</option>
+              ))}
+            </select>
             <button className={`tab${showRejected ? ' on' : ''}`} onClick={() => setShowRejected(v => !v)}>
               {showRejected ? 'all' : 'pass only'}
             </button>
