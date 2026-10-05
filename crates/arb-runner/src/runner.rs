@@ -2403,6 +2403,18 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                             .with_label_values(&["recheck_skipped_no_projection"])
                             .inc();
                     }
+                    // One landing re-check per VICTIM, not per candidate —
+                    // this used to sit inside the per-candidate probe block,
+                    // stacking a serial RTT per path while a victim stayed
+                    // pending. Once landed, always landed.
+                    if !victim_landed {
+                        victim_landed = endpoint
+                            .get_receipt(pending.tx_hash)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
+                    }
                     let recheck_alive: Vec<bool> = scored
                         .par_iter()
                         .map(|(pidx, _, _, _, _)| {
@@ -2508,17 +2520,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                 // and the bundler drops reverting ops at
                                 // no on-chain cost — skip the probe then.
                                 if cfg.submission.strict_4337 {
-                                    // Reuse the batch-level landing flag;
-                                    // re-check only while still pending —
-                                    // once landed, always landed.
-                                    if !victim_landed {
-                                        victim_landed = endpoint
-                                            .get_receipt(pending.tx_hash)
-                                            .await
-                                            .ok()
-                                            .flatten()
-                                            .is_some();
-                                    }
+                                    // Landing was re-checked once per victim
+                                    // above — reuse the flag.
                                     if victim_landed {
                                         if let Some(venue) = &pimlico_venue {
                                             if smart_account.is_none() {
