@@ -142,13 +142,21 @@ export default function Opportunities() {
         </div>
         <table className="tbl">
           <thead><tr>
-            {th('time', 'Time')}{th('feed_pair', 'Pair')}{th('chain', 'Chain')}
-            {th('feed_dex_in', 'Dex route')}{th('feed_price_hi', 'Price')}
-            {th('profit_bps', 'Price gap')}{th('feed_h1_txns', 'Trades 1h')}
-            {th('feed_liquidity_usd', 'Pool depth')}{th('buy_pool', 'Cheap pool → Dear pool')}
-            {th('edge', 'Est. profit')}{th('gas_usd', 'Gas cost')}
-            {th('simulation_status', 'On-chain check')}{th('execution_status', 'Result')}
-            {th('rejection_reason', 'Stop reason')}{th('lane', 'Lane')}
+            {th('time', 'Time', 'When the opportunity was detected. Freshness drives profit — edge decays every block, so older rows are less likely to still be real.')}
+            {th('feed_pair', 'Pair', 'The two assets being priced against each other across pools. A spread only counts when the SAME pair trades at different prices on different venues.')}
+            {th('chain', 'Chain', 'Which network the pools and the executor live on. Execution is atomic per chain — a spread only exists if both pools are on this chain.')}
+            {th('feed_dex_in', 'Dex route', 'The two exchanges involved: where we buy cheap → where we sell dear. Only same-interface DEX pairs are executable; exotic venues are filtered out before this column fills.')}
+            {th('feed_price_hi', 'Price', 'The low–high price band the feed reports for this pair across its pools. The gap between them is the raw opportunity; everything else tests whether it survives to execution.')}
+            {th('profit_bps', 'Price gap', 'The % difference between the cheapest and dearest pool. This is the gross edge — it must exceed fees, slippage, and gas to become profit. Too-large gaps are usually fake pools, not free money.')}
+            {th('feed_h1_txns', 'Trades 1h', 'How many swaps the pair did in the last hour on the shallower pool. Dead pools are filtered out — a spread nobody trades is a spread you cannot capture.')}
+            {th('feed_liquidity_usd', 'Pool depth', 'Dollar depth of the shallower pool. Sets the max safe flash size — borrowing more than ~15% of depth moves the price against you and erases the edge.')}
+            {th('buy_pool', 'Cheap pool → Dear pool', 'The exact on-chain pool contracts: buy leg → sell leg. These are the two addresses the flash transaction actually calls — the audit trail for the route.')}
+            {th('edge', 'Est. profit', 'Simulated net USD if executed at current pool state — after swap fees but before gas. An estimate, not realized money: state can move before the trade lands.')}
+            {th('gas_usd', 'Gas cost', 'Estimated network fee to land the trade in USD. Profit must clear this — a trade whose edge is smaller than its gas burns money, so it aborts instead.')}
+            {th('simulation_status', 'On-chain check', 'Did the route still work when re-verified against fresh on-chain reserves? pass = profitable right now; fail = feed was stale; unusable = pool state unreadable. This gate stops trades that would revert and waste gas.')}
+            {th('execution_status', 'Result', 'Where the trade ended: ready = staged, submitted = sent to a venue, landed/reverted = confirmed on-chain, dropped = venue refused. Only landed/settled rows are real profit.')}
+            {th('rejection_reason', 'Stop reason', 'Why a candidate was killed before/at submission — stale price, thin pool, gas-negative, probe revert. Each rejection is a trade that would have lost money or reverted; this column is the fraud filter working.')}
+            {th('lane', 'Lane', 'Which engine found it: feed = aggregated spread import, atomic arb = pool-state scanner, backrun = mempool displacement, wallet copy = leader route. Lets you see which signal source actually produces profit.')}
           </tr></thead>
           <tbody>
             {sorted.length === 0 && (

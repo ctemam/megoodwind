@@ -16,10 +16,15 @@ export function useSort(rows, initial = [null, -1]) {
       return (va > vb ? 1 : va < vb ? -1 : 0) * dir
     })
   }, [rows, sort])
+  // th(key, label, extraOrTip): a string third arg becomes a hover tooltip
+  // explaining the column; JSX renders inline as before.
   const th = (key, label, extra) => (
-    <th key={key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+    <th key={key}
+      title={typeof extra === 'string' ? extra : undefined}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
       onClick={() => setSort(s => [key, s[0] === key ? -s[1] : -1])}>
-      {label}{sort[0] === key ? (sort[1] < 0 ? ' ▾' : ' ▴') : ''}{extra}
+      {label}{sort[0] === key ? (sort[1] < 0 ? ' ▾' : ' ▴') : ''}
+      {typeof extra === 'string' ? null : extra}
     </th>
   )
   return [sorted, th, sort]
