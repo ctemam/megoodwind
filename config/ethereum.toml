@@ -800,7 +800,7 @@ copy_spend_tokens  = ["0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
 
 [lanes]
 classic_arb = true
-backrun     = false
+backrun     = true
 [feed]
 enabled      = true
 tokens       = ["WETH", "WBTC"]

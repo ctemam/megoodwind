@@ -1385,7 +1385,7 @@ fee_bps = 25
 # arb/backrun discovery and metrics keep running but never submit.
 [lanes]
 classic_arb = true
-backrun     = false
+backrun     = true
 [feed]
 enabled      = true
 tokens       = ["WBNB", "ETH", "BTCB", "CAKE"]
