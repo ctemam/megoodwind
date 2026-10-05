@@ -2383,9 +2383,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                     // The re-check itself is pure CPU against the verify
                     // snapshot — run it in parallel across candidates so the
                     // serial tail is build+probe+submit only.
+                    //
+                    // Exception: victim still pending AND its swap can't be
+                    // projected -> verify_state is None and the store lacks
+                    // the victim's price impact, so the edge is guaranteed
+                    // to sim dead here even when real. Don't kill what we
+                    // cannot see — let the exec probe (on-chain truth)
+                    // decide instead.
+                    let projection_missing = !victim_landed && verify_state.is_none();
+                    if projection_missing {
+                        metrics::BACKRUN_STAGES
+                            .with_label_values(&["recheck_skipped_no_projection"])
+                            .inc();
+                    }
                     let recheck_alive: Vec<bool> = scored
                         .par_iter()
                         .map(|(pidx, _, _, _, _)| {
+                            if projection_missing {
+                                return true;
+                            }
                             let path = &paths[*pidx];
                             let vstore = verify_state.as_ref().unwrap_or(&store);
                             let verified = arb_sim::optimize::find_optimal_amount(
