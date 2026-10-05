@@ -1922,6 +1922,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 account: copy_account,
                 flash_quotes,
                 token_usd_prices: token_usd_prices.clone(),
+                native_usd,
                 blocked: blocked.clone(),
                 data_dir: format!("data/leaders/{chain_label}"),
                 submit_enabled: feed_submit,

@@ -58,6 +58,9 @@ pub struct FeedArgs {
     pub flash_quotes: HashMap<Address, (f64, u8)>,
     /// addr -> usd price for P&L bookkeeping (flash assets + majors).
     pub token_usd_prices: HashMap<Address, f64>,
+    /// USD price of the chain's native gas token — symbol-resolved in
+    /// run(), never "the most expensive tracked token".
+    pub native_usd: f64,
     /// Tokens the safety screen flagged — a pair touching one is dropped.
     pub blocked: HashSet<Address>,
     /// data/leaders/<chain> — opportunities land in _opportunities.jsonl.
@@ -223,6 +226,133 @@ fn protocol_for(dex_id: &str, name: &str) -> Option<Protocol> {
     }
 }
 
+// ---- DexScreener response model ------------------------------------------
+// Second ingest source — DS free tier is ~300 req/min per IP (vs GT's ~30)
+// and /token-pairs returns EVERY pool for a token, not the top-N tail GT
+// pages cover. Runs alongside GT so a saturated-IP 429 on one host never
+// stalls coverage.
+
+#[derive(Debug, Deserialize)]
+struct DsToken {
+    address: String,
+    #[serde(default)]
+    symbol: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DsLiq {
+    usd: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DsTxns {
+    h1: Option<GtBuySell>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DsPair {
+    #[serde(rename = "pairAddress")]
+    pair_address: String,
+    #[serde(rename = "dexId", default)]
+    dex_id: String,
+    #[serde(rename = "baseToken")]
+    base_token: DsToken,
+    #[serde(rename = "quoteToken")]
+    quote_token: DsToken,
+    /// base token price denominated in quote token — same convention as
+    /// GT's base_token_price_quote_token.
+    #[serde(rename = "priceNative")]
+    price_native: Option<String>,
+    liquidity: Option<DsLiq>,
+    txns: Option<DsTxns>,
+    /// e.g. ["v3"] — the ONLY reliable version signal: dexId is just
+    /// "pancakeswap" for both v2 and v3 pools (verified live).
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+}
+
+impl DsPair {
+    fn normalize(&self) -> Option<NormPool> {
+        let pool: Address = self.pair_address.parse().ok()?;
+        let base: Address = self.base_token.address.parse().ok()?;
+        let quote: Address = self.quote_token.address.parse().ok()?;
+        // Nomiswap on BSC is the documented bait family — quotes look fine
+        // but the swap leg reverts on-chain (live: 18 probe deaths). The
+        // DS rows carry no version label either, so there is no safe
+        // read here; drop at ingest.
+        if self.dex_id.eq_ignore_ascii_case("nomiswap") {
+            return None;
+        }
+        // Version comes from labels[] — dexId alone lies ("pancakeswap"
+        // covers v2 AND v3; mislabeled protocol = guaranteed exec revert).
+        let has = |tag: &str| {
+            self.labels
+                .as_ref()
+                .map(|l| l.iter().any(|t| t.eq_ignore_ascii_case(tag)))
+                .unwrap_or(false)
+        };
+        let proto = if has("v3") {
+            Protocol::UniswapV3
+        } else if has("v2") || has("v1") {
+            Protocol::UniswapV2
+        } else {
+            // No labels: unversioned ids stay dropped rather than guessed —
+            // a wrong-interface guess wastes an exec probe.
+            protocol_for(&self.dex_id, "")?
+        };
+        let price: f64 = self.price_native.as_deref()?.parse().ok()?;
+        if price <= 0.0 || !price.is_finite() {
+            return None;
+        }
+        Some(NormPool {
+            pool,
+            proto,
+            base,
+            quote,
+            price,
+            liquidity_usd: self
+                .liquidity
+                .as_ref()
+                .and_then(|l| l.usd)
+                .unwrap_or(0.0),
+            h1_txns: self
+                .txns
+                .as_ref()
+                .and_then(|t| t.h1.as_ref())
+                .map(|h| h.buys + h.sells)
+                .unwrap_or(0),
+            pair_label: format!("{} / {}", self.base_token.symbol, self.quote_token.symbol),
+            dex: self.dex_id.clone(),
+        })
+    }
+}
+
+/// Fetch every pool trading any of `tokens` on this chain from
+/// DexScreener — /tokens/v1 accepts up to 30 addresses per call, so all
+/// flash quotes arrive in one request (300 req/min tier). Errors and
+/// 429s degrade to an empty list — GT results still apply.
+async fn ds_fetch_quote_pools(
+    client: &reqwest::Client,
+    chain_slug: &str,
+    tokens: &[Address],
+) -> Vec<DsPair> {
+    let joined = tokens
+        .iter()
+        .map(|t| format!("{t}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let url = format!(
+        "https://api.dexscreener.com/tokens/v1/{chain_slug}/{joined}"
+    );
+    let Ok(resp) = client.get(&url).send().await else {
+        return Vec::new();
+    };
+    if !resp.status().is_success() {
+        return Vec::new();
+    }
+    resp.json::<Vec<DsPair>>().await.unwrap_or_default()
+}
+
 /// Directional candidate: borrow `borrow`, swap it to `mid` on `pool_in`,
 /// swap back on `pool_out`, repay.
 struct FeedCandidate {
@@ -294,7 +424,6 @@ async fn run(args: FeedArgs) {
     let mut rl_sleep = Duration::from_secs(30);
     loop {
         let mut pools: Vec<GtPool> = Vec::new();
-        let mut paged_out = false;
         for (i, url) in urls.iter().enumerate() {
             if i > 0 {
                 // ~4s between page fetches → ≤9 req/min across 3 chains.
@@ -322,7 +451,6 @@ async fn run(args: FeedArgs) {
                         .await;
                         rl_sleep =
                             (rl_sleep * 2).min(Duration::from_secs(240));
-                        paged_out = true;
                         break;
                     }
                     // Partial coverage is still useful — evaluate what we
@@ -337,10 +465,42 @@ async fn run(args: FeedArgs) {
                 }
             }
         }
-        if paged_out {
-            continue;
+        // Normalize GT rows, dedup by pool address.
+        let mut seen: HashSet<Address> = HashSet::new();
+        let mut norm: Vec<NormPool> = Vec::new();
+        for raw in &pools {
+            if let Some(p) = raw.normalize() {
+                if seen.insert(p.pool) {
+                    norm.push(p);
+                }
+            }
         }
-        if pools.is_empty() {
+
+        // DexScreener token-pairs ingest — one call per flash quote covers
+        // every pool for that token on the chain, not just GT's top-N tail.
+        // ~250ms stagger is far under DS's ~300 req/min; a different host,
+        // so a saturated-IP GT 429 can't starve the lane.
+        let ds_slug: &str = match args.chain_id {
+            56 => "bsc",
+            1 => "ethereum",
+            137 => "polygon",
+            8453 => "base",
+            _ => &slug,
+        };
+        let quotes: Vec<Address> = args.flash_quotes.keys().copied().collect();
+        for chunk in quotes.chunks(30) {
+            let pairs = ds_fetch_quote_pools(&client, ds_slug, chunk).await;
+            for dp in &pairs {
+                if let Some(p) = dp.normalize() {
+                    if seen.insert(p.pool) {
+                        norm.push(p);
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+
+        if norm.is_empty() {
             tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
             continue;
         }
@@ -348,10 +508,7 @@ async fn run(args: FeedArgs) {
 
         // Step 2 — rigid filters; group by (base, quote) pair parity.
         let mut by_pair: HashMap<(Address, Address), Vec<NormPool>> = HashMap::new();
-        for raw in &pools {
-            let Some(p) = raw.normalize() else {
-                continue;
-            };
+        for p in norm {
             if args.blocked.contains(&p.base) || args.blocked.contains(&p.quote) {
                 metrics::FEED_REJECTS
                     .with_label_values(&[&args.chain, "token_blocked"])
@@ -636,14 +793,9 @@ async fn verify_and_submit(
     // Step 4 — abort if gross can't cover gas.
     let gas_usd = match args.endpoint.gas_price().await {
         Ok(gp) => {
-            let native = args
-                .token_usd_prices
-                .iter()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(_, p)| *p)
-                .unwrap_or(0.0);
-            // ~600k gas round trip × gas price × native price.
-            gp as f64 * 600_000.0 / 1e18 * native
+            // ~600k gas round trip × gas price × the chain's native price —
+            // max-priced tracked token is wrong (BTCB ~= 130x BNB).
+            gp as f64 * 600_000.0 / 1e18 * args.native_usd
         }
         Err(_) => 0.0,
     };
