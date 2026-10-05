@@ -331,22 +331,19 @@ impl DsPair {
     }
 }
 
-/// Fetch every pool trading any of `tokens` on this chain from
-/// DexScreener — /tokens/v1 accepts up to 30 addresses per call, so all
-/// flash quotes arrive in one request (300 req/min tier). Errors and
-/// 429s degrade to an empty list — GT results still apply.
-async fn ds_fetch_quote_pools(
+/// Fetch every pool trading `token` on this chain from DexScreener.
+/// Errors and 429s degrade to an empty list — GT results still apply.
+/// NOTE: `/tokens/v1/{chain}/{a,b,c}` is the WRONG endpoint here — it
+/// returns only the single top pair per token (5 rows for 5 tokens on
+/// Ethereum, all already covered by GT). `/token-pairs/v1` returns the
+/// full pool set for ONE token, so we call it per token.
+async fn ds_fetch_token_pools(
     client: &reqwest::Client,
     chain_slug: &str,
-    tokens: &[Address],
+    token: Address,
 ) -> Vec<DsPair> {
-    let joined = tokens
-        .iter()
-        .map(|t| format!("{t}"))
-        .collect::<Vec<_>>()
-        .join(",");
     let url = format!(
-        "https://api.dexscreener.com/tokens/v1/{chain_slug}/{joined}"
+        "https://api.dexscreener.com/token-pairs/v1/{chain_slug}/{token}"
     );
     let Ok(resp) = client.get(&url).send().await else {
         return Vec::new();
@@ -522,9 +519,13 @@ async fn run(args: FeedArgs) {
                 ingest.push(*t);
             }
         }
+        // One request per ingest token in parallel — 5-6 calls vs the
+        // 300/min budget is nothing, and the cycle stays fast.
         let mut ds_added = 0u64;
-        for chunk in ingest.chunks(30) {
-            let pairs = ds_fetch_quote_pools(&client, ds_slug, chunk).await;
+        let fetches = ingest
+            .iter()
+            .map(|t| ds_fetch_token_pools(&client, ds_slug, *t));
+        for pairs in futures::future::join_all(fetches).await {
             for dp in &pairs {
                 if let Some(p) = dp.normalize() {
                     if bait_set.contains(&p.pool) {
@@ -536,7 +537,6 @@ async fn run(args: FeedArgs) {
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(300)).await;
         }
         metrics::FEED_INGESTED
             .with_label_values(&[&args.chain, "gt"])
