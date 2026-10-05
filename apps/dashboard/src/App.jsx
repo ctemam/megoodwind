@@ -62,11 +62,17 @@ export default function App() {
         <header>
           <div className="pulse">
             <div className={`dot ${online ? '' : 'off'}`} />
-            <span className={`val ${net >= 0 ? 'pos' : 'neg'}`}>{fmt(net, currency, prices)}</span>
+            <span className={`val ${net >= 0 ? 'pos' : 'neg'}`} title="Realized P&L — settled executions only">{fmt(net, currency, prices)}</span>
             <select className="period" value={profitPeriod} onChange={e => setProfitPeriod(e.target.value)} title="Profit window">
               <option value="day">24h</option>
               <option value="life">Lifetime</option>
             </select>
+            {all.profit?.est_lifetime != null && (
+              <span className="dim" style={{ fontSize: 11 }}
+                title="Cumulative simulated edge across candidate evaluations — NOT executed P&L">
+                est {fmt(all.profit.est_lifetime, currency, prices)}
+              </span>
+            )}
           </div>
           <div className="status-pill">
             <div className="sd" style={online < chainCount ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />

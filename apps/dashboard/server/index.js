@@ -86,11 +86,30 @@ app.get('/api/metrics/all', async (_req, res) => {
   for (const c of Object.keys(CHAINS)) {
     try { out[c] = await fetchMetrics(c) } catch { out[c] = null }
   }
-  const net = Object.values(out).reduce(
+  // arb_gross_profit_usd_total is a SIMULATION estimate counter — it
+  // increments by effective_profit_usd on every candidate evaluation, so
+  // the same edge is re-counted every scan cycle. It is NOT money made.
+  const est = Object.values(out).reduce(
     (s, m) => s + (m ? m['arb_gross_profit_usd_total'] || 0 : 0), 0)
-  recordProfit(net)
-  res.json({ live: isLive(), chains: out, profit: profitSummary(net), commit: BUILD_COMMIT })
+  // Realized P&L = settled_net_usd summed over landed records only.
+  const realized = realizedPnl()
+  recordProfit(est, realized)
+  res.json({
+    live: isLive(), chains: out, commit: BUILD_COMMIT,
+    profit: { ...profitSummary(est, realized), est },
+  })
 })
+
+// Sum settled_net_usd across every chain's opportunity log — the only
+// number that ever touched the chain as a finished execution.
+function realizedPnl() {
+  let sum = 0
+  for (const cfg of Object.values(CHAINS)) {
+    const f = path.join(REPO, 'data', 'leaders', cfg.label, '_opportunities.jsonl')
+    for (const o of readJsonl(f)) sum += o?.settled_net_usd || 0
+  }
+  return sum
+}
 
 // ── Canonical metrics contract ──────────────────────────────────────────
 // One normalized definition across API, UI and runner (improvement plan
@@ -179,32 +198,40 @@ const PROFIT_LOG = path.join(__dirname, '.profit-history.json')
 let profitLog = []
 try { profitLog = JSON.parse(fs.readFileSync(PROFIT_LOG, 'utf8')) } catch {}
 
-function recordProfit(net) {
+function recordProfit(est, realized) {
   const now = Date.now()
   const last = profitLog[profitLog.length - 1]
-  if (last && now - last.t < 25_000) { last.t = now; last.net = net }
-  else profitLog.push({ t: now, net })
+  if (last && now - last.t < 25_000) {
+    last.t = now; last.net = est; last.realized = realized
+  } else profitLog.push({ t: now, net: est, realized })
   const cutoff = now - 48 * 3600e3
   if (profitLog.length > 4000 || (profitLog[0] && profitLog[0].t < cutoff))
     profitLog = profitLog.filter(s => s.t >= cutoff)
   fs.writeFile(PROFIT_LOG, JSON.stringify(profitLog), () => {})
 }
 
-function profitSummary(netNow) {
+function profitSummary(estNow, realizedNow) {
   const dayAgo = Date.now() - 24 * 3600e3
   const base = profitLog.find(s => s.t >= dayAgo)
   const dayFrom = base?.t ?? profitLog[0]?.t ?? null
-  const day = dayFrom != null ? netNow - (base ?? profitLog[0]).net : null
-  return { lifetime: netNow, day, day_from: dayFrom }
+  const day = dayFrom != null ? estNow - (base ?? profitLog[0]).net : null
+  const dayRealized = dayFrom != null
+    ? realizedNow - ((base ?? profitLog[0]).realized || 0) : null
+  // lifetime = REALIZED P&L; est/days keep the simulated counter visible
+  // but explicitly named.
+  return {
+    lifetime: realizedNow, day: dayRealized, day_from: dayFrom,
+    est_lifetime: estNow, est_day: day,
+  }
 }
 
 async function sampleProfit() {
   try {
-    let net = 0
+    let est = 0
     for (const c of Object.keys(CHAINS)) {
-      try { net += (await fetchMetrics(c))['arb_gross_profit_usd_total'] || 0 } catch {}
+      try { est += (await fetchMetrics(c))['arb_gross_profit_usd_total'] || 0 } catch {}
     }
-    recordProfit(net)
+    recordProfit(est, realizedPnl())
   } catch {}
 }
 sampleProfit()

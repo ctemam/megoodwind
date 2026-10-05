@@ -112,7 +112,7 @@ export default function Opportunities() {
     <div className="grid">
       <div className="grid cards">
         <div className="card"><div className="k">Signals</div><div className="v">{rows.length}</div><div className="s">in view</div></div>
-        <div className="card"><div className="k">Actionable</div><div className="v pos">{actionable.length}</div><div className="s" title="survived the runner's real-state re-check">live-verified</div></div>
+        <div className="card"><div className="k">Exec-ready</div><div className="v pos">{actionable.length}</div><div className="s" title="sim passed, every gate clean, staged for a venue">staged to submit</div></div>
         <div className="card"><div className="k">Replay positive</div><div className="v">{funnel.replay_positive ?? D}</div><div className="s">of {funnel.replay_attempts ?? D}</div></div>
         <div className="card"><div className="k">Matched live</div><div className="v">{funnel.matched_live ?? D}</div><div className="s">verified route hit</div></div>
         <div className="card"><div className="k">Submitted</div><div className="v">{funnel.submitted ?? D}</div><div className="s">landed {funnel.landed ?? D} · settled {funnel.settled ?? D}</div></div>
