@@ -412,6 +412,9 @@ struct TokenCircuitBreaker {
     /// gate-pass then revert on exec-probe/submit are griefing or honeypot
     /// signatures — flagged pools suppress candidate paths like tokens.
     pool_stats: HashMap<Address, TokenBreakerStats>,
+    /// Persisted bait list — suppressions survive restarts; leader_scan
+    /// and the hot-reload loop exclude listed pools from re-import.
+    bait_path: Option<std::path::PathBuf>,
 }
 
 struct TokenBreakerStats {
@@ -429,6 +432,67 @@ impl TokenCircuitBreaker {
             blacklist: HashSet::new(),
             popular_intermediaries: HashSet::new(),
             pool_stats: HashMap::new(),
+            bait_path: None,
+        }
+    }
+
+    fn set_bait_path(&mut self, path: std::path::PathBuf) {
+        self.bait_path = Some(path);
+    }
+
+    /// Persist suppressed pools so bait flags survive restarts — an
+    /// in-memory flag died with the process and leader_scan re-imported
+    /// the same pools on the next merge.
+    fn persist_bait(&self) {
+        let Some(path) = &self.bait_path else { return };
+        let pools: Vec<serde_json::Value> = self
+            .pool_stats
+            .iter()
+            .filter(|(_, s)| s.suppressed_until_block > 0)
+            .map(|(a, s)| {
+                serde_json::json!({
+                    "pool": format!("{a:#x}"),
+                    "until_block": s.suppressed_until_block,
+                })
+            })
+            .collect();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(
+            path,
+            serde_json::to_string_pretty(&serde_json::json!({ "pools": pools }))
+                .unwrap_or_default(),
+        );
+    }
+
+    /// Restore suppressed pools written by a previous process — expired
+    /// entries die naturally (block numbers only advance).
+    fn load_bait(&mut self) {
+        let Some(path) = &self.bait_path else { return };
+        let Ok(contents) = std::fs::read_to_string(path) else { return };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else { return };
+        let Some(arr) = v.get("pools").and_then(|a| a.as_array()) else { return };
+        let mut restored = 0u32;
+        for e in arr {
+            let (Some(a), Some(until)) = (
+                e.get("pool")
+                    .and_then(|p| p.as_str())
+                    .and_then(|p| p.parse::<Address>().ok()),
+                e.get("until_block").and_then(|u| u.as_u64()),
+            ) else { continue };
+            self.pool_stats.insert(
+                a,
+                TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: until,
+                },
+            );
+            restored += 1;
+        }
+        if restored > 0 {
+            info!(restored, "Bait pool list restored from disk");
         }
     }
 
@@ -498,9 +562,11 @@ impl TokenCircuitBreaker {
                     "Bait pool suppressed — simulated gap above credibility ceiling");
             }
         }
+        self.persist_bait();
     }
 
     fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
+        let mut tripped = false;
         for hop in &path.hops {
             // Pool-level bait accounting: same decay/threshold as tokens.
             {
@@ -517,6 +583,7 @@ impl TokenCircuitBreaker {
                 if s.consecutive_reverts >= self.revert_threshold {
                     s.suppressed_until_block = block + self.suppression_blocks;
                     metrics::BAIT_SUSPECT.inc();
+                    tripped = true;
                     warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
                         "Bait-suspect pool suppressed — repeated gate-pass-then-revert signature");
                 }
@@ -541,6 +608,9 @@ impl TokenCircuitBreaker {
                         "Token circuit-breaker tripped");
                 }
             }
+        }
+        if tripped {
+            self.persist_bait();
         }
     }
 
@@ -1070,10 +1140,32 @@ fn spawn_pool_hot_reload(
                     addr.parse::<Address>().ok().map(|a| (name.clone(), a))
                 })
                 .collect();
+            // Pools convicted by the bait gate stay out of the index —
+            // the persisted list is re-read every cycle so a fresh flag
+            // lands even mid-process.
+            let bait_set: HashSet<Address> = std::fs::read_to_string(format!(
+                "data/leaders/{chain}/_bait_pools.json"
+            ))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("pools").and_then(|a| a.as_array()).cloned())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|e| {
+                        e.get("pool")
+                            .and_then(|p| p.as_str())
+                            .and_then(|p| p.parse::<Address>().ok())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
             let mut new_cfgs: Vec<PoolConfig> = Vec::new();
             let mut new_addrs: Vec<Address> = Vec::new();
             for p in &re_cfg.pools {
                 let Ok(addr) = p.pseudo_address() else { continue };
+                if bait_set.contains(&addr) {
+                    continue;
+                }
                 if !known.insert(addr) {
                     continue;
                 }

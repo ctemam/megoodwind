@@ -493,6 +493,27 @@ async fn main() -> Result<()> {
         .iter()
         .filter_map(|p| p.address.parse::<Address>().ok())
         .collect();
+    // Ingest divergence reference: pair -> tracked (pool, is_v3_family).
+    // An auto-merged candidate whose implied spot price disagrees with
+    // live same-pair peers is a fabricated pair (the Nomiswap-family
+    // bait signature that kept re-entering the index).
+    let mut tracked_pair: HashMap<(Address, Address), Vec<(Address, bool)>> =
+        HashMap::new();
+    for p in &cfg.pools {
+        let (Some(&pt0), Some(&pt1)) = (tokens.get(&p.token0), tokens.get(&p.token1))
+        else {
+            continue;
+        };
+        let Ok(paddr) = p.address.parse::<Address>() else { continue };
+        let is_v3 = matches!(
+            config::parse_protocol_name(&p.protocol),
+            arb_core::types::Protocol::UniswapV3
+                | arb_core::types::Protocol::Algebra
+                | arb_core::types::Protocol::AerodromeSlipstream
+        );
+        let key = if pt0 < pt1 { (pt0, pt1) } else { (pt1, pt0) };
+        tracked_pair.entry(key).or_default().push((paddr, is_v3));
+    }
     let mut sh_pools_total = 0usize;
     let mut sh_pools_tracked = 0usize;
     let mut shadow_routes: HashMap<Address, (f64, Vec<String>)> = HashMap::new();
@@ -914,10 +935,30 @@ async fn main() -> Result<()> {
     // leader route outranks any transfer-graph counterparty, and s_contracts
     // membership can't exclude it (the on-chain provenance gate below is the
     // real filter).
+    // Persisted bait list written by the runners: pools convicted by the
+    // credibility ceiling never re-enter the index — the in-memory flag
+    // used to die with the process and re-import on the next merge.
+    let bait_set: HashSet<Address> = std::fs::read_to_string(format!(
+        "{data_dir}/_bait_pools.json"
+    ))
+    .ok()
+    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    .and_then(|v| v.get("pools").and_then(|a| a.as_array()).cloned())
+    .map(|arr| {
+        arr.iter()
+            .filter_map(|e| {
+                e.get("pool")
+                    .and_then(|p| p.as_str())
+                    .and_then(|p| p.parse::<Address>().ok())
+            })
+            .collect()
+    })
+    .unwrap_or_default();
     let mut seen: HashSet<Address> = HashSet::new();
     let mut probe_list: Vec<(Address, u32)> = Vec::new();
     for a in &route_pool_addrs {
         if !tracked.contains(a)
+            && !bait_set.contains(a)
             && !tokens.values().any(|t| t == a)
             && seen.insert(*a)
         {
@@ -928,7 +969,7 @@ async fn main() -> Result<()> {
         if probe_list.len() >= 80 {
             break;
         }
-        if seen.insert(a) {
+        if !bait_set.contains(&a) && seen.insert(a) {
             probe_list.push((a, n));
         }
     }
@@ -1019,21 +1060,49 @@ async fn main() -> Result<()> {
             .await
             .ok()
             .and_then(|(o, _)| o.get(12..32).map(|b| Address::from_slice(b)));
+        // Fee verification (bait defense): a real V3 pool always answers
+        // fee() — a failed call or implausible value means the slot0
+        // response was fabricated. V2 clones mostly don't expose
+        // swapFee(); when they do (Nomiswap & co.) the on-chain value is
+        // authoritative — a nonstandard fee is the math that fabricates
+        // phantom spreads.
+        let mut prov = prov;
         let fee_bps = if v3 {
-            endpoint
+            match endpoint
                 .eth_call_timed(*addr, addr_of([0xdd, 0xca, 0x3f, 0x43]))
                 .await
                 .ok()
                 .and_then(|(o, _)| {
                     o.get(..32).map(|b| U256::from_be_slice(b).to::<u32>() / 100)
-                })
-                .unwrap_or(30)
+                }) {
+                Some(f) if (1..=100).contains(&f) => f,
+                Some(f) => {
+                    prov = "bad_fee";
+                    f
+                }
+                None => {
+                    prov = "no_fee";
+                    30
+                }
+            }
         } else {
-            25
+            match endpoint
+                .eth_call_timed(*addr, addr_of([0x54, 0xcf, 0x2a, 0xeb]))
+                .await
+                .ok()
+                .and_then(|(o, _)| {
+                    o.get(..32).map(|b| U256::from_be_slice(b).to::<u32>())
+                }) {
+                Some(f) if (1..=100).contains(&f) => f,
+                Some(_) => {
+                    prov = "bad_swapfee";
+                    25
+                }
+                None => 25,
+            }
         };
         // Token sanity: a pool side pointing at a non-contract address means a
         // counterfeit or malformed pair — never import those.
-        let mut prov = prov;
         for t in [t0, t1].into_iter().flatten() {
             let code = endpoint
                 .pool_pick()
@@ -1044,6 +1113,64 @@ async fn main() -> Result<()> {
                 .unwrap_or(false);
             if !code {
                 prov = "suspect";
+            }
+        }
+        // Divergence gate: implied spot price must agree with live
+        // same-pair tracked peers within 3x — a fabricated pair on real
+        // tokens quotes a price no peer confirms.
+        if prov == "deep" {
+            if let (Some(ct0), Some(ct1)) = (t0, t1) {
+                let q96 = 79228162514264337593543950336.0f64;
+                let px_of = |o: &alloy_primitives::Bytes, is_v3: bool| -> Option<f64> {
+                    if is_v3 {
+                        o.get(..32).and_then(|b| {
+                            let sp = U256::from_be_slice(b)
+                                .to_string().parse::<f64>().unwrap_or(0.0);
+                            (sp > 0.0).then(|| (sp / q96).powi(2))
+                        })
+                    } else {
+                        let r0 = o.get(0..32).map(|b| U256::from_be_slice(b)
+                            .to_string().parse::<f64>().unwrap_or(0.0));
+                        let r1 = o.get(32..64).map(|b| U256::from_be_slice(b)
+                            .to_string().parse::<f64>().unwrap_or(0.0));
+                        match (r0, r1) {
+                            (Some(a), Some(b)) if a > 0.0 => Some(b / a),
+                            _ => None,
+                        }
+                    }
+                };
+                let cand_px = if v3 {
+                    slot0.as_ref().and_then(|o| px_of(o, true))
+                } else {
+                    reserves.as_ref().and_then(|o| px_of(o, false))
+                };
+                let key = if ct0 < ct1 { (ct0, ct1) } else { (ct1, ct0) };
+                if let (Some(cp), Some(peers)) = (cand_px, tracked_pair.get(&key)) {
+                    let mut peer_px: Vec<f64> = Vec::new();
+                    for (pa, is_v3p) in peers.iter().take(6) {
+                        let sel = if *is_v3p {
+                            [0x38, 0x50, 0xc7, 0xbd]
+                        } else {
+                            [0x09, 0x02, 0xf1, 0xac]
+                        };
+                        if let Ok((o, _)) = endpoint.eth_call_timed(*pa, addr_of(sel)).await {
+                            if let Some(p) = px_of(&o, *is_v3p) {
+                                if p > 0.0 && p.is_finite() {
+                                    peer_px.push(p);
+                                }
+                            }
+                        }
+                    }
+                    peer_px.sort_by(|a, b| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    if !peer_px.is_empty() {
+                        let median = peer_px[(peer_px.len() - 1) / 2];
+                        if cp > median * 3.0 || cp < median / 3.0 {
+                            prov = "diverged";
+                        }
+                    }
+                }
             }
         }
         let mut sym = |a: Option<Address>| -> String {
