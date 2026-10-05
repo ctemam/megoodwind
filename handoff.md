@@ -51,6 +51,34 @@ Net result at handoff: **0 landed trades, $0 realized profit, ~2 days spent.**
   (sponsored UserOps — zero capital, no funding needed, ever).
 - All work lands on PR #2, branch `devin/1791013932-backrun-projection`.
 
+## Credentials & access
+
+Values live in `~/repos/megoodwind/.env` on the VM (never committed) and in
+the org's Devin secrets. The successor needs these — get them from the
+Commander or the org secrets store, do not invent them:
+
+- `PRIVATE_KEY` — the EOA that owns the executor contracts and signs
+  non-4337 submissions. Already on the VM.
+- `PIMLICO_API_KEY` — bundler + sponsored paymaster for all UserOps. Powers
+  the zero-capital path; without it nothing submits.
+- `ZERODEV_PROJECT_ID` — ZeroDev/Pimlico account-abstraction stack.
+- `*_RPC_URL` (BSC/ETH/POLY/ARB/OP/AVAX) — read endpoints; the configs
+  already carry the free public pool, these are the keyed upgrades.
+- `FLASHBOOTS_AUTH_KEY`, `VELORA_API_KEY` — present in `.env`, legacy venues;
+  strict_4337 means they are unused but kept.
+- `BSC_TRADER_NODE` — warp-enabled submission endpoint ($0.15/call) —
+  referenced in `config/bsc.toml`; only needed for non-sponsored submits.
+- `PROFIT_WALLET`, `PROFIT_TRANSFER_MODE` — where settled profit sweeps if
+  transfer mode is enabled (currently unset → profits stay in the smart
+  account).
+- Devin org secrets + GitHub access: PRs open via the Devin GitHub App;
+  the successor session inherits the same identity.
+
+Deployed on-chain (no keys needed to call): BscFlashArb
+`0x2db918f9c7020950e5a7d9948b489b5322700626`, StateReader
+`0xec3d37cd945bf2a6a6d2712e56c688a08273e7a2` (BSC/ETH/Polygon), smart
+account `0x18ed4911eede0c7850db1c51690b6ed076d9d8d2`.
+
 ## The real, unsolved problem
 
 Measured, not theorized:
