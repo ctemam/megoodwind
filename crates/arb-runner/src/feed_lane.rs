@@ -272,7 +272,14 @@ async fn run(args: FeedArgs) {
         "base" => "base".to_string(),
         other => other.to_string(),
     };
-    let url = format!("https://api.geckoterminal.com/api/v2/networks/{slug}/pools?page=1");
+    // Pages 1-3 cover ~top-300 pools — spreads live in the mid-liquidity
+    // tail that page 1 alone never sees. Fetches are staggered inside the
+    // cycle (~4s apart) to stay under the free rate limit.
+    let urls: Vec<String> = (1..=3)
+        .map(|p| {
+            format!("https://api.geckoterminal.com/api/v2/networks/{slug}/pools?page={p}")
+        })
+        .collect();
     let mut next_id: u32 = 0xF00D;
     // Pools that reverted at exec — suppressed for 1h after 2 strikes.
     let mut suppressed: HashMap<Address, (u32, Instant)> = HashMap::new();
@@ -286,35 +293,57 @@ async fn run(args: FeedArgs) {
     // a retry storm.
     let mut rl_sleep = Duration::from_secs(30);
     loop {
-        let pools: Vec<GtPool> = match fetch(&client, &url).await {
-            FetchOutcome::Ok(p) => {
-                rl_sleep = Duration::from_secs(30);
-                p
+        let mut pools: Vec<GtPool> = Vec::new();
+        let mut paged_out = false;
+        for (i, url) in urls.iter().enumerate() {
+            if i > 0 {
+                // ~4s between page fetches → ≤9 req/min across 3 chains.
+                tokio::time::sleep(Duration::from_secs(4)).await;
             }
-            FetchOutcome::RateLimited(after) => {
-                metrics::FEED_REJECTS
-                    .with_label_values(&[&args.chain, "rate_limited"])
-                    .inc();
-                // +jitter so the three chain lanes don't hammer in lockstep.
-                let jitter = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.subsec_millis() % 5000)
-                    .unwrap_or(0)) as u64;
-                tokio::time::sleep(
-                    after.max(rl_sleep) + Duration::from_millis(jitter),
-                )
-                .await;
-                rl_sleep = (rl_sleep * 2).min(Duration::from_secs(240));
-                continue;
+            match fetch(&client, url).await {
+                FetchOutcome::Ok(mut p) => {
+                    rl_sleep = Duration::from_secs(30);
+                    pools.append(&mut p);
+                }
+                FetchOutcome::RateLimited(after) => {
+                    metrics::FEED_REJECTS
+                        .with_label_values(&[&args.chain, "rate_limited"])
+                        .inc();
+                    if pools.is_empty() {
+                        // +jitter so the three chain lanes don't hammer
+                        // in lockstep.
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.subsec_millis() % 5000)
+                            .unwrap_or(0)) as u64;
+                        tokio::time::sleep(
+                            after.max(rl_sleep) + Duration::from_millis(jitter),
+                        )
+                        .await;
+                        rl_sleep =
+                            (rl_sleep * 2).min(Duration::from_secs(240));
+                        paged_out = true;
+                        break;
+                    }
+                    // Partial coverage is still useful — evaluate what we
+                    // got and let the next cycle retry deeper pages.
+                    break;
+                }
+                FetchOutcome::Fail => {
+                    metrics::FEED_REJECTS
+                        .with_label_values(&[&args.chain, "fetch"])
+                        .inc();
+                    break;
+                }
             }
-            FetchOutcome::Fail => {
-                metrics::FEED_REJECTS
-                    .with_label_values(&[&args.chain, "fetch"])
-                    .inc();
-                tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
-                continue;
-            }
-        };
+        }
+        if paged_out {
+            continue;
+        }
+        if pools.is_empty() {
+            tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
+            continue;
+        }
         metrics::FEED_SCANNED.with_label_values(&[&args.chain]).inc();
 
         // Step 2 — rigid filters; group by (base, quote) pair parity.

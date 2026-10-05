@@ -74,6 +74,14 @@ export default function Opportunities() {
   }, [data, chain, lane, showRejected])
 
   const [sorted, th] = useSort(rows, ['time', -1])
+  // Pagination — DEXScreener style: fixed page sizes, latest-first.
+  const [pageSize, setPageSize] = useState(50)
+  const [page, setPage] = useState(0)
+  const pageCount = Math.max(1, Math.ceil(sorted.length / pageSize))
+  const cur = Math.min(page, pageCount - 1)
+  const pageRows = sorted.slice(cur * pageSize, (cur + 1) * pageSize)
+  // Filters changing invalidate the current page position.
+  useEffect(() => { setPage(0) }, [chain, lane, showRejected, pageSize])
   const actionable = rows.filter(r => r.execution_status === 'ready' && !r.rejection_reason)
   const funnel = useMemo(() => {
     const f = { decoded: 0, replay_attempts: 0, replay_positive: 0, actionable: 0, matched_live: 0, submitted: 0, landed: 0, settled: 0 }
@@ -126,7 +134,7 @@ export default function Opportunities() {
             {sorted.length === 0 && (
               <tr><td colSpan="15" className="muted">No {showRejected ? '' : 'passing '}opportunity records.</td></tr>
             )}
-            {sorted.map((o, i) => (
+            {pageRows.map((o, i) => (
               <tr key={o.opportunity_id || i}>
                 <td className="mono dim">{hhmmss(o.time)}</td>
                 <td title={`${o.token_in || ''} → ${o.token_out || ''}`}>
@@ -174,6 +182,22 @@ export default function Opportunities() {
             </tr>
           </tfoot>
         </table>
+        <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
+          <div className="tabs">
+            <button className="tab" disabled={cur === 0} onClick={() => setPage(0)}>«</button>
+            <button className="tab" disabled={cur === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</button>
+            <span className="dim" style={{ padding: '0 8px' }}>
+              page {cur + 1} / {pageCount} · {sorted.length} rows
+            </span>
+            <button className="tab" disabled={cur >= pageCount - 1} onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}>next ›</button>
+            <button className="tab" disabled={cur >= pageCount - 1} onClick={() => setPage(pageCount - 1)}>»</button>
+          </div>
+          <div className="tabs">
+            {[25, 50, 100, 200].map(n => (
+              <button key={n} className={`tab${n === pageSize ? ' on' : ''}`} onClick={() => setPageSize(n)}>{n}/pg</button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
