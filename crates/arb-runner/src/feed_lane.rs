@@ -56,6 +56,10 @@ pub struct FeedArgs {
     pub account: Option<Address>,
     /// Allowed flash assets, addr -> (usd_price, decimals).
     pub flash_quotes: HashMap<Address, (f64, u8)>,
+    /// Extra tokens to ingest pools for ([feed].tokens resolved) — the
+    /// mid assets that form (mid,quote) pair groups a borrow-only fetch
+    /// can't see. Unioned with flash_quotes in the DS call.
+    pub feed_tokens: Vec<Address>,
     /// addr -> usd price for P&L bookkeeping (flash assets + majors).
     pub token_usd_prices: HashMap<Address, f64>,
     /// USD price of the chain's native gas token — symbol-resolved in
@@ -488,8 +492,37 @@ async fn run(args: FeedArgs) {
             8453 => "base",
             _ => &slug,
         };
-        let quotes: Vec<Address> = args.flash_quotes.keys().copied().collect();
-        for chunk in quotes.chunks(30) {
+        // Pools convicted anywhere (classic/backrun exec probes, bait gate)
+        // are off-limits here too — re-read the persisted list each cycle
+        // so fresh convictions land without a restart.
+        let bait_set: HashSet<Address> = std::fs::read_to_string(format!(
+            "{}/_bait_pools.json",
+            args.data_dir
+        ))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("pools").and_then(|a| a.as_array()).cloned())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| {
+                    e.get("pool")
+                        .and_then(|p| p.as_str())
+                        .and_then(|p| p.parse::<Address>().ok())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+        norm.retain(|p| !bait_set.contains(&p.pool));
+
+        // Borrow assets + [feed].tokens mid assets — the mids are what make
+        // (mid,quote) groups form across DEXes, not just (quote,quote).
+        let mut ingest: Vec<Address> = args.flash_quotes.keys().copied().collect();
+        for t in &args.feed_tokens {
+            if !ingest.contains(t) {
+                ingest.push(*t);
+            }
+        }
+        for chunk in ingest.chunks(30) {
             let pairs = ds_fetch_quote_pools(&client, ds_slug, chunk).await;
             for dp in &pairs {
                 if let Some(p) = dp.normalize() {

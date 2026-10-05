@@ -1921,6 +1921,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 arb_contract,
                 account: copy_account,
                 flash_quotes,
+                feed_tokens: cfg
+                    .feed
+                    .tokens
+                    .iter()
+                    .filter_map(|n| tokens.get(n).copied())
+                    .collect(),
                 token_usd_prices: token_usd_prices.clone(),
                 native_usd,
                 blocked: blocked.clone(),
