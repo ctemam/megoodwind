@@ -899,7 +899,7 @@ fee_bps = 5
 # Execution kill switches — wallet-copy is the only deployed lane;
 # arb/backrun discovery and metrics keep running but never submit.
 [lanes]
-classic_arb = false
+classic_arb = true
 backrun     = false
 [feed]
 enabled      = true
