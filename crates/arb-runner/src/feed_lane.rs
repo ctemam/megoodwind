@@ -854,7 +854,11 @@ async fn verify_and_submit(
         metrics::FEED_VERIFIED
             .with_label_values(&[&args.chain, "sim_fail"])
             .inc();
-        return None;
+        // The feed quoted a spread that doesn't exist on fresh chain
+        // state — someone's reported price is stale or manipulated. A
+        // strike against the buy leg: two repeat fake quotes suppress
+        // the pool for an hour instead of re-verifying every cycle.
+        return Some((c.pool_in, 1));
     };
     let gross_usd = (sim.gross_profit.to::<u128>() as f64)
         / 10f64.powi(borrow_dec as i32)
