@@ -536,6 +536,20 @@ TK_0x1fb7260ee42038f7081024f9f740a3aa38e07777 = "0x1fb7260ee42038f7081024f9f740a
 TK_0x25d887ce7a35172c62febfd67a1856f20faebb00 = "0x25d887ce7a35172c62febfd67a1856f20faebb00"
 TK_0xac5174ec0623c09fd76fb1483a91f5e60e897777 = "0xac5174ec0623c09fd76fb1483a91f5e60e897777"
 TK_0xec16bb6976fdf303de24e9b0669e928f04a17777 = "0xec16bb6976fdf303de24e9b0669e928f04a17777"
+TK_0x477df393c9fc7ba6d04cc0a9cd092b5d84079a26 = "0x477df393c9fc7ba6d04cc0a9cd092b5d84079a26"
+TK_0x92aa03137385f18539301349dcfc9ebc923ffb10 = "0x92aa03137385f18539301349dcfc9ebc923ffb10"
+TK_0xbcee8811dd5b5d8f930b7cfad732a15333737777 = "0xbcee8811dd5b5d8f930b7cfad732a15333737777"
+TK_0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3 = "0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3"
+TK_0xe53e6011c8d384d5c05b5b139a722acf3a567777 = "0xe53e6011c8d384d5c05b5b139a722acf3a567777"
+TK_0xfa6d9b504848606eb9aec04ccc161d169b3f2159 = "0xfa6d9b504848606eb9aec04ccc161d169b3f2159"
+TK_0x14d66e72a6d1215c110cc12056c4aac766e07777 = "0x14d66e72a6d1215c110cc12056c4aac766e07777"
+TK_0x5d3a12c42e5372b2cc3264ab3cdcf660a1555238 = "0x5d3a12c42e5372b2cc3264ab3cdcf660a1555238"
+TK_0x61fac5f038515572d6f42d4bcb6b581642753d50 = "0x61fac5f038515572d6f42d4bcb6b581642753d50"
+TK_0xb45e778265a1a5e24a5fba33af076e35697f7777 = "0xb45e778265a1a5e24a5fba33af076e35697f7777"
+TK_0xc561dc47b9c1c036e77ecffdde66b8f451847777 = "0xc561dc47b9c1c036e77ecffdde66b8f451847777"
+TK_0xfd7475f24c6fdec2739711c6c866203c719d7777 = "0xfd7475f24c6fdec2739711c6c866203c719d7777"
+TK_0x183ffbed812202a4dea1ef8a86b52f3b09f6ffff = "0x183ffbed812202a4dea1ef8a86b52f3b09f6ffff"
+TK_0x5092d47ca478f43ad2a26bb03ef714af21b27777 = "0x5092d47ca478f43ad2a26bb03ef714af21b27777"
 [[pools]]
 name = "PCS_USDT_WBNB"
 address = "0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE"
@@ -1245,7 +1259,7 @@ discover = true
 # "live" still requires each wallet's risk_tier = "live"; discovered
 # wallets land at "observe" so nothing submits until a wallet is
 # promoted. copy_usd is the fixed notional per copy.
-copy_mode          = "live"
+copy_mode          = "off"
 copy_usd           = 50.0
 copy_slippage_bps  = 300
 copy_deadline_secs = 120
@@ -1372,6 +1386,18 @@ fee_bps = 25
 [lanes]
 classic_arb = false
 backrun     = false
+[feed]
+enabled      = true
+tokens       = ["WBNB", "ETH", "BTCB", "CAKE"]
+flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD"]
+interval_secs      = 15
+min_spread_bps     = 50.0
+max_spread_bps     = 2000.0
+min_liquidity_usd  = 50000.0
+min_h1_txns        = 3
+max_notional_usd   = 2000.0
+pool_share_bps     = 1500.0
+min_net_usd        = 1.0
 [[pools]]
 name = "AUTO_USDT_TK_0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a_100"
 address = "0x3098d7a051045000d68ec0360753a40c8cabea31"
@@ -2333,5 +2359,113 @@ protocol = "v3"
 token0 = "TK_0x25d887ce7a35172c62febfd67a1856f20faebb00"
 token1 = "USDT"
 fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x92aa03137385f18539301349dcfc9ebc923ffb10_1"
+address = "0x69b86059c5fb3a44355937e7b505a659443b9a22"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0x92aa03137385f18539301349dcfc9ebc923ffb10"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xfa6d9b504848606eb9aec04ccc161d169b3f2159_25"
+address = "0xa9efab633429380f28e8e280c1731cc8713ef845"
+protocol = "v2"
+token0 = "WBNB"
+token1 = "TK_0xfa6d9b504848606eb9aec04ccc161d169b3f2159"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3_25"
+address = "0xf683113764e4499c473acd38fc4b37e71554e4ad"
+protocol = "v3"
+token0 = "WBNB"
+token1 = "TK_0xce7de646e7208a4ef112cb6ed5038fa6cc6b12e3"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0xb7c0007ab75350c582d5eab1862b872b5cf53f0c_WBNB_100"
+address = "0x90345fbe6da637322015129de38d3166f98aac9c"
+protocol = "v3"
+token0 = "TK_0xb7c0007ab75350c582d5eab1862b872b5cf53f0c"
+token1 = "WBNB"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x477df393c9fc7ba6d04cc0a9cd092b5d84079a26_TK_0xfa6d9b504848606eb9aec04ccc161d169b3f2159_100"
+address = "0xd314a495ed789443e7c9e7abb6e15ceb1530424f"
+protocol = "v3"
+token0 = "TK_0x477df393c9fc7ba6d04cc0a9cd092b5d84079a26"
+token1 = "TK_0xfa6d9b504848606eb9aec04ccc161d169b3f2159"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x92aa03137385f18539301349dcfc9ebc923ffb10_WBNB_25"
+address = "0xbc42145d5a574ede9b8860fca2a49eb7b239efa5"
+protocol = "v2"
+token0 = "TK_0x92aa03137385f18539301349dcfc9ebc923ffb10"
+token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x5d3a12c42e5372b2cc3264ab3cdcf660a1555238_1"
+address = "0xa5dbeaf16fc031eae92175974f8d0a439be4ad17"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0x5d3a12c42e5372b2cc3264ab3cdcf660a1555238"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x61fac5f038515572d6f42d4bcb6b581642753d50_1"
+address = "0x5bd808ab85c124f99080da5f864edcb39950ede5"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0x61fac5f038515572d6f42d4bcb6b581642753d50"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x21caef8a43163eea865baee23b9c2e327696a3bf_USDT_5"
+address = "0x83a0a8a723262651ae9c54bbba929f167443bc59"
+protocol = "v3"
+token0 = "TK_0x21caef8a43163eea865baee23b9c2e327696a3bf"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436_USDT_5"
+address = "0xdd9d5164ccbc57be377a964fc064135b03d06177"
+protocol = "v3"
+token0 = "TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436"
+token1 = "USDT"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436_USDT_25"
+address = "0x8fb4243b553ac29ba088acf00b9b7da24bd6690c"
+protocol = "v3"
+token0 = "TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436"
+token1 = "USDT"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436_USDT_5"
+address = "0xcc2bffaec373a6004bb6ccc8a62cdd66061f7c6a"
+protocol = "v3"
+token0 = "TK_0x02fca66c1d1afb4e2a7884261eb00f63598a7436"
+token1 = "USDT"
+fee_bps = 5
 
 

@@ -1,5 +1,6 @@
 mod config;
 mod copy_lane;
+mod feed_lane;
 mod metrics;
 mod pricing;
 mod runner;

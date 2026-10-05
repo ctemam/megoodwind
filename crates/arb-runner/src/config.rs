@@ -67,6 +67,73 @@ pub struct AppConfig {
     /// never builds or submits a bundle.
     #[serde(default)]
     pub lanes: LanesConfig,
+    /// `[feed]` — pre-built opportunity feed lane (DEXScreener REST →
+    /// on-chain verify → flash execute). Absent = off.
+    #[serde(default)]
+    pub feed: FeedConfig,
+}
+
+/// `[feed]` — aggregated-opportunity ingestion lane (ToR: pre-built feeds
+/// replace raw mempool scanning for candidate discovery).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct FeedConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Token symbols to poll, resolved via [tokens] name→address.
+    #[serde(default)]
+    pub tokens: Vec<String>,
+    /// Symbols allowed as the flash/quote asset (e.g. ["WBNB","USDT","USDC"]).
+    #[serde(default)]
+    pub flash_quotes: Vec<String>,
+    /// Poll period across the whole watch list (seconds; floor 5s).
+    #[serde(default = "default_feed_interval")]
+    pub interval_secs: u64,
+    /// Min cross-pool price discrepancy to verify on-chain, bps.
+    #[serde(default = "default_feed_min_spread")]
+    pub min_spread_bps: f64,
+    /// Above this bps the spread is treated as honeypot/stale-data noise.
+    #[serde(default = "default_feed_max_spread")]
+    pub max_spread_bps: f64,
+    /// Per-leg liquidity floor, USD (ToR: ≥ $10k or ≥ 5× flash notional).
+    #[serde(default = "default_feed_min_liquidity")]
+    pub min_liquidity_usd: f64,
+    /// Min h1 transaction count on each leg's pool.
+    #[serde(default = "default_feed_min_txns")]
+    pub min_h1_txns: u64,
+    /// Flash notional cap per execution, USD.
+    #[serde(default = "default_feed_max_notional")]
+    pub max_notional_usd: f64,
+    /// Max share of the shallower pool's liquidity the flash takes, bps.
+    #[serde(default = "default_feed_share_bps")]
+    pub pool_share_bps: f64,
+    /// Reject candidates whose fresh-state net is under this, USD.
+    #[serde(default = "default_feed_min_net")]
+    pub min_net_usd: f64,
+}
+
+fn default_feed_interval() -> u64 {
+    20
+}
+fn default_feed_min_spread() -> f64 {
+    60.0
+}
+fn default_feed_max_spread() -> f64 {
+    2000.0
+}
+fn default_feed_min_liquidity() -> f64 {
+    50_000.0
+}
+fn default_feed_min_txns() -> u64 {
+    3
+}
+fn default_feed_max_notional() -> f64 {
+    2_000.0
+}
+fn default_feed_share_bps() -> f64 {
+    1_500.0
+}
+fn default_feed_min_net() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,6 +144,9 @@ pub struct LanesConfig {
     /// Victim-triggered backrun bundle submissions.
     #[serde(default = "default_lane_on")]
     pub backrun: bool,
+    /// Feed-lane flash executions (discovery polls run regardless).
+    #[serde(default = "default_lane_on")]
+    pub feed: bool,
 }
 
 fn default_lane_on() -> bool {
@@ -88,6 +158,7 @@ impl Default for LanesConfig {
         Self {
             classic_arb: true,
             backrun: true,
+            feed: true,
         }
     }
 }

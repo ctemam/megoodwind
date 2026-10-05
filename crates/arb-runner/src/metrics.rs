@@ -92,6 +92,32 @@ lazy_static::lazy_static! {
         &["chain"]
     ).unwrap();
 
+    pub static ref FEED_SCANNED: CounterVec = register_counter_vec!(
+        "arb_feed_scanned_total",
+        "Feed lane: token polls completed",
+        &["chain"]
+    ).unwrap();
+    pub static ref FEED_CANDIDATES: CounterVec = register_counter_vec!(
+        "arb_feed_candidates_total",
+        "Feed lane: spread pairs passing rigid filters",
+        &["chain"]
+    ).unwrap();
+    pub static ref FEED_REJECTS: CounterVec = register_counter_vec!(
+        "arb_feed_rejects_total",
+        "Feed lane: candidate rejections by reason",
+        &["chain", "reason"]
+    ).unwrap();
+    pub static ref FEED_VERIFIED: CounterVec = register_counter_vec!(
+        "arb_feed_verified_total",
+        "Feed lane: fresh-state verification outcomes",
+        &["chain", "result"]
+    ).unwrap();
+    pub static ref FEED_SUBMITTED: CounterVec = register_counter_vec!(
+        "arb_feed_submitted_total",
+        "Feed lane: executions submitted to venues",
+        &["chain"]
+    ).unwrap();
+
     pub static ref WARP_SPEND_USD: Counter = register_counter!(
         "arb_warp_spend_usd_total",
         "Total USD spent on Warp/Trader calls at $0.15 each"

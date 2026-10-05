@@ -1757,6 +1757,60 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
         paths = paths.len(), dry_run, "Scanner loop starting");
 
+    // Pre-built feed lane (ToR): aggregated DEXScreener spreads → rigid
+    // filters → fresh on-chain verify → flash execute via the venue router.
+    // Runs only when [feed] enabled; submits gated by [lanes].feed + dry_run.
+    let feed_submit = cfg.feed.enabled && cfg.lanes.feed && lane_live;
+    metrics::LANE_STATE
+        .with_label_values(&["feed"])
+        .set(if feed_submit {
+            2.0
+        } else if cfg.feed.enabled {
+            1.0
+        } else {
+            0.0
+        });
+    if cfg.feed.enabled {
+        let watch: HashMap<Address, String> = cfg
+            .feed
+            .tokens
+            .iter()
+            .filter_map(|n| tokens.get(n).map(|&a| (a, n.clone())))
+            .collect();
+        let flash_quotes: HashMap<Address, (f64, u8)> = cfg
+            .feed
+            .flash_quotes
+            .iter()
+            .filter_map(|n| tokens.get(n).copied())
+            .filter_map(|a| {
+                let price = token_usd_prices.get(&a).copied()?;
+                let dec = token_decimals.get(&a).copied()?;
+                Some((a, (price, dec.min(30) as u8)))
+            })
+            .collect();
+        if watch.is_empty() || flash_quotes.is_empty() {
+            warn!(chain = %chain_label,
+                "feed enabled but watch/quote token sets are empty — lane off");
+        } else {
+            crate::feed_lane::spawn(crate::feed_lane::FeedArgs {
+                cfg: cfg.feed.clone(),
+                chain: chain_label.to_string(),
+                chain_id: cfg.chain.chain_id,
+                endpoint: endpoint.clone(),
+                refresher: refresher.clone(),
+                store: Arc::clone(&store),
+                router: Arc::clone(&router),
+                arb_contract,
+                account: copy_account,
+                watch_tokens: watch,
+                flash_quotes,
+                token_usd_prices: token_usd_prices.clone(),
+                data_dir: format!("data/leaders/{chain_label}"),
+                submit_enabled: feed_submit,
+            });
+        }
+    }
+
     let mut circuit_breaker = PathCircuitBreaker::new();
     let mut token_breaker = TokenCircuitBreaker::new(5, 200);
     token_breaker.set_popular_intermediaries(tokens.values().copied());
