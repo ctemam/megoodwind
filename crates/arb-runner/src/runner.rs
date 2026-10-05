@@ -2512,16 +2512,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                         circuit_breaker.record_revert(
                                                             path.id, block_number,
                                                         );
-                                                        // On-chain revert =
-                                                        // the pools lied —
-                                                        // convict them at the
-                                                        // breaker so they stop
-                                                        // feeding other paths
-                                                        // (and persist).
-                                                        token_breaker
-                                                            .record_revert_for_path(
-                                                                path, block_number,
-                                                            );
+                                                        // A string revert
+                                                        // bubbling out of the
+                                                        // pool itself
+                                                        // (Nomiswap: D) is
+                                                        // deterministic bait
+                                                        // evidence — convict
+                                                        // instantly, not over
+                                                        // five strikes.
+                                                        if reason == "pool_revert" {
+                                                            token_breaker
+                                                                .flag_bait_pools(
+                                                                    path, block_number,
+                                                                );
+                                                        } else {
+                                                            token_breaker
+                                                                .record_revert_for_path(
+                                                                    path, block_number,
+                                                                );
+                                                        }
                                                     } else {
                                                         warn!(
                                                             path_id = path.id, error = %e,
@@ -2924,11 +2933,19 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                 // backrun lane — a pool that
                                                 // reverts on-chain is bait,
                                                 // not a bad path.
-                                                token_breaker
-                                                    .record_revert_for_path(
-                                                        &paths[best_path_idx],
-                                                        block_number,
-                                                    );
+                                                if reason == "pool_revert" {
+                                                    token_breaker
+                                                        .flag_bait_pools(
+                                                            &paths[best_path_idx],
+                                                            block_number,
+                                                        );
+                                                } else {
+                                                    token_breaker
+                                                        .record_revert_for_path(
+                                                            &paths[best_path_idx],
+                                                            block_number,
+                                                        );
+                                                }
                                                 logged_opp.mark_rejected(
                                                     "simulation_revert", &feed_dir);
                                             } else {
