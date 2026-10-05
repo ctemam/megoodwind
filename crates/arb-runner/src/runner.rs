@@ -551,6 +551,20 @@ impl TokenCircuitBreaker {
     // signature — suppress the path's pools outright; revert history is
     // not needed to convict impossible math.
     fn flag_bait_pools(&mut self, path: &PathTemplate, block: u64) {
+        self.flag_bait_pools_for(path, block, self.suppression_blocks);
+    }
+
+    /// Deterministic bait (a real on-chain string revert from inside the
+    /// pool swap, e.g. `Nomiswap: D`) earns a permanent conviction —
+    /// the 200-block window is for ambiguous suspects only, and bait
+    /// pools that came back just burned another victim on re-probe.
+    fn flag_bait_pools_hard(&mut self, path: &PathTemplate, block: u64) {
+        // ~a year of blocks on every supported chain; load_bait restores
+        // it, and a legit pool should never produce a swap-time revert.
+        self.flag_bait_pools_for(path, block, 30_000_000);
+    }
+
+    fn flag_bait_pools_for(&mut self, path: &PathTemplate, block: u64, span: u64) {
         for hop in &path.hops {
             let s = self
                 .pool_stats
@@ -560,10 +574,11 @@ impl TokenCircuitBreaker {
                     last_revert_block: 0,
                     suppressed_until_block: 0,
                 });
-            if block >= s.suppressed_until_block {
-                s.suppressed_until_block = block + self.suppression_blocks;
+            let until = block + span;
+            if until > s.suppressed_until_block {
+                s.suppressed_until_block = until;
                 metrics::BAIT_SUSPECT.inc();
-                warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
+                warn!(pool = %hop.pool, until_block = until,
                     "Bait pool suppressed — simulated gap above credibility ceiling");
             }
         }
@@ -2522,7 +2537,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                         // five strikes.
                                                         if reason == "pool_revert" {
                                                             token_breaker
-                                                                .flag_bait_pools(
+                                                                .flag_bait_pools_hard(
                                                                     path, block_number,
                                                                 );
                                                         } else {
@@ -2935,7 +2950,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                 // not a bad path.
                                                 if reason == "pool_revert" {
                                                     token_breaker
-                                                        .flag_bait_pools(
+                                                        .flag_bait_pools_hard(
                                                             &paths[best_path_idx],
                                                             block_number,
                                                         );
