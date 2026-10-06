@@ -73,6 +73,7 @@ export default function Strategies() {
       classic: { strategy: 'Atomic flash-loan arb', chains: new Set(), state: null, signals: 0, submitted: 0, wins: 0, net: 0, gas: 0, kills: {}, any: false },
       backrun: { strategy: 'Mempool backrun', chains: new Set(), state: null, signals: 0, submitted: 0, wins: 0, net: 0, gas: 0, kills: {}, any: false },
       copy:    { strategy: 'Wallet copy', chains: new Set(), state: null, signals: 0, submitted: 0, wins: 0, net: 0, gas: 0, kills: {}, any: false },
+      feed:    { strategy: 'Pre-detected feed', chains: new Set(), state: null, signals: 0, submitted: 0, wins: 0, net: 0, gas: 0, kills: {}, any: false },
     }
     for (const [c, m] of chains) {
       if (!m) continue
@@ -107,6 +108,15 @@ export default function Strategies() {
         b.any = true; b.signals += sig1; b.submitted += sub1; b.wins += win1
         const k = topKill(m, /arb_backrun_stage_total\{stage="([^"]+)"\}/, ['venue_accept'])
         if (k) b.kills[k] = (b.kills[k] || 0) + 1
+      }
+      // pre-detected feed (DexScreener/GeckoTerminal import lane)
+      const f = acc.feed
+      const sig3 = total(m, 'arb_feed_candidates_total') ?? 0
+      const sub3 = total(m, 'arb_feed_submitted_total') ?? 0
+      if (sig3 > 0 || sub3 > 0 || f.state != null) {
+        f.any = true; f.signals += sig3; f.submitted += sub3
+        const k = topKill(m, /arb_feed_rejects_total\{[^}]*reason="([^"]+)"/)
+        if (k) f.kills[k] = (f.kills[k] || 0) + 1
       }
       // wallet copy
       const w = acc.copy

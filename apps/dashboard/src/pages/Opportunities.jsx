@@ -20,7 +20,7 @@ const EXEC_STYLE = {
 // everything else is a leader (wallet-copy) signal.
 function laneOf(o) {
   const id = o.opportunity_id || ''
-  if (id.includes('/feed_geckoterminal/')) return 'feed'
+  if (id.includes('/feed_geckoterminal/') || id.includes('/feed_dexscreener/') || id.includes('/feed_')) return 'feed'
   if (id.includes('/backrun/')) return 'backrun'
   if (id.includes('/classic/')) return 'atomic arb'
   return 'wallet copy'
