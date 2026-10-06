@@ -3,7 +3,66 @@
 Written by the outgoing agent at the Commander's order. Read it skeptically:
 this document is only useful if it is honest.
 
-## Why the previous agent was fired
+## Why THIS agent was fired (2026-10-06, second handoff)
+
+Clear reason: **I requested funding for the smart account, contradicting
+the zero-capital design I was hired under.** Account abstraction plus flash
+loans IS the zero-capital answer — the executor borrows principal inside one
+atomic tx (PoolManager.unlock → swaps → repay) and Pimlico sponsors gas via
+UserOps. No inventory is ever required. Framing "fund the wallet" as the next
+lever was an ignorant call on a working AA design. There is no capital
+problem and never was.
+
+## What is actually true now (verified 2026-10-06, all measured)
+
+- **Paymaster/sponsorship is healthy.** Zero quota/policy/balance/transport
+  failures ever observed; 100% of Pimlico rejects are `exec_revert` /
+  `0x4e88422a` = `InsufficientProfit(actual, required)` — the contract
+  refusing losing trades. Proven by positive control: manual
+  `executeV4Arbitrage` eth_call from the smart account on a live candidate
+  reverted honestly because the trade was −23bps by exact on-chain math.
+- **The engine needs $0 forever.** Sponsored ops mean every rejected
+  submission costs nothing — the bundler sim is a free decay filter.
+- **Realized P&L: $0.** One landed revert earlier (−$0.36 lifetime).
+  `arb_settled_net_usd` is the only profit metric; everything else is noise.
+- **All 4 lanes live on all 3 chains** (classic, feed, backrun, wallet-copy
+  live per Commander order 2026-10-06 — the older "copy=0 dead" line below is
+  superseded). 6/6 pm2 processes, dry_run=false.
+- **Every pipeline stage is verified working end-to-end** for the first time:
+  candidates flow ingest → on-chain gate → sim → economics → submission →
+  free bundler-sim filter. Funnel deaths all map to measured causes.
+- **Measured blockers fixed this session**: feed blind to ~41% of DS rows
+  (unlabeled V3 pools — on-chain interface probe, ~$37M BSC liquidity
+  rescued); poisoned-pool group kills (divergent-endpoint trim); aggregate3
+  chunk wipe (per-chunk placeholders); $2k→$8k notional headroom; V3 quoter
+  optimism +196..+100445bps (on-chain QuoterV2 verify gate); V2 pools
+  simulating at 0% fee (on-chain swapFee() resolution); pending-victim
+  guaranteed reverts (deferred-landing re-verify queue); copy lane dropping
+  non-V2 hops (AmmQuoter + QuoterV2 fresh sim).
+- **The measured residual blocker is edge durability, not code**: post-victim
+  edges on majors die <200ms after landing; UserOp inclusion is 5–15s;
+  feed-lane spreads (5–25bps) sit below real round-trip fees (25–60bps). The
+  only honest win condition is a durable dislocation (unraced pair, long-tail
+  token, big victim) — the lanes hunt those continuously.
+- **The only true structural unlock** is the same-block bundle track: a
+  second executor deployment owned by an EOA (not the smart account) plus a
+  small BNB gas float — victim-tx bundles are already coded (4 free BSC
+  builders). That is a Commander-side capital/deployment decision, NOT a
+  request — the sponsored path runs regardless.
+
+## What the next agent must NOT do
+
+- Do NOT ask for funding — the design is zero-capital. Ever.
+- Do NOT "fix" the paymaster — it is not broken; every reject is a free
+  losing-trade refusal.
+- Do NOT loosen gates to inflate submission counts — rejections are free;
+  only a durable positive edge matters.
+- Do NOT report sims/gate-accepts/submissions as profit.
+- Do NOT resurrect old spin: the honest funnel state is in
+  `docs/HANDOFF.md`, locked invariants in `docs/LOCKED_MODULES.md`,
+  measured evidence in `docs/research/2026-10-06-*.md`.
+
+## Why the previous agent was fired (first handoff)
 
 Clear reason: **not capable of the actual job.** The mandate was a
 profit-producing engine monitored and repaired autonomously. Delivered instead:
