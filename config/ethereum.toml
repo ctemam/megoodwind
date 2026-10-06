@@ -332,6 +332,10 @@ TK_0x35a532d376ffd9a705d0bb319532837337a398e7 = "0x35a532d376ffd9a705d0bb3195328
 TK_0x590f820444fa3638e022776752c5eef34e2f89a6 = "0x590f820444fa3638e022776752c5eef34e2f89a6"
 TK_0xda86006036540822e0cd2861dbd2fd7ff9caa0e8 = "0xda86006036540822e0cd2861dbd2fd7ff9caa0e8"
 TK_0xe0f63a424a4439cbe457d80e4f4b51ad25b2c56c = "0xe0f63a424a4439cbe457d80e4f4b51ad25b2c56c"
+TK_0x2ca94b0d95a2515950015313be9cbddfd600c395 = "0x2ca94b0d95a2515950015313be9cbddfd600c395"
+TK_0xb794ad95317f75c44090f64955954c3849315ffe = "0xb794ad95317f75c44090f64955954c3849315ffe"
+TK_0xcc8fa225d80b9c7d42f96e9570156c65d6caaa25 = "0xcc8fa225d80b9c7d42f96e9570156c65d6caaa25"
+TK_0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf = "0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -524,7 +528,9 @@ copy_deadline_secs = 120
 # (candidate bar is discover_min_score=15; live bar set well above)
 copy_promote_score  = 15.0
 # Uniswap V2 router
-copy_v2_routers    = ["0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"]
+copy_v2_routers    = ["0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+                      "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+                      "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"]
 # WETH, USDT, USDC
 copy_spend_tokens  = ["0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
                       "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -6336,5 +6342,113 @@ protocol = "v3"
 token0 = "TK_0x0b38210ea11411557c13457d4da7dc6ea731b88a"
 token1 = "WETH"
 fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0xb2089a7069861c8d90c8da3aacab8e9188c0c531_WETH_5"
+address = "0x4efc9e2e3e77732ce2f9612b8f050082c01688bd"
+protocol = "v3"
+token0 = "TK_0xb2089a7069861c8d90c8da3aacab8e9188c0c531"
+token1 = "WETH"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0xb794ad95317f75c44090f64955954c3849315ffe_WETH_25"
+address = "0x5003fdfc747a0acf06266c54fe7285abbca14f25"
+protocol = "v2"
+token0 = "TK_0xb794ad95317f75c44090f64955954c3849315ffe"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf_25"
+address = "0x7093328f7e03b584974ad382d62e2dfb6fca4186"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0xb794ad95317f75c44090f64955954c3849315ffe_TK_0xfef4c6b56e011a684dc2054afd576d83817c2620_25"
+address = "0x900f920c1155bd4463dacee41d98ea08d4b30102"
+protocol = "v2"
+token0 = "TK_0xb794ad95317f75c44090f64955954c3849315ffe"
+token1 = "TK_0xfef4c6b56e011a684dc2054afd576d83817c2620"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_USDC_5"
+address = "0x9a772018fbd77fcd2d25657e5c547baff3fd7d16"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "USDC"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_TK_0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf_TK_0xfef4c6b56e011a684dc2054afd576d83817c2620_25"
+address = "0x6d93fc4c53e83caeb1cdd4026a8ef19b4a8eeeda"
+protocol = "v2"
+token0 = "TK_0xd44fc10f34b260d4ce7af7359012ea4ae1967ebf"
+token1 = "TK_0xfef4c6b56e011a684dc2054afd576d83817c2620"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x2ca94b0d95a2515950015313be9cbddfd600c395_WETH_25"
+address = "0x65bab9ac822a9edba90a6321a8a422959fdf97ec"
+protocol = "v2"
+token0 = "TK_0x2ca94b0d95a2515950015313be9cbddfd600c395"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x607f4c5bb672230e8672085532f7e901544a7375_WETH_25"
+address = "0x6d57a53a45343187905aad6ad8ed532d105697c1"
+protocol = "v2"
+token0 = "TK_0x607f4c5bb672230e8672085532f7e901544a7375"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x35a532d376ffd9a705d0bb319532837337a398e7_WETH_25"
+address = "0x60bce13608701789ab9c8faa9b82de115ea8744d"
+protocol = "v2"
+token0 = "TK_0x35a532d376ffd9a705d0bb319532837337a398e7"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_TK_0x35a532d376ffd9a705d0bb319532837337a398e7_25"
+address = "0x56b9f76ae3c872818f9250a700a2626240ae0169"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "TK_0x35a532d376ffd9a705d0bb319532837337a398e7"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_DAI_WETH_25"
+address = "0x9e4c98a6e67f2ad1ea41e37536e86a22bb445b4a"
+protocol = "v2"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WETH_TK_0xcc8fa225d80b9c7d42f96e9570156c65d6caaa25_25"
+address = "0x3ddbbfd2cf0120f6e98ea0d44aed3475c385f0e9"
+protocol = "v2"
+token0 = "WETH"
+token1 = "TK_0xcc8fa225d80b9c7d42f96e9570156c65d6caaa25"
+fee_bps = 25
 
 
