@@ -97,13 +97,33 @@ pub fn project_and_quote(
                 return None;
             }
 
+            // Only the post-fee input moves the price — Uniswap v3 collects
+            // `fee` hundredths of a bip on amountSpecified before the swap.
+            // Projecting the gross input overstated the victim's price move
+            // (up to 1% extra on the 10000-fee tier) and fabricated thin
+            // phantom edges that died at the refreshed-state re-check.
+            let fee = U256::from(if zero_for_one {
+                state.fee
+            } else {
+                state.fee_otz.unwrap_or(state.fee)
+            });
+            let amount_eff = if fee.is_zero() {
+                amount_in
+            } else {
+                let keep = U256::from(1_000_000u32) - fee;
+                amount_in * keep / U256::from(1_000_000u32)
+            };
+            if amount_eff.is_zero() {
+                return None;
+            }
+
             let q96 = U256::from(1u128) << 96;
             let p0 = state.sqrt_price_x96;
             let amount_out;
             let move_frac;
 
             if zero_for_one {
-                let product: U256 = amount_in * p0 / q96;
+                let product: U256 = amount_eff * p0 / q96;
                 let denom: U256 = l + product;
                 if denom.is_zero() {
                     return None;
@@ -117,7 +137,7 @@ pub fn project_and_quote(
                 let pf = product.to_string().parse::<f64>().unwrap_or(0.0);
                 move_frac = if lf + pf > 0.0 { pf / (lf + pf) } else { 0.0 };
             } else {
-                let delta = amount_in * q96 / l;
+                let delta = amount_eff * q96 / l;
                 let p1 = p0 + delta;
                 state.sqrt_price_x96 = p1;
                 // dx = L * 2^96 * (1/sqrtP0 - 1/sqrtP1) = L * 2^96 * (p1 - p0) / (p0 * p1)

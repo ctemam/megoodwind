@@ -397,6 +397,11 @@ ADA  = "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47"
 DOT  = "0x7083609fCE4d1d8Dc0C979AAb8c869Ea2C873402"
 XRP  = "0x1D2F0da169ceB9fC7B4a0F0B91a2d5b1B5F64743"
 DOGE = "0xbA2aE424d960c26247Dd6c32edC70B295c744C43"
+TWT  = "0x4B0F1812e5Df2A09796481Ff14017e6005508003"
+FLOKI = "0xfb5B838b6cfEEdC2873aB27817779ACeef63D08e"
+WOO  = "0x4691937a7508860F876c9c0a2a617E7d9E945D4B"
+XVS  = "0xcF6BB5389c92Bdda8a3747Ddb454cB7a64626C63"
+BSW  = "0x965F527D9159dCe6288a2219DB51fc6Eef120dD1"
 
 TK_0x00541ab4c72593734aa09bdd66b29818faff1111 = "0x00541ab4c72593734aa09bdd66b29818faff1111"
 TK_0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc = "0x10a81042268c8fd4daaf9c6cb82070b2b30d9bdc"
@@ -973,7 +978,7 @@ classic_arb = true
 backrun     = true
 [feed]
 enabled      = true
-tokens       = ["WBNB", "ETH", "BTCB", "CAKE", "LINK", "ADA", "DOT", "XRP", "DOGE"]
+tokens       = ["WBNB", "ETH", "BTCB", "CAKE", "LINK", "ADA", "DOT", "XRP", "DOGE", "TWT", "FLOKI", "WOO", "XVS", "BSW"]
 flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD"]
 interval_secs      = 15
 min_spread_bps     = 30.0  # BSC gas ~$0.4 — 30bps x $2k notional still nets >$5
