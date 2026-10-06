@@ -34,10 +34,12 @@ const BLACKLIST_SECS: u64 = 60;
 const RETRY_MAX: u32 = 2;
 const RETRY_INITIAL_BACKOFF_MS: u64 = 50;
 const RETRY_COMPUTE_UNITS_PER_SEC: u64 = 50;
-/// Per-endpoint rate cap: 5 requests per 5s (~1 rps sustained + burst of 5).
-/// Keeps failover bursts from tripping public endpoints' 429 thresholds;
-/// excess requests queue briefly rather than erroring.
-const RATE_LIMIT_REQS_PER_5S: u64 = 5;
+/// Per-endpoint rate cap (requests/second). Public BSC endpoints measured
+/// at 20+ concurrent calls ~0.25s with zero 429s — the previous 1 rps cap
+/// queued bursts past the 2200ms call deadline and spiraled into blacklist
+/// storms every block (every read timed out → every endpoint benched →
+/// deeper queues). 15 rps stays well under observed free-tier capacity.
+const RATE_LIMIT_PER_SEC: u64 = 15;
 
 lazy_static::lazy_static! {
     /// Physical HTTP attempts per endpoint — counts each retry round-trip,
@@ -140,7 +142,7 @@ fn retry_http_provider(url: url::Url) -> HttpProvider {
             endpoint: url.to_string(),
         })
         .layer(alloy::transports::layers::ThrottleLayer::new(
-            RATE_LIMIT_REQS_PER_5S as u32 / 5,
+            RATE_LIMIT_PER_SEC as u32,
         ))
         .layer(alloy::transports::layers::RetryBackoffLayer::new(
             RETRY_MAX,

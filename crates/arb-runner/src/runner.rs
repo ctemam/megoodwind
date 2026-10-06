@@ -307,6 +307,20 @@ fn classify_exec_probe_revert(detail: &str) -> &'static str {
     }
 }
 
+/// Whether an exec-probe revert says anything about POOL honesty.
+/// `insufficient_profit` is edge decay at sim time — the pools priced
+/// correctly, the opportunity just closed. Executor-side checks
+/// (paused/gas/authorization/input) likewise carry zero pool evidence.
+/// Striking pools for those benches canonical deep pools in decay
+/// storms. Only failures from inside the swap legs (or an unclassified
+/// revert, conservatively) count as pool strikes.
+fn revert_blames_pool(reason: &str) -> bool {
+    matches!(
+        reason,
+        "swap_failed" | "unsettled_delta" | "safe_erc20_failed" | "unknown_revert"
+    )
+}
+
 /// Verdict of a pre-submission execution probe — same three states the
 /// old `provider().call` produced: it would land, chain truth reverts,
 /// or transport couldn't answer.
@@ -614,7 +628,10 @@ impl TokenCircuitBreaker {
 
     // A simulated gap above the credibility ceiling is itself the bait
     // signature — suppress the path's pools outright; revert history is
-    // not needed to convict impossible math.
+    // not needed to convict impossible math. Superseded in production by
+    // flag_bait_pools_in (outlier-attributed conviction); kept for the
+    // soft-flag expiry regression test.
+    #[allow(dead_code)]
     fn flag_bait_pools(&mut self, path: &PathTemplate, block: u64) {
         self.flag_bait_pools_for(path, block, self.suppression_blocks);
     }
@@ -627,6 +644,40 @@ impl TokenCircuitBreaker {
         // ~a year of blocks on every supported chain; load_bait restores
         // it, and a legit pool should never produce a swap-time revert.
         self.flag_bait_pools_for(path, block, 30_000_000);
+    }
+
+    /// Credibility-ceiling breach on the CYCLIC scan: convict only pools
+    /// already quarantined as same-pair outliers. A >2% gap is poisoned
+    /// math only when one pool's implied price diverges from its own pair
+    /// peers; flagging the whole path suppresses honest deep pools sitting
+    /// next to the broken one — and on backrun projections a big gap is
+    /// legitimate victim impact, not bait evidence at all.
+    fn flag_bait_pools_in(&mut self, path: &PathTemplate, block: u64, suspect: &std::collections::HashSet<Address>) {
+        let mut flagged = 0usize;
+        for hop in &path.hops {
+            if !suspect.contains(&hop.pool) {
+                continue;
+            }
+            let s = self
+                .pool_stats
+                .entry(hop.pool)
+                .or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+            let until = block + self.suppression_blocks;
+            if until > s.suppressed_until_block {
+                s.suppressed_until_block = until;
+                metrics::BAIT_SUSPECT.inc();
+                flagged += 1;
+                warn!(pool = %hop.pool, until_block = until,
+                    "Bait pool suppressed — outlier pool on >ceiling path");
+            }
+        }
+        if flagged > 0 {
+            self.persist_bait();
+        }
     }
 
     fn flag_bait_pools_for(&mut self, path: &PathTemplate, block: u64, span: u64) {
@@ -1717,12 +1768,16 @@ async fn backrun_pass(
                     .collect();
 
                 for e in evals {
-                    // Same credibility ceiling as the classic scan: a
-                    // victim projection cannot honestly create a >2% gap —
-                    // that's poisoned pool math, flag the pools outright.
+                    // Credibility ceiling on a VICTIM PROJECTION: a >2%
+                    // projected gap is usually model overshoot, but a big
+                    // swap on a thin pool honestly moves price that far —
+                    // neither is pool dishonesty. Convict only pools
+                    // already quarantined as pair outliers; the candidate
+                    // is still rejected (exec probe is the arbiter).
                     if e.sim.profit_bps > BAIT_GAP_BPS {
                         metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
-                        ctx.token_breaker.lock().unwrap().flag_bait_pools(&paths[e.pidx], block_number);
+                        let q = ctx.quarantined.read().unwrap().clone();
+                        ctx.token_breaker.lock().unwrap().flag_bait_pools_in(&paths[e.pidx], block_number, &q);
                         continue;
                     }
                     if e.gate_accepted {
@@ -2021,7 +2076,7 @@ async fn backrun_pass(
                                                                 .flag_bait_pools_hard(
                                                                     path, block_number,
                                                                 );
-                                                        } else {
+                                                        } else if revert_blames_pool(reason) {
                                                             ctx.token_breaker
                                                                 .lock().unwrap()
                                                                 .record_revert_for_path(
@@ -3179,12 +3234,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 if let Some(reason) = decision.reject_reason {
                     metrics::GATE_REJECTS.with_label_values(&[reason]).inc();
                 }
-                // Credibility gate: a simulated gap past BAIT_GAP_BPS means
-                // the pool math is poisoned — flag the pools so the whole
-                // path family stops producing vapor, and never accept.
+                // Credibility gate: a simulated gap past BAIT_GAP_BPS is
+                // rejected, but only pools already quarantined as pair
+                // outliers earn a conviction — flagging every hop benches
+                // honest deep pools beside the broken one.
                 if opt_result.profit_bps > BAIT_GAP_BPS {
                     metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
-                    token_breaker.lock().unwrap().flag_bait_pools(path, block_number);
+                    let q = quarantined.read().unwrap().clone();
+                    token_breaker.lock().unwrap().flag_bait_pools_in(path, block_number, &q);
                     continue;
                 }
                 if decision.accept {
@@ -3304,7 +3361,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                             &rt.paths[best_path_idx],
                                                             block_number,
                                                         );
-                                                } else {
+                                                } else if revert_blames_pool(reason) {
                                                     token_breaker.lock().unwrap()
                                                         .record_revert_for_path(
                                                             &rt.paths[best_path_idx],
@@ -3407,7 +3464,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                             warn!(venue, reason, error = %e,
                                                 "Sponsorship blocked — op rejected, no funded-wallet fallback");
                                             if reason == "exec_revert" {
-                                                exec_revert_streak += 1;
+                                                // Decay reverts
+                                                // (insufficient_profit) are
+                                                // market losses, not an
+                                                // executor fault — do not
+                                                // count them toward
+                                                // executor_broken or the
+                                                // engine mutes itself.
+                                                if classify_exec_probe_revert(&e.to_string()) != "insufficient_profit" {
+                                                    exec_revert_streak += 1;
+                                                }
                                                 if exec_revert_streak == 1 {
                                                     let hops: Vec<String> = optimized_path
                                                         .hops
@@ -3557,8 +3623,13 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                     // (each preview is a bundler call + seconds of budget).
                                     if e.to_string().contains("exec_revert") {
                                         circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
-                                        if let Some(p) = rt.paths.iter().find(|p| p.id == best.path_id) {
-                                            token_breaker.lock().unwrap().record_revert_for_path(p, block_number);
+                                        // Strike pools only for pool-attributable
+                                        // reverts — exec_revert on decayed edge
+                                        // (insufficient_profit) is not bait evidence.
+                                        if revert_blames_pool(classify_exec_probe_revert(&e.to_string())) {
+                                            if let Some(p) = rt.paths.iter().find(|p| p.id == best.path_id) {
+                                                token_breaker.lock().unwrap().record_revert_for_path(p, block_number);
+                                            }
                                         }
                                     }
                                 }
@@ -3709,6 +3780,43 @@ mod tests {
         // whole path is suppressed through the pool check.
         assert!(breaker.is_pool_bait_flagged(pool, 1_000_100));
         assert!(breaker.is_path_token_suppressed(&path, 1_000_100));
+    }
+
+    #[test]
+    fn test_bait_pool_outlier_attribution_spares_collateral_pools() {
+        // A >ceiling path through an outlier pool plus an honest deep pool
+        // convicts only the outlier — collateral pools keep serving paths.
+        let honest = addr(10);
+        let outlier = addr(11);
+        let path = make_path(0, addr(1), vec![
+            (honest, addr(1), addr(2)),
+            (outlier, addr(2), addr(1)),
+        ]);
+        let mut suspect = std::collections::HashSet::new();
+        suspect.insert(outlier);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools_in(&path, 100, &suspect);
+        assert!(breaker.is_pool_bait_flagged(outlier, 100));
+        assert!(!breaker.is_pool_bait_flagged(honest, 100));
+        // Nothing flagged when the suspect set is empty — unattributable
+        // gaps reject the candidate without convicting anyone.
+        let mut breaker2 = TokenCircuitBreaker::new(5, 200);
+        breaker2.flag_bait_pools_in(&path, 100, &std::collections::HashSet::new());
+        assert!(!breaker2.is_pool_bait_flagged(outlier, 100));
+        assert!(!breaker2.is_pool_bait_flagged(honest, 100));
+    }
+
+    #[test]
+    fn test_revert_blames_pool_attribution() {
+        // Decay/executor-side reverts must never strike pools.
+        for r in ["insufficient_profit", "unauthorized", "contract_paused",
+                  "gas_price_too_high", "invalid_amount", "invalid_protocol",
+                  "unsupported_token", "pool_revert"] {
+            assert!(!revert_blames_pool(r), "{r} must not strike pools");
+        }
+        for r in ["swap_failed", "unsettled_delta", "safe_erc20_failed", "unknown_revert"] {
+            assert!(revert_blames_pool(r), "{r} is pool-attributable");
+        }
     }
 
     #[test]

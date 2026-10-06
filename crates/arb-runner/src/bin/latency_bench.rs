@@ -29,6 +29,17 @@ sol! {
             uint32 fee;
         }
         function readV2(address[] calldata pools) external view returns (V2State[] memory);
+        struct V3State {
+            address pool;
+            address token0;
+            address token1;
+            uint160 sqrtPriceX96;
+            int24 tick;
+            uint128 liquidity;
+            uint24 fee;
+            bool unlocked;
+        }
+        function readV3(address[] calldata pools) external view returns (V3State[] memory);
     }
     #[sol(rpc)]
     interface IV2Pool {
@@ -142,6 +153,10 @@ async fn main() -> Result<()> {
         .expect("usage: latency_bench <config> [state_reader] [samples]");
     let reader_arg = args.next().unwrap_or_default();
     let samples: usize = args.next().map(|s| s.parse().unwrap_or(10)).unwrap_or(10);
+    // Optional 4th arg: pool count for the readV2/readV3 probe (default 8).
+    // Optional 5th arg: "v3" to probe readV3 instead of readV2.
+    let pool_count: usize = args.next().map(|s| s.parse().unwrap_or(8)).unwrap_or(8);
+    let probe_v3 = args.next().map(|s| s == "v3").unwrap_or(false);
 
     let cfg = config::load_config(&cfg_path)?;
     let reader: Address = reader_arg
@@ -156,9 +171,22 @@ async fn main() -> Result<()> {
         .iter()
         .filter(|p| p.parse_protocol() == Protocol::UniswapV2)
         .filter_map(|p| p.address.parse().ok())
-        .take(8)
+        .take(pool_count)
         .collect();
-    let (call_to, calldata, call_desc) = if !reader.is_zero() && !v2_pools.is_empty() {
+    let v3_pools: Vec<Address> = cfg
+        .pools
+        .iter()
+        .filter(|p| p.parse_protocol() == Protocol::UniswapV3)
+        .filter_map(|p| p.address.parse().ok())
+        .take(pool_count)
+        .collect();
+    let (call_to, calldata, call_desc) = if probe_v3 && !reader.is_zero() && !v3_pools.is_empty() {
+        (
+            reader,
+            Bytes::from(IStateReader::readV3Call::new((v3_pools.clone(),)).abi_encode()),
+            format!("readV3({} pools)", v3_pools.len()),
+        )
+    } else if !reader.is_zero() && !v2_pools.is_empty() {
         (
             reader,
             Bytes::from(IStateReader::readV2Call::new((v2_pools.clone(),)).abi_encode()),
