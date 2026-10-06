@@ -124,9 +124,12 @@ struct GtPool {
 
 /// A pool normalized to pair terms: `price` = base units of quote per base
 /// (i.e. base-token price denominated in the quote asset).
+/// `proto` is None when the feed carried no usable version signal — the
+/// pool gets ONE on-chain interface probe (slot0/getReserves) downstream
+/// rather than a guessed interface or a silent drop.
 struct NormPool {
     pool: Address,
-    proto: Protocol,
+    proto: Option<Protocol>,
     base: Address,
     quote: Address,
     /// base-token price denominated in the quote asset.
@@ -154,7 +157,11 @@ impl GtPool {
             .and_then(|d| d.data.as_ref())
             .map(|d| d.id.as_str())
             .unwrap_or("");
-        let proto = protocol_for(dex, &a.name)?;
+        let proto = match classify_dex(dex, &a.name) {
+            DexKind::Unsupported => return None,
+            DexKind::Proto(p) => Some(p),
+            DexKind::Unknown => None,
+        };
         let price: f64 = a.base_token_price_quote_token.as_deref()?.parse().ok()?;
         if price <= 0.0 || !price.is_finite() {
             return None;
@@ -191,9 +198,22 @@ impl GtPool {
     }
 }
 
-/// DEX id / pool name → AMM interface. Anything not matching the V2 or V3
-/// swap interface is a non-atomic venue for our executor — dropped.
-fn protocol_for(dex_id: &str, name: &str) -> Option<Protocol> {
+/// Tri-state DEX classification. `Proto` = feed carried a usable version
+/// signal; `Unsupported` = an interface our executor can't drive (dropped);
+/// `Unknown` = no signal at all — DexScreener ships ~40% of rows with no
+/// `labels`, including every `dexId:"uniswap"` pool (verified 2026-10-06:
+/// 23/23 such pools on BSC are live V3, ~$37M liquidity the lane used to
+/// drop at ingest). Unknown rows go to the on-chain interface sniff.
+enum DexKind {
+    Proto(Protocol),
+    Unknown,
+    Unsupported,
+}
+
+/// DEX id / pool name → AMM interface guess, or a marker for the chain
+/// probe. Anything not matching the V2 or V3 swap interface is a
+/// non-atomic venue for our executor — dropped.
+fn classify_dex(dex_id: &str, name: &str) -> DexKind {
     let d = dex_id.to_ascii_lowercase();
     // Explicitly unsupported interfaces first — mislabeled protocol means a
     // guaranteed exec revert.
@@ -202,10 +222,10 @@ fn protocol_for(dex_id: &str, name: &str) -> Option<Protocol> {
         || d.contains("integral") || d.contains("solidly") || d.contains("algebra")
         || d.contains("thena") || d.contains("ramses") || d.contains("velodrome")
     {
-        return None;
+        return DexKind::Unsupported;
     }
     if d.contains("v3") || (name.contains('%') && d.contains("uniswap")) {
-        return Some(Protocol::UniswapV3);
+        return DexKind::Proto(Protocol::UniswapV3);
     }
     if d.contains("v2")
         || d.contains("pancakeswap")
@@ -219,14 +239,15 @@ fn protocol_for(dex_id: &str, name: &str) -> Option<Protocol> {
         || d.contains("shibaswap")
         || d.contains("traderjoe")
     {
-        return Some(Protocol::UniswapV2);
+        return DexKind::Proto(Protocol::UniswapV2);
     }
     // Unversioned dex ids ("uniswap-bsc", ...): a fee% in the pool name
-    // means concentrated-liquidity V3; otherwise drop rather than guess.
+    // means concentrated-liquidity V3; anything else is unknown — probe
+    // the contract interface on-chain instead of dropping coverage.
     if name.contains('%') {
-        Some(Protocol::UniswapV3)
+        DexKind::Proto(Protocol::UniswapV3)
     } else {
-        None
+        DexKind::Unknown
     }
 }
 
@@ -296,13 +317,18 @@ impl DsPair {
                 .unwrap_or(false)
         };
         let proto = if has("v3") {
-            Protocol::UniswapV3
+            Some(Protocol::UniswapV3)
         } else if has("v2") || has("v1") {
-            Protocol::UniswapV2
+            Some(Protocol::UniswapV2)
         } else {
-            // No labels: unversioned ids stay dropped rather than guessed —
-            // a wrong-interface guess wastes an exec probe.
-            protocol_for(&self.dex_id, "")?
+            // No labels: known V2-family dex ids still classify; anything
+            // else goes to the on-chain interface sniff (a guessed
+            // interface wastes an exec probe, a blind drop loses pools).
+            match classify_dex(&self.dex_id, "") {
+                DexKind::Unsupported => return None,
+                DexKind::Proto(p) => Some(p),
+                DexKind::Unknown => None,
+            }
         };
         let price: f64 = self.price_native.as_deref()?.parse().ok()?;
         if price <= 0.0 || !price.is_finite() {
@@ -412,6 +438,8 @@ async fn run(args: FeedArgs) {
         })
         .collect();
     let mut next_id: u32 = 0xF00D;
+    // On-chain interface sniff cache — a pool's AMM interface is immutable.
+    let mut sniffed: HashMap<Address, Option<Protocol>> = HashMap::new();
     // Pools that reverted at exec — suppressed for 1h after 2 strikes.
     let mut suppressed: HashMap<Address, (u32, Instant)> = HashMap::new();
     // (borrow, pool_in, pool_out) re-eval cooldown.
@@ -552,7 +580,7 @@ async fn run(args: FeedArgs) {
         metrics::FEED_SCANNED.with_label_values(&[&args.chain]).inc();
 
         // Step 2 — rigid filters; group by (base, quote) pair parity.
-        let mut by_pair: HashMap<(Address, Address), Vec<NormPool>> = HashMap::new();
+        let mut filtered: Vec<NormPool> = Vec::new();
         for p in norm {
             if args.blocked.contains(&p.base) || args.blocked.contains(&p.quote) {
                 metrics::FEED_REJECTS
@@ -577,6 +605,48 @@ async fn run(args: FeedArgs) {
             {
                 continue; // neither side is a flash asset — can't borrow
             }
+            filtered.push(p);
+        }
+
+        // Interface sniff: rows that survived the cheap filters but carry
+        // no feed version signal get ONE eth_call each — slot0() → V3,
+        // getReserves() → V2. Cached for the process lifetime (immutable).
+        {
+            let provider = args.endpoint.provider();
+            let mut probes = Vec::new();
+            for p in &filtered {
+                if p.proto.is_none() && !sniffed.contains_key(&p.pool) {
+                    probes.push((p.pool, sniff_protocol(&provider, p.pool)));
+                }
+            }
+            if !probes.is_empty() {
+                let addrs: Vec<Address> =
+                    probes.iter().map(|(a, _)| *a).collect();
+                let results = futures::future::join_all(
+                    probes.into_iter().map(|(_, f)| f),
+                )
+                .await;
+                for (a, r) in addrs.into_iter().zip(results) {
+                    sniffed.insert(a, r);
+                }
+            }
+            for p in &mut filtered {
+                if p.proto.is_none() {
+                    if let Some(Some(proto)) = sniffed.get(&p.pool) {
+                        p.proto = Some(*proto);
+                    }
+                }
+            }
+        }
+        let mut by_pair: HashMap<(Address, Address), Vec<NormPool>> =
+            HashMap::new();
+        for p in filtered {
+            if p.proto.is_none() {
+                metrics::FEED_REJECTS
+                    .with_label_values(&[&args.chain, "unknown_iface"])
+                    .inc();
+                continue;
+            }
             by_pair.entry((p.base, p.quote)).or_default().push(p);
         }
 
@@ -593,9 +663,10 @@ async fn run(args: FeedArgs) {
                 for p in group {
                     gate_pools.push(p.pool);
                     if registered.insert(p.pool) {
+                        let Some(proto) = p.proto else { continue };
                         add.push(PoolConfig {
                             address: p.pool,
-                            protocol: p.proto,
+                            protocol: proto,
                             fee_bps: 0,
                             token0: None,
                             token1: None,
@@ -614,6 +685,7 @@ async fn run(args: FeedArgs) {
         // two-pass discipline as the backrun lane; probes stay serial,
         // they need the account context and can't be batched).
         let mut todo: Vec<FeedCandidate> = Vec::new();
+        let mut outlier_pools: Vec<Address> = Vec::new();
         for ((base, quote), mut group) in by_pair {
             if group.len() < 2 {
                 continue;
@@ -634,6 +706,32 @@ async fn run(args: FeedArgs) {
             group.sort_by(|a, b| {
                 a.price.partial_cmp(&b.price).unwrap_or(std::cmp::Ordering::Equal)
             });
+            // One poisoned pool must not kill the whole pair group: while
+            // the lo-hi spread sits above the suspect cap, drop the
+            // endpoint farthest from the group median and re-evaluate the
+            // clean subset. A pool diverging on live chain state is the
+            // documented bait signature — it also goes on the persisted
+            // exclusion list so other lanes stop seeing it.
+            for dropped in trim_divergent(&mut group, args.cfg.max_spread_bps) {
+                metrics::FEED_REJECTS
+                    .with_label_values(&[&args.chain, "price_outlier"])
+                    .inc();
+                warn!(
+                    pool = %dropped.pool,
+                    dex = %dropped.dex,
+                    pair = %dropped.pair_label,
+                    price = dropped.price,
+                    "feed: divergent pool excluded from pair group"
+                );
+                suppressed.insert(
+                    dropped.pool,
+                    (2, Instant::now() + Duration::from_secs(6 * 3600)),
+                );
+                outlier_pools.push(dropped.pool);
+            }
+            if group.len() < 2 {
+                continue;
+            }
             let lo_p = &group[0];
             let hi_p = group.last().unwrap();
             let spread_bps = (hi_p.price - lo_p.price) / lo_p.price * 10_000.0;
@@ -654,14 +752,18 @@ async fn run(args: FeedArgs) {
             // Pick the borrow side: whichever of base/quote is a flash asset.
             // quote-borrow: buy base cheap (quote→base on lo), sell base dear.
             // base-borrow: sell base dear (base→quote on hi), buy base back cheap.
+            let (Some(lo_proto), Some(hi_proto)) = (lo_p.proto, hi_p.proto)
+            else {
+                continue;
+            };
             let cand = if args.flash_quotes.contains_key(&quote) {
                 FeedCandidate {
                     borrow: quote,
                     mid: base,
                     pool_in: lo_p.pool,
-                    proto_in: lo_p.proto,
+                    proto_in: lo_proto,
                     pool_out: hi_p.pool,
-                    proto_out: hi_p.proto,
+                    proto_out: hi_proto,
                     spread_bps,
                     min_liquidity_usd: lo_p.liquidity_usd.min(hi_p.liquidity_usd),
                     pair_label: lo_p.pair_label.clone(),
@@ -676,9 +778,9 @@ async fn run(args: FeedArgs) {
                     borrow: base,
                     mid: quote,
                     pool_in: hi_p.pool,
-                    proto_in: hi_p.proto,
+                    proto_in: hi_proto,
                     pool_out: lo_p.pool,
-                    proto_out: lo_p.proto,
+                    proto_out: lo_proto,
                     spread_bps,
                     min_liquidity_usd: lo_p.liquidity_usd.min(hi_p.liquidity_usd),
                     pair_label: lo_p.pair_label.clone(),
@@ -713,6 +815,9 @@ async fn run(args: FeedArgs) {
                 .inc();
             cooldown.insert(key, Instant::now());
             todo.push(cand);
+        }
+        if !outlier_pools.is_empty() {
+            persist_bait_pools(&args.data_dir, &outlier_pools);
         }
 
         if !todo.is_empty() {
@@ -802,6 +907,96 @@ fn onchain_price(store: &PoolStore, pool: Address, base: Address, quote: Address
         }
         _ => None,
     }
+}
+
+/// On-chain interface sniff for pools the feed couldn't version-label:
+/// `slot0()` answering nonzero → V3-style concentrated liquidity;
+/// `getReserves()` answering nonzero → V2-style constant product. One
+/// eth_call each, cached by the caller — a pool's interface is immutable.
+async fn sniff_protocol<P: Provider>(provider: &P, pool: Address) -> Option<Protocol> {
+    let probe = |selector: [u8; 4]| {
+        let req = alloy::rpc::types::TransactionRequest::default()
+            .to(pool)
+            .input(Bytes::from(selector.to_vec()).into());
+        provider.call(req)
+    };
+    if let Ok(out) = probe([0x38, 0x50, 0xc7, 0xbd]).await {
+        // slot0() — UniswapV3 family
+        if out.iter().any(|b| *b != 0) {
+            return Some(Protocol::UniswapV3);
+        }
+    }
+    if let Ok(out) = probe([0x09, 0x02, 0xf1, 0xac]).await {
+        // getReserves() — UniswapV2 family
+        if out.iter().any(|b| *b != 0) {
+            return Some(Protocol::UniswapV2);
+        }
+    }
+    None
+}
+
+/// Merge pools into the shared `data/leaders/<chain>/_bait_pools.json`
+/// exclusion list (same shape runner.rs writes: {pool, until_block}).
+/// 4e9 blocks is past every supported chain's horizon — effectively
+/// permanent, matching the hard-conviction semantics of a pool diverging
+/// on live chain state. Best-effort: a lost update just means the pool
+/// is re-detected next cycle.
+fn persist_bait_pools(data_dir: &str, new_pools: &[Address]) {
+    let path = format!("{data_dir}/_bait_pools.json");
+    let mut pools: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("pools").and_then(|a| a.as_array()).cloned())
+        .unwrap_or_default();
+    let mut have: HashSet<String> = pools
+        .iter()
+        .filter_map(|e| {
+            e.get("pool")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_ascii_lowercase())
+        })
+        .collect();
+    for a in new_pools {
+        let key = format!("{a:#x}");
+        if have.insert(key.to_ascii_lowercase()) {
+            pools.push(serde_json::json!({
+                "pool": key,
+                "until_block": 4_000_000_000u64,
+            }));
+        }
+    }
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&serde_json::json!({ "pools": pools }))
+            .unwrap_or_default(),
+    );
+}
+
+/// While a sorted-by-price group's lo-hi spread sits above `cap_bps`, drop
+/// the endpoint farthest from the group median and re-evaluate the clean
+/// subset. Stops at 2 members (a pair is the minimum viable candidate), so
+/// an honest pool is never sacrificed to save a divergent one. Returns the
+/// pools convicted as outliers, in drop order.
+fn trim_divergent(group: &mut Vec<NormPool>, cap_bps: f64) -> Vec<NormPool> {
+    let mut dropped = Vec::new();
+    while group.len() > 2 {
+        let lo = group.first().unwrap().price;
+        let hi = group.last().unwrap().price;
+        if (hi - lo) / lo * 10_000.0 <= cap_bps {
+            break;
+        }
+        let median = group[group.len() / 2].price;
+        let idx = if (median - lo).abs() >= (hi - median).abs() {
+            0
+        } else {
+            group.len() - 1
+        };
+        dropped.push(group.remove(idx));
+    }
+    dropped
 }
 
 enum FetchOutcome {
@@ -1108,16 +1303,29 @@ mod tests {
         let v3 = ds_pair("pancakeswap", Some(vec!["v3"]))
             .normalize()
             .expect("v3 row should normalize");
-        assert!(matches!(v3.proto, Protocol::UniswapV3));
+        assert!(matches!(v3.proto, Some(Protocol::UniswapV3)));
         let v2 = ds_pair("pancakeswap", Some(vec!["v2"]))
             .normalize()
             .expect("v2 row should normalize");
-        assert!(matches!(v2.proto, Protocol::UniswapV2));
+        assert!(matches!(v2.proto, Some(Protocol::UniswapV2)));
     }
 
     #[test]
-    fn test_ds_normalize_drops_unlabelled_unknown_dex() {
-        assert!(ds_pair("unknowndex", None).normalize().is_none());
+    fn test_ds_normalize_unlabelled_unknown_goes_to_chain_sniff() {
+        // No labels + unknown dex → proto unresolved (NOT dropped, NOT
+        // guessed): the on-chain slot0/getReserves sniff assigns it.
+        let p = ds_pair("unknowndex", None)
+            .normalize()
+            .expect("unlabelled unknown dex should still normalize");
+        assert!(p.proto.is_none());
+        // Known v2-family dex ids still classify without labels.
+        let p = ds_pair("biswap", None)
+            .normalize()
+            .expect("biswap row should normalize");
+        assert!(matches!(p.proto, Some(Protocol::UniswapV2)));
+        // Explicitly unsupported interfaces still drop outright.
+        assert!(ds_pair("thena", None).normalize().is_none());
+        assert!(ds_pair("curve", None).normalize().is_none());
     }
 
     // Regression lock: the spread gate must read pool prices from live
@@ -1158,6 +1366,63 @@ mod tests {
         assert_eq!(onchain_price(&store, pool_v3, b, a), Some(0.25));
         // Unknown pool → no price, excluded from the gate.
         assert_eq!(onchain_price(&store, a, a, b), None);
+    }
+
+    // Regression lock (measured 2026-10-06 on BSC): ONE divergent pool must
+    // not kill a whole pair group. Live case was USDT/USDC — seven honest
+    // pools ~0.9998 plus one pool at 0.637 producing a 5693bps "spread".
+    fn np(price: f64) -> NormPool {
+        NormPool {
+            pool: Address::ZERO,
+            proto: Some(Protocol::UniswapV2),
+            base: Address::ZERO,
+            quote: Address::ZERO,
+            price,
+            liquidity_usd: 0.0,
+            h1_txns: 0,
+            pair_label: String::new(),
+            dex: String::new(),
+        }
+    }
+
+    #[test]
+    fn trim_divergent_convicts_only_the_poisoned_endpoint() {
+        let mut group: Vec<NormPool> =
+            [0.637, 0.9997, 0.9998, 0.9998, 0.9999].iter().map(|p| np(*p)).collect();
+        let dropped = trim_divergent(&mut group, 200.0);
+        assert_eq!(dropped.len(), 1);
+        assert!((dropped[0].price - 0.637).abs() < 1e-9);
+        assert_eq!(group.len(), 4);
+        assert!(group.iter().all(|p| (p.price - 0.9998).abs() < 0.001));
+    }
+
+    #[test]
+    fn trim_divergent_leaves_tight_group_alone_and_keeps_two() {
+        let mut group: Vec<NormPool> =
+            [1.0, 1.001, 1.002].iter().map(|p| np(*p)).collect();
+        assert!(trim_divergent(&mut group, 200.0).is_empty());
+        assert_eq!(group.len(), 3);
+        // All-divergent groups still keep 2 members — the honest subset
+        // may be smaller than the liar population; never trim to nothing.
+        let mut wild: Vec<NormPool> =
+            [1.0, 5.0, 9.0].iter().map(|p| np(*p)).collect();
+        assert_eq!(trim_divergent(&mut wild, 200.0).len(), 1);
+        assert_eq!(wild.len(), 2);
+    }
+
+    #[test]
+    fn persist_bait_pools_merges_without_duplicates() {
+        let dir = std::env::temp_dir().join(format!("bait_{:?}", std::process::id()));
+        let p1 = Address::from([1u8; 20]);
+        let p2 = Address::from([2u8; 20]);
+        persist_bait_pools(dir.to_str().unwrap(), &[p1]);
+        persist_bait_pools(dir.to_str().unwrap(), &[p1, p2]);
+        let s = std::fs::read_to_string(dir.join("_bait_pools.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let pools = v["pools"].as_array().unwrap();
+        assert_eq!(pools.len(), 2);
+        assert!(pools.iter().all(|e| e["until_block"].is_u64()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
 }
