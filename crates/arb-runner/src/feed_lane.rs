@@ -872,11 +872,13 @@ async fn run(args: FeedArgs) {
 
         if !todo.is_empty() {
             // Gate already registered + refreshed every pair-group pool.
+            // Measured actualGasUsed on the first landed op = 1,276,435
+            // (EntryPoint+verify+3-hop exec) — 1.3M keeps the floor honest.
             let gas_usd = match args.endpoint.gas_price().await {
                 Ok(gp) => {
-                    // ~600k gas round trip × gas price × native price —
-                    // max-priced tracked token is wrong (BTCB ~= 130x BNB).
-                    gp as f64 * 600_000.0 / 1e18 * args.native_usd
+                    // 1.3M gas round trip (measured) × gas price × native
+                    // price — max-priced tracked token is wrong (BTCB ~= 130x BNB).
+                    gp as f64 * 1_300_000.0 / 1e18 * args.native_usd
                 }
                 Err(_) => 0.0,
             };

@@ -304,7 +304,9 @@ pub fn min_profit_usd_floor(cfg_value: f64) -> f64 {
 fn default_warp_threshold() -> f64 { 50.0 }
 fn default_warp_budget() -> f64 { 5.0 }
 fn default_false() -> bool { false }
-fn default_est_tx_gas() -> u64 { 350_000 }
+// Measured actualGasUsed on the first landed sponsored UserOp = 1,276,435
+// (EntryPoint + verification + 3-hop exec). 350k undercharged real gas ~3.6x.
+fn default_est_tx_gas() -> u64 { 1_300_000 }
 fn default_min_profit_usd() -> f64 { 0.50 }
 fn default_safety_margin_bps() -> u32 { 30 }
 fn default_stable_extra_margin() -> u32 { 50 }
