@@ -831,6 +831,11 @@ const TRANSFER_SIG: B256 = alloy_primitives::b256!(
     "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 );
 
+// EntryPoint v0.6 UserOperationEvent — topics[3] is the paymaster.
+const USEROP_EVENT_SIG: B256 = alloy_primitives::b256!(
+    "49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f"
+);
+
 #[derive(Clone)]
 struct SettleCtx {
     endpoint: Arc<Endpoint>,
@@ -954,8 +959,49 @@ fn settlement_pnl(
 }
 
 /// Poll the bundler for a UserOp receipt, then compute realized P&L from the
-/// nested tx receipt's Transfer logs. gas = actualGasCost (what the Pimlico
-/// account paid — our real cost even when sponsored).
+/// nested tx receipt's Transfer logs. gas = what the smart account actually
+/// bore: zero under a sponsoring paymaster (actualGasCost is drawn from the
+/// paymaster's EntryPoint deposit, verified on-chain — SA had no deposit),
+/// actualGasCost when the op ran unsponsored, plus any ERC-20 charge a
+/// token-collecting paymaster takes.
+fn userop_paymaster(logs: &[serde_json::Value]) -> Option<Address> {
+    for log in logs {
+        let topics = match log["topics"].as_array() {
+            Some(t) if t.len() >= 4 => t,
+            _ => continue,
+        };
+        let sig: B256 = match topics[0].as_str().and_then(|s| s.parse().ok()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if sig == USEROP_EVENT_SIG {
+            let pm: B256 = topics[3].as_str().and_then(|s| s.parse().ok())?;
+            let pm = Address::from_word(pm);
+            return (pm != Address::ZERO).then_some(pm);
+        }
+    }
+    None
+}
+
+/// USD value of ERC-20 Transfers sent to `paymaster` inside the op — the
+/// charge under a token-collecting paymaster (zero for full sponsorship).
+fn paymaster_charge_usd(
+    logs: &[serde_json::Value],
+    paymaster: Address,
+    prices: &HashMap<Address, f64>,
+    decimals: &HashMap<Address, u32>,
+) -> f64 {
+    let mut usd = 0.0;
+    for (token, _from, to, raw) in flows_from_json_logs(logs, paymaster) {
+        if to != paymaster {
+            continue;
+        }
+        if let (Some(&p), Some(&d)) = (prices.get(&token), decimals.get(&token)) {
+            usd += raw / 10f64.powi(d as i32) * p;
+        }
+    }
+    usd
+}
 async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> SettleResult {
     let dropped = SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
     let Some(url) = ctx.bundler_url.clone() else {
@@ -974,7 +1020,6 @@ async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> S
                     .and_then(|s| U256::from_str_radix(s.trim_start_matches("0x"), 16).ok())
                     .map(|u| u.to_string().parse::<f64>().unwrap_or(0.0) / 1e18)
                     .unwrap_or(0.0);
-                let gas_usd = gas_native * ctx.native_usd;
                 metrics::GAS_SPENT_WEI.inc_by(gas_native * 1e18);
                 let label = if success { "success" } else { "revert" };
                 metrics::SUBMIT_LANDED.with_label_values(&[label]).inc();
@@ -983,6 +1028,15 @@ async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> S
                     .and_then(|v| v.as_array())
                     .cloned()
                     .unwrap_or_default();
+                // Under a sponsoring paymaster the EntryPoint draws
+                // actualGasCost from the paymaster's deposit — we pay nothing.
+                // Unsponsored ops draw it from our account's prefund.
+                let gas_usd = match userop_paymaster(&logs) {
+                    Some(pm) => {
+                        paymaster_charge_usd(&logs, pm, &ctx.token_usd_prices, &ctx.token_decimals)
+                    }
+                    None => gas_native * ctx.native_usd,
+                };
                 let (usd, unpriced) = settlement_pnl(
                     &flows_from_json_logs(&logs, ctx.arb_contract),
                     ctx.arb_contract,
@@ -4110,5 +4164,59 @@ mod tests {
         cb.record_revert(1, 300);
         assert!(!cb.is_suppressed(1, 301),
             "reverts separated by >DECAY_BLOCKS should reset counter");
+    }
+
+    fn transfer_log_json(token: Address, from: Address, to: Address, raw: u64) -> serde_json::Value {
+        serde_json::json!({
+            "address": format!("{token:?}"),
+            "topics": [
+                format!("{TRANSFER_SIG:?}"),
+                format!("{:?}", from.into_word()),
+                format!("{:?}", to.into_word()),
+            ],
+            "data": format!("0x{:064x}", U256::from(raw)),
+        })
+    }
+
+    fn userop_log_json(paymaster: Address) -> serde_json::Value {
+        serde_json::json!({
+            "topics": [
+                format!("{USEROP_EVENT_SIG:?}"),
+                format!("{:?}", B256::ZERO),
+                format!("{:?}", addr(9).into_word()),
+                format!("{:?}", paymaster.into_word()),
+            ],
+            "data": "0x0",
+        })
+    }
+
+    #[test]
+    fn test_userop_paymaster_detected() {
+        let pm = addr(0x66);
+        let logs = vec![userop_log_json(pm)];
+        assert_eq!(userop_paymaster(&logs), Some(pm));
+        assert_eq!(userop_paymaster(&[]), None);
+        let no_pm = vec![userop_log_json(Address::ZERO)];
+        assert_eq!(userop_paymaster(&no_pm), None,
+            "zero paymaster = unsponsored op");
+    }
+
+    #[test]
+    fn test_paymaster_charge_counts_inbound_transfers() {
+        // A token-collecting paymaster charges the SA in ERC-20; a full
+        // sponsor takes nothing — charge_usd must reflect that exactly.
+        let pm = addr(0x66);
+        let usdc = addr(0x77);
+        let sa = addr(0x18);
+        let mut prices = HashMap::new();
+        prices.insert(usdc, 1.0);
+        let mut decimals = HashMap::new();
+        decimals.insert(usdc, 6u32);
+        let logs = vec![
+            transfer_log_json(usdc, sa, pm, 5_000_000),   // $5 charge
+            transfer_log_json(usdc, pm, sa, 5_000_000),   // refund — not a charge
+        ];
+        let charge = paymaster_charge_usd(&logs, pm, &prices, &decimals);
+        assert!((charge - 5.0).abs() < 1e-9, "charge {charge}");
     }
 }
