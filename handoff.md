@@ -21,10 +21,16 @@ problem and never was.
   refusing losing trades. Proven by positive control: manual
   `executeV4Arbitrage` eth_call from the smart account on a live candidate
   reverted honestly because the trade was −23bps by exact on-chain math.
-- **The engine needs $0 forever.** Sponsored ops mean every rejected
-  submission costs nothing — the bundler sim is a free decay filter.
-- **Realized P&L: $0.** One landed revert earlier (−$0.36 lifetime).
-  `arb_settled_net_usd` is the only profit metric; everything else is noise.
+- **The engine needs $0 capital for trades.** Sponsored ops mean every
+  sim-REJECTED submission costs nothing — the bundler sim is a free decay
+  filter. But LANDED ops bill real gas (`actualGasCost`) to the Pimlico
+  account balance — verified: the first landed ETH arb (tx
+  `0xc673890c`, +$0.143 gross on the executor) charged $1.76 against
+  it. Sponsorship is NOT free gas; treat every landed op as real spend.
+- **Realized P&L: −$1.62 real** (first landed trade: +$0.143 gross on
+  executor, −$1.76 gas billed to the Pimlico account).
+  `arb_settled_net_usd` is the only profit metric; it correctly
+  subtracts actualGasCost. Everything else is noise.
 - **All 4 lanes live on all 3 chains** (classic, feed, backrun, wallet-copy
   live per Commander order 2026-10-06 — the older "copy=0 dead" line below is
   superseded). 6/6 pm2 processes, dry_run=false.

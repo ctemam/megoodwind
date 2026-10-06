@@ -74,9 +74,6 @@ pub struct FeedArgs {
     pub data_dir: String,
     /// Lanes kill switch AND scanner.dry_run must both permit real submits.
     pub submit_enabled: bool,
-    /// ERC-4337 sponsored mode: the paymaster pays gas, so gas_usd is NOT
-    /// our cost — the net floor applies to raw gross, not gross-minus-gas.
-    pub sponsored_gas: bool,
 }
 
 // ---- GeckoTerminal response model ---------------------------------------
@@ -1432,9 +1429,9 @@ async fn verify_and_submit(
 
     // Step 4 — abort if gross can't cover gas (cycle-level estimate).
     opp.gas_usd = gas_usd;
-    // Sponsored mode carries no gas cost on our side — the floor applies
-    // to raw gross. Verified sub-dollar positives are real settled profit.
-    let margin_usd = if args.sponsored_gas { 0.0 } else { gas_usd };
+    // Sponsored gas is still our cost — Pimlico bills actualGasCost to our
+    // account balance on every landed op. The floor must cover it.
+    let margin_usd = gas_usd;
     if gross_usd - margin_usd < args.cfg.min_net_usd {
         opp.rejection_reason = "negative_net_after_gas".into();
         let _ = opp.append_jsonl(&args.data_dir);
