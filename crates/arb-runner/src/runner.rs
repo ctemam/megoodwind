@@ -1465,7 +1465,30 @@ struct BackrunCtx {
     smart_account: Arc<std::sync::Mutex<Option<Address>>>,
     local_fork: Arc<std::sync::Mutex<Option<LocalFork>>>,
     latest_block: Arc<std::sync::atomic::AtomicU64>,
+    /// Victims that were still pending when their pass ran. A standalone
+    /// UserOp on a pending victim can only ever simulate PRE-victim
+    /// state (the bundler sees the victim's pools untouched), so it is
+    /// near-guaranteed to revert — the real shot comes after landing,
+    /// when the refreshed store IS the post-victim state. Deferred
+    /// victims re-enter `prepped` on the next pass for that re-check.
+    deferred: Arc<std::sync::Mutex<Vec<DeferredBackrun>>>,
 }
+
+/// A backrun victim that stayed pending through its pass. `scored` is
+/// keyed by path id (not index) so a routing-table rebuild between
+/// passes cannot bind a stale index.
+struct DeferredBackrun {
+    pending: arb_mempool::watcher::PendingSwap,
+    amount_in: U256,
+    hit_pools: Vec<Address>,
+    matched: Vec<usize>,
+    scored: Vec<(u32, U256, arb_sim::SimResult, f64, f64)>,
+    seen_at: Instant,
+}
+
+/// Max age of a deferred victim — a tx still pending after this long is
+/// either cancelled or priced out of the mempool entirely.
+const BACKRUN_DEFER_MAX_AGE: Duration = Duration::from_secs(6);
 
 async fn backrun_pass(
     ctx: &BackrunCtx,
@@ -1514,6 +1537,40 @@ async fn backrun_pass(
                 scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)>,
             }
             let mut prepped: Vec<PreppedBackrun> = Vec::new();
+
+            // Re-admit victims deferred while still pending: Pass B's
+            // receipt batch re-detects their landing and Pass C then
+            // re-verifies against real post-victim state — the first
+            // live shot, since the standalone op submitted on pending
+            // state can only sim pre-victim and is guaranteed to revert.
+            for d in ctx.deferred.lock().unwrap().drain(..) {
+                if d.seen_at.elapsed() >= BACKRUN_DEFER_MAX_AGE {
+                    continue;
+                }
+                let scored: Vec<_> = d
+                    .scored
+                    .iter()
+                    .filter_map(|(pid, amt, sim, usd, score)| {
+                        paths
+                            .iter()
+                            .position(|p| p.id == *pid)
+                            .map(|pidx| (pidx, *amt, sim.clone(), *usd, *score))
+                    })
+                    .collect();
+                if scored.is_empty() {
+                    continue;
+                }
+                metrics::BACKRUN_STAGES
+                    .with_label_values(&["deferred_reentry"])
+                    .inc();
+                prepped.push(PreppedBackrun {
+                    pending: d.pending,
+                    amount_in: d.amount_in,
+                    hit_pools: d.hit_pools,
+                    matched: d.matched,
+                    scored,
+                });
+            }
 
             // ── Pass A: pure-CPU eval for every pending victim. No RPC
             // here — the serial per-victim refresh+receipt used to put
@@ -1860,6 +1917,36 @@ async fn backrun_pass(
                     .into_iter()
                     .map(|r| r.ok().flatten().is_some())
                     .collect();
+
+                // Queue a follow-up pass for victims still pending: the
+                // standalone op submitted below sims PRE-victim state at
+                // the bundler, so it can only win by racing the victim's
+                // landing during transit. The deferred re-entry gets the
+                // real check once the refreshed store contains the
+                // victim's impact — the durable-dislocation capture.
+                for (pv, v_landed) in prepped.iter().zip(landed.iter()) {
+                    if *v_landed || pv.pending.seen_at.elapsed() >= BACKRUN_DEFER_MAX_AGE {
+                        continue;
+                    }
+                    let scored = pv
+                        .scored
+                        .iter()
+                        .map(|(pidx, amt, sim, usd, score)| {
+                            (paths[*pidx].id, *amt, sim.clone(), *usd, *score)
+                        })
+                        .collect();
+                    ctx.deferred.lock().unwrap().push(DeferredBackrun {
+                        pending: pv.pending.clone(),
+                        amount_in: pv.amount_in,
+                        hit_pools: pv.hit_pools.clone(),
+                        matched: pv.matched.clone(),
+                        scored,
+                        seen_at: pv.pending.seen_at,
+                    });
+                    metrics::BACKRUN_STAGES
+                        .with_label_values(&["deferred"])
+                        .inc();
+                }
 
                 // ── Pass C: re-verify + submit each victim in order ──
                 for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
@@ -3111,6 +3198,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         smart_account: smart_account.clone(),
         local_fork: local_fork.clone(),
         latest_block: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        deferred: Arc::new(std::sync::Mutex::new(Vec::new())),
     });
 
     spawn_pool_hot_reload(
