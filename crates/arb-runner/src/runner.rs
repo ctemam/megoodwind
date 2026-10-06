@@ -18,6 +18,7 @@ use arb_paths::enumerate::{PathEnumerator, PoolInfo};
 use arb_paths::PathTemplate;
 use arb_rpc::Endpoint;
 use arb_sim::evaluate::evaluate_all;
+use arb_sim::local_evm::{LocalFork, ProbeOutcome};
 use arb_sim::gate::ProfitGate;
 use arb_sim::optimize::{find_optimal_amount, path_max_flash};
 use arb_state::pool_store::PoolStore;
@@ -303,6 +304,70 @@ fn classify_exec_probe_revert(detail: &str) -> &'static str {
         "pool_revert"
     } else {
         "unknown_revert"
+    }
+}
+
+/// Verdict of a pre-submission execution probe — same three states the
+/// old `provider().call` produced: it would land, chain truth reverts,
+/// or transport couldn't answer.
+enum ProbeVerdict {
+    Ok,
+    Reverted(String),
+    Transport,
+}
+
+/// Exec-probe the would-be executor call. Prefers the local revm fork
+/// (foundry-fork-db SharedBackend — chain truth without a per-candidate
+/// RPC round trip, the industry pattern for sim-before-submit); falls
+/// back to `eth_call` only when the local backend can't answer.
+async fn exec_probe(
+    endpoint: &std::sync::Arc<Endpoint>,
+    local_fork: &std::sync::Arc<std::sync::Mutex<Option<LocalFork>>>,
+    from: Address,
+    to: Address,
+    data: alloy::primitives::Bytes,
+) -> ProbeVerdict {
+    // Lazy one-time init — std-guard must never cross an .await.
+    let needs_init = local_fork.lock().unwrap().is_none();
+    if needs_init {
+        if let Ok(Some(block)) = endpoint
+            .provider()
+            .get_block(alloy::eips::BlockId::latest())
+            .await
+        {
+            *local_fork.lock().unwrap() =
+                Some(LocalFork::spawn(endpoint.provider(), &block));
+        }
+    }
+    // Bind before `if let` — scrutinee temporaries live for the
+    // whole body and the MutexGuard is !Send.
+    let fork = local_fork.lock().unwrap().clone();
+    if let Some(fork) = fork {
+        let fork_data = data.clone();
+        match tokio::task::spawn_blocking(move || fork.simulate(from, to, fork_data)).await {
+            Ok(ProbeOutcome::Success) => return ProbeVerdict::Ok,
+            Ok(ProbeOutcome::Reverted(detail)) => return ProbeVerdict::Reverted(detail),
+            Ok(ProbeOutcome::Transport(e)) => {
+                warn!(error = %e, "local fork probe backend error — rpc fallback");
+            }
+            Err(e) => {
+                warn!(error = %e, "local fork probe join error — rpc fallback");
+            }
+        }
+    }
+    let probe = alloy::rpc::types::TransactionRequest::default()
+        .from(from)
+        .to(to)
+        .input(data.into());
+    match endpoint.provider().call(probe).await {
+        Ok(_) => ProbeVerdict::Ok,
+        Err(e) if e.as_error_resp().is_some() => {
+            ProbeVerdict::Reverted(format!("{e:?}"))
+        }
+        Err(e) => {
+            warn!(error = %e, "exec probe transport error");
+            ProbeVerdict::Transport
+        }
     }
 }
 
@@ -1345,6 +1410,7 @@ struct BackrunCtx {
     circuit_breaker: Arc<std::sync::Mutex<PathCircuitBreaker>>,
     token_breaker: Arc<std::sync::Mutex<TokenCircuitBreaker>>,
     smart_account: Arc<std::sync::Mutex<Option<Address>>>,
+    local_fork: Arc<std::sync::Mutex<Option<LocalFork>>>,
     latest_block: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -1921,23 +1987,21 @@ async fn backrun_pass(
                                         if let (Some(account), Some(call)) =
                                             (acct, bundle.call.as_ref())
                                         {
-                                            let probe = alloy::rpc::types::TransactionRequest::default()
-                                                .from(account)
-                                                .to(call.to)
-                                                .input(call.data.clone().into());
-                                            match endpoint.provider().call(probe).await {
-                                                Ok(_) => {}
-                                                Err(e) => {
+                                            match exec_probe(
+                                                endpoint, &ctx.local_fork,
+                                                account, call.to, call.data.clone(),
+                                            ).await {
+                                                ProbeVerdict::Ok => {}
+                                                verdict => {
                                                     metrics::BACKRUN_STAGES
                                                         .with_label_values(&["exec_probe_dead"])
                                                         .inc();
-                                                    if e.as_error_resp().is_some() {
+                                                    if let ProbeVerdict::Reverted(detail) = &verdict {
                                                         let reason = classify_exec_probe_revert(
-                                                            &format!("{e:?}")
+                                                            detail
                                                         );
                                                         warn!(
                                                             path_id = path.id, reason,
-                                                            error = %e,
                                                             "exec probe reverted — backrun suppressed"
                                                         );
                                                         ctx.circuit_breaker
@@ -1966,7 +2030,7 @@ async fn backrun_pass(
                                                         }
                                                     } else {
                                                         warn!(
-                                                            path_id = path.id, error = %e,
+                                                            path_id = path.id,
                                                             "exec probe transport error — backrun skipped"
                                                         );
                                                     }
@@ -2865,6 +2929,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     let circuit_breaker = Arc::new(std::sync::Mutex::new(circuit_breaker));
     let token_breaker = Arc::new(std::sync::Mutex::new(token_breaker));
     let smart_account = Arc::new(std::sync::Mutex::new(smart_account));
+    let local_fork = std::sync::Arc::new(std::sync::Mutex::new(None));
     let profit_gate = Arc::new(std::sync::Mutex::new(profit_gate));
     let token_usd_prices = Arc::new(RwLock::new(token_usd_prices));
     let token_decimals = Arc::new(RwLock::new(token_decimals));
@@ -2897,6 +2962,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         circuit_breaker: circuit_breaker.clone(),
         token_breaker: token_breaker.clone(),
         smart_account: smart_account.clone(),
+        local_fork: local_fork.clone(),
         latest_block: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     });
 
@@ -3205,29 +3271,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                     } else {
                                         submit_signer.address()
                                     };
-                                    let probe = alloy::rpc::types::TransactionRequest::default()
-                                        .from(probe_from)
-                                        .to(call.to)
-                                        .input(call.data.clone().into());
-                                    match endpoint.provider().call(probe).await {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            // ErrorPayload = the chain
-                                            // executed the call and it
-                                            // reverted — deterministic for
-                                            // this state, count as a revert.
-                                            // Transport failures (429,
-                                            // timeout) prove nothing — skip
+                                    match exec_probe(
+                                        &endpoint, &local_fork,
+                                        probe_from, call.to, call.data.clone(),
+                                    ).await {
+                                        ProbeVerdict::Ok => {}
+                                        verdict => {
+                                            // Reverted = chain truth for
+                                            // this state — deterministic,
+                                            // count as a revert. Transport
+                                            // failures prove nothing — skip
                                             // the submission but don't
                                             // penalize the path.
-                                            if e.as_error_resp().is_some() {
+                                            if let ProbeVerdict::Reverted(detail) = &verdict {
                                                 let reason = classify_exec_probe_revert(
-                                                    &format!("{e:?}")
+                                                    detail
                                                 );
                                                 warn!(
                                                     path_id = best.path_id,
                                                     reason,
-                                                    error = %e,
                                                     "exec probe reverted — path suppressed, no submission"
                                                 );
                                                 circuit_breaker.lock().unwrap()
@@ -3254,7 +3316,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                             } else {
                                                 warn!(
                                                     path_id = best.path_id,
-                                                    error = %e,
                                                     "exec probe transport error — submission skipped"
                                                 );
                                             }

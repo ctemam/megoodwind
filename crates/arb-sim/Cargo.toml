@@ -11,3 +11,7 @@ alloy-primitives = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
+alloy = { workspace = true }
+alloy-evm = "0.28"
+foundry-fork-db = "0.23"
+revm = "34"
