@@ -615,6 +615,10 @@ TK_0x51bea95efdd5dfe3ff0ddf00ab57fa894d697777 = "0x51bea95efdd5dfe3ff0ddf00ab57f
 TK_0x544028231562a43b106fbceca722b65cb5c861b0 = "0x544028231562a43b106fbceca722b65cb5c861b0"
 TK_0x77d547256a2cd95f32f67ae0313e450ac200648d = "0x77d547256a2cd95f32f67ae0313e450ac200648d"
 TK_0xbbd97e3ff9a67e9bdfe39afd1f00d9bfbf3c7777 = "0xbbd97e3ff9a67e9bdfe39afd1f00d9bfbf3c7777"
+TK_0xc58c1117da964aebe91fef88f6f5703e79bda574 = "0xc58c1117da964aebe91fef88f6f5703e79bda574"
+TK_0xca56094722450016f280c4fd6a333e5c36903827 = "0xca56094722450016f280c4fd6a333e5c36903827"
+TK_0xf486ad071f3bee968384d2e39e2d8af0fcf6fd46 = "0xf486ad071f3bee968384d2e39e2d8af0fcf6fd46"
+TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41 = "0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41"
 [[pools]]
 name = "V2_ETH_WBNB"
 address = "0x74E4716E431f45807DCF19f284c7aA99F18a4fbc"
@@ -1051,7 +1055,7 @@ backrun     = true
 [feed]
 enabled      = true
 tokens       = ["WBNB", "ETH", "BTCB", "CAKE", "LINK", "ADA", "DOT", "XRP", "DOGE", "TWT", "FLOKI", "WOO", "XVS", "BSW"]
-flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD"]
+flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD", "ETH", "BTCB"]
 interval_secs      = 15
 # Noise floor only — the gate is fee-aware: required spread = round-trip
 # pool fees (read live from on-chain state) + min_net margin, floored at
@@ -2875,6 +2879,69 @@ address = "0x11c0b2bb4fbb430825d07507a9e24e4c32f7704d"
 protocol = "v2"
 token0 = "TK_0x77d547256a2cd95f32f67ae0313e450ac200648d"
 token1 = "WBNB"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBNB_TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41_100"
+address = "0xf95f84e2bad9c234f93dd66614b82f9a854b452e"
+protocol = "v3"
+token0 = "WBNB"
+token1 = "TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_BTCB_TK_0xc58c1117da964aebe91fef88f6f5703e79bda574_1"
+address = "0x660e8eb1afa84ce5556c100e1b7fd933dfb3fcae"
+protocol = "v3"
+token0 = "BTCB"
+token1 = "TK_0xc58c1117da964aebe91fef88f6f5703e79bda574"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41_100"
+address = "0x04a7da186392640862f7922a2f7a2e9fe7b43b85"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_USDT_BTCB_5"
+address = "0x46cf1cf8c69595804ba91dfdd8d6b960c9b0a7c4"
+protocol = "v3"
+token0 = "USDT"
+token1 = "BTCB"
+fee_bps = 5
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41_100"
+address = "0xe2461367e562df374acf8d8a012729721ad5b486"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0xf486ad071f3bee968384d2e39e2d8af0fcf6fd46_1"
+address = "0x258474cd00b4f42842ed424e6c2c1da0087031b8"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xf486ad071f3bee968384d2e39e2d8af0fcf6fd46"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0xca56094722450016f280c4fd6a333e5c36903827_25"
+address = "0xe2561a789e8d94f3f9b620aaecc627e1e205fe8b"
+protocol = "v3"
+token0 = "USDT"
+token1 = "TK_0xca56094722450016f280c4fd6a333e5c36903827"
 fee_bps = 25
 
 
