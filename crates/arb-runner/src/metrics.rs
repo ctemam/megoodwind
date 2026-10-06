@@ -80,6 +80,12 @@ lazy_static::lazy_static! {
         &["chain"]
     ).unwrap();
 
+    pub static ref COPY_RESOLVED: CounterVec = register_counter_vec!(
+        "arb_copy_resolved_pairs_total",
+        "Pairs factory-resolved into the copy lane's pool index",
+        &["chain"]
+    ).unwrap();
+
     pub static ref COPY_FRESH: CounterVec = register_counter_vec!(
         "arb_copy_fresh_resim_total",
         "Copy lane submit-time reserve re-read outcomes",

@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{address, Address, B256, U256};
 use alloy::sol;
 use alloy_sol_types::SolCall;
 use arb_leaders::{LeaderRegistry, LeadersConfig};
@@ -52,6 +52,14 @@ sol! {
     function balanceOf(address owner) external view returns (uint256);
     function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
     function token0() external view returns (address);
+    // UniV2 factory — resolves the pair a leader swapped through when our
+    // index never tracked it.
+    function getPair(address tokenA, address tokenB) external view returns (address);
+    // UniV3 factory — same resolution for concentrated-liquidity pools.
+    function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
+    function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
+    function liquidity() external view returns (uint128);
+    function swapFee() external view returns (uint256);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +111,8 @@ pub struct CopyLane {
     chain_id: u64,
     /// (token, router) approvals already submitted.
     approved: DashSet<(Address, Address)>,
+    /// token pairs currently being factory-resolved (one probe per pair).
+    resolving: Arc<DashSet<(Address, Address)>>,
     data_dir: std::path::PathBuf,
 }
 
@@ -181,6 +191,7 @@ impl CopyLane {
             endpoint,
             chain_id,
             approved: DashSet::new(),
+            resolving: Arc::new(DashSet::new()),
             data_dir: std::path::PathBuf::from("data/leaders"),
         })
     }
@@ -268,6 +279,7 @@ impl CopyLane {
         // Pick the concrete pool per hop first — the same list is reused for
         // the stale sim here and the fresh on-chain re-read in spawn_submit.
         let Some(hops) = self.pick_hops(&d.path, &d.pools_touched) else {
+            self.spawn_resolve(&d.path);
             self.reject("no_tracked_hop");
             return;
         };
@@ -355,6 +367,40 @@ impl CopyLane {
             };
         }
         Some(amt)
+    }
+
+    /// Async factory resolution for token pairs our pool index never
+    /// tracked — leaders route through whatever venue holds liquidity, so
+    /// probing getPair/getPool registers the pool for the NEXT signal on
+    /// the same pair. One in-flight probe per pair (resolving set).
+    fn spawn_resolve(&self, path: &[Address]) {
+        let missing: Vec<(Address, Address)> = path
+            .windows(2)
+            .map(|w| if w[0] < w[1] { (w[0], w[1]) } else { (w[1], w[0]) })
+            .filter(|k| !self.pair_to_pools.read().unwrap().contains_key(k))
+            .filter(|k| self.resolving.insert(*k))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let endpoint = self.endpoint.clone();
+        let store = self.store.clone();
+        let ptp = self.pair_to_pools.clone();
+        let resolving = self.resolving.clone();
+        let chain_id = self.chain_id;
+        let chain = self.chain.clone();
+        tokio::spawn(async move {
+            for (a, b) in missing {
+                if resolve_pair(&endpoint, chain_id, &store, &ptp, a, b).await {
+                    info!(
+                        chain,
+                        "copy lane resolved untracked pair {:#x}/{:#x}", a, b
+                    );
+                    metrics::COPY_RESOLVED.with_label_values(&[&chain]).inc();
+                }
+                resolving.remove(&(a, b));
+            }
+        });
     }
 
     fn spawn_submit(
@@ -741,4 +787,179 @@ fn write_copy_record(
     if let Err(e) = o.append_jsonl(dir.to_str().unwrap_or("")) {
         debug!(error = %e, "copy opportunity append failed");
     }
+}
+
+/// UniV2 factories worth probing per chain, with their default fee in bps
+/// (same table the refresher's `default_fee_for_factory` encodes). A pool's
+/// own `swapFee()` — when it answers — overrides the default.
+fn v2_factories(chain_id: u64) -> Vec<(Address, u32)> {
+    match chain_id {
+        56 => vec![
+            (address!("ca143ce32fe78f1f7019d7d551a6402fc5350c73"), 25), // PCS V2
+            (address!("858e3312ed3a876947ea49d572a7c42de08af7ee"), 10), // BiSwap
+            (address!("3cd1c46068daea5ebb0d3f55f6915b10648062b8"), 30), // MDEX
+            (address!("0841bd0b734e4f5853f0dd8d7ea989891dbdcfb5"), 20), // ApeSwap
+        ],
+        1 => vec![
+            (address!("5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"), 30), // UniV2
+            (address!("c0aee478e3658e2610c5f7a4a2e1777ce9e4f2ac"), 30), // Sushi
+        ],
+        137 => vec![
+            (address!("5757371414417b8c6caad45baef941abc7d3ab32"), 30), // QuickSwap
+            (address!("c35dadb65012ec5796536bd9864ed8773abc74c4"), 30), // Sushi
+        ],
+        _ => vec![],
+    }
+}
+
+/// V3 fee tiers probed in order of deployment frequency (Uniswap's own
+/// factory table convention — 100/500/3000/10000 hundredths-of-bip).
+const V3_FEE_TIERS: [u32; 4] = [100, 500, 3000, 10000];
+
+/// Register a resolved pool in the shared store + pair index so the next
+/// signal on this pair prices and sims like a tracked pool.
+fn register_resolved(
+    store: &PoolStore,
+    ptp: &RwLock<PairPools>,
+    key: (Address, Address),
+    pool: Address,
+    fee_bps: u32,
+    state: PoolState,
+) {
+    store.update(pool, state);
+    let mut map = ptp.write().unwrap();
+    let entry = map.entry(key).or_default();
+    if !entry.iter().any(|(p, _)| *p == pool) {
+        entry.push((pool, fee_bps));
+    }
+}
+
+/// Resolve one untracked token pair on-chain: UniV2 `getPair` across the
+/// chain's factories first (cheapest read), then UniV3 `getPool` over fee
+/// tiers on the factories `v3_quoters` already pins. Returns true when a
+/// pool was registered — the pair copies on its next signal.
+async fn resolve_pair(
+    endpoint: &Endpoint,
+    chain_id: u64,
+    store: &PoolStore,
+    ptp: &RwLock<PairPools>,
+    a: Address,
+    b: Address,
+) -> bool {
+    // V2 — getPair on each factory, then reserves + swapFee.
+    for (factory, default_bps) in v2_factories(chain_id) {
+        let cd = getPairCall {
+            tokenA: a,
+            tokenB: b,
+        }
+        .abi_encode();
+        let Ok((ret, _)) = endpoint.eth_call_timed(factory, cd.into()).await else {
+            continue;
+        };
+        let Ok(pool) = getPairCall::abi_decode_returns(&ret) else {
+            continue;
+        };
+        if pool.is_zero() {
+            continue;
+        }
+        let Ok((r_ret, _)) = endpoint
+            .eth_call_timed(pool, getReservesCall {}.abi_encode().into())
+            .await
+        else {
+            continue;
+        };
+        let Ok(res) = getReservesCall::abi_decode_returns(&r_ret) else {
+            continue;
+        };
+        let (r0, r1) = (
+            U256::from(res.reserve0),
+            U256::from(res.reserve1),
+        );
+        if r0.is_zero() || r1.is_zero() {
+            continue;
+        }
+        let fee_bps = match endpoint
+            .eth_call_timed(pool, swapFeeCall {}.abi_encode().into())
+            .await
+        {
+            Ok((f_ret, _)) => swapFeeCall::abi_decode_returns(&f_ret)
+                .map(|f| (f.to::<u64>() as u32).min(9_999))
+                .unwrap_or(default_bps),
+            Err(_) => default_bps,
+        };
+        register_resolved(
+            store,
+            ptp,
+            (a, b),
+            pool,
+            fee_bps,
+            PoolState::V2(arb_core::types::V2PoolState {
+                address: pool,
+                token0: a,
+                token1: b,
+                reserve0: r0,
+                reserve1: r1,
+                fee_bps,
+            }),
+        );
+        return true;
+    }
+    // V3 — getPool over fee tiers on factories the feed lane already pins.
+    for (_quoter, factory) in crate::feed_lane::v3_quoters(chain_id) {
+        for fee in V3_FEE_TIERS {
+            let cd = getPoolCall {
+                tokenA: a,
+                tokenB: b,
+                fee: alloy_primitives::Uint::<24, 1>::from(fee),
+            }
+            .abi_encode();
+            let Ok((ret, _)) = endpoint.eth_call_timed(factory, cd.into()).await
+            else {
+                continue;
+            };
+            let Ok(pool) = getPoolCall::abi_decode_returns(&ret) else {
+                continue;
+            };
+            if pool.is_zero() {
+                continue;
+            }
+            let Ok((s_ret, _)) = endpoint
+                .eth_call_timed(pool, slot0Call {}.abi_encode().into())
+                .await
+            else {
+                continue;
+            };
+            let Ok(s0) = slot0Call::abi_decode_returns(&s_ret) else {
+                continue;
+            };
+            let Ok((l_ret, _)) = endpoint
+                .eth_call_timed(pool, liquidityCall {}.abi_encode().into())
+                .await
+            else {
+                continue;
+            };
+            let Ok(liq) = liquidityCall::abi_decode_returns(&l_ret) else {
+                continue;
+            };
+            register_resolved(
+                store,
+                ptp,
+                (a, b),
+                pool,
+                fee / 100,
+                PoolState::V3(arb_core::types::V3PoolState {
+                    address: pool,
+                    token0: a,
+                    token1: b,
+                    sqrt_price_x96: U256::from(s0.sqrtPriceX96),
+                    tick: s0.tick.as_i32(),
+                    liquidity: liq,
+                    fee,
+                    fee_otz: None,
+                }),
+            );
+            return true;
+        }
+    }
+    false
 }

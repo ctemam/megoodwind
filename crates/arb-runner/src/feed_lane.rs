@@ -1132,7 +1132,7 @@ sol! {
 /// tuple that also exists under another factory it would price the WRONG
 /// pool. `v3_leg_out` therefore confirms `factory.getPool(tin, tout, fee)
 /// == hop.pool` before trusting a quoter's answer.
-fn v3_quoters(chain_id: u64) -> Vec<(Address, Address)> {
+pub(crate) fn v3_quoters(chain_id: u64) -> Vec<(Address, Address)> {
     match chain_id {
         56 => vec![
             (
