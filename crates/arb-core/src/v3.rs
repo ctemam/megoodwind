@@ -27,7 +27,11 @@ impl AmmQuoter for V3PoolState {
             self.fee_otz.unwrap_or(self.fee)
         };
 
-        quote_single_tick(
+        // Multi-tick-approx: constant-L single-tick overestimates output
+        // for swaps exceeding current-tick depth (systematic
+        // insufficient_profit reverts at exec probe). The haircut is
+        // conservative by design — underestimate rather than invert.
+        quote_multi_tick_approx(
             amount_in,
             self.sqrt_price_x96,
             self.liquidity,
