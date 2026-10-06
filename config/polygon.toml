@@ -566,7 +566,7 @@ fee_bps = 100
 [leaders]
 discover = true
 # Wallet-copy execution lane — after-signal only, never front-running.
-copy_mode          = "off"
+copy_mode          = "live"
 copy_usd           = 50.0
 copy_slippage_bps  = 300
 copy_deadline_secs = 120

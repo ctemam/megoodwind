@@ -27,7 +27,7 @@ Rust workspace (alloy 1.8.x): multi-chain flash-loan arbitrage engine. Crates `a
 3. **Lock completed modules**: row in `docs/LOCKED_MODULES.md` + regression test each.
 4. Research before action: file under `docs/research/YYYY-MM-DD-<topic>.md` (findings → impact → decision → plan → verification).
 5. Metrics honesty: only `arb_settled_net_usd` on landed records counts as profit.
-6. FREE public RPC only; no front-running/sandwiching; keep `dry_run=false` + `strict_4337`; never re-enable copy_mode; never run rustfmt.
+6. FREE public RPC only; no front-running/sandwiching; keep `dry_run=false` + `strict_4337`; copy_mode LIVE per Commander order 2026-10-06 (backrun-copy semantics only — mirror after signal, never front-run); never run rustfmt.
 7. All work on branch `devin/1791013932-backrun-projection` / PR #2.
 
 ## Suspected remaining blocker space (start here)
