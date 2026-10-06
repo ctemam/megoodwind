@@ -2760,9 +2760,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     // Settlement context — realized-P&L tracking needs the executor address,
     // token prices/decimals, native price for gas, and the bundler URL for
     // UserOp receipts.
-    let native_usd = ["WBNB", "WETH", "WPOL", "ETH"]
-        .iter()
-        .find_map(|s| tokens.get(*s))
+    let native_usd = tokens
+        .get(spec::native_symbol(cfg.chain.chain_id))
         .and_then(|a| token_usd_prices.get(a).copied())
         .unwrap_or(0.0);
     let settle_ctx = SettleCtx {
@@ -3007,8 +3006,8 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             // Net-of-gas feed: live gas price × est executor gas × native
             // USD, so the gate enforces NET profit per the handoff invariant.
             if let Ok(gp) = endpoint.provider().get_gas_price().await {
-                let native_px = ["WBNB", "WETH", "WPOL", "ETH"].iter()
-                    .find_map(|s| tokens.get(*s))
+                let native_px = tokens
+                    .get(spec::native_symbol(cfg.chain.chain_id))
                     .and_then(|a| token_usd_prices.read().unwrap().get(a).copied())
                     .unwrap_or(native_usd);
                 let gas_usd = gp as f64 * cfg.gate.est_tx_gas as f64 / 1e18 * native_px;

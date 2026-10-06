@@ -31,6 +31,17 @@ pub mod spec {
     pub const RPC_BLACKLIST_SECS: u64 = 60;
     /// Mempool ingestion polling resolution.
     pub const MEMPOOL_POLL_INTERVAL_MS: u64 = 5;
+    /// Wrapped-native symbol by chain id — gas-cost lookups MUST use this
+    /// rather than a multi-symbol preference list: bridged WETH exists in
+    /// Polygon's token map and would shadow WPOL, pricing gas ~6000x high
+    /// and silently rejecting every edge as below_min_usd.
+    pub fn native_symbol(chain_id: u64) -> &'static str {
+        match chain_id {
+            56 => "WBNB",
+            137 => "WPOL",
+            _ => "WETH",
+        }
+    }
     pub const BASE_CHAIN_ID: u64 = 8453;
     pub const BSC_CHAIN_ID: u64 = 56;
     /// Submission-routing deadlines (VenueRouter): private-builder RTT
@@ -474,4 +485,20 @@ fn expand_env_vars(input: &str) -> String {
         i += 1;
     }
     String::from_utf8(out).unwrap_or(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spec::native_symbol;
+
+    // Regression lock: the gas-price lookup must resolve the chain's own
+    // wrapped native, never a bridged WETH that shadows it on Polygon
+    // (was pricing gas ~6000x high and rejecting every edge).
+    #[test]
+    fn native_symbol_resolves_per_chain() {
+        assert_eq!(native_symbol(56), "WBNB");
+        assert_eq!(native_symbol(137), "WPOL");
+        assert_eq!(native_symbol(1), "WETH");
+        assert_eq!(native_symbol(8453), "WETH");
+    }
 }

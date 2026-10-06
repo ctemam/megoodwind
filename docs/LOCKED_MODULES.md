@@ -14,6 +14,7 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 | Gate floor (`[gate] min_profit_usd`) | LOCKED 2026-10-06 | Floor prices decay-through-inclusion, not instantaneous net: ETH ≥ 1.50, BSC/Polygon ≥ 0.60. A sub-floor edge that decays during UserOp inclusion burns sponsored gas (observed −$0.36, tx `0xa12df1…`) | Config values; revisit only with measured inclusion-latency data |
 | Config hygiene | LOCKED | Committed configs keep `dry_run=false`, `strict_4337`, no `copy_mode`, bait pools stripped at source; `feed.tokens` widened mids | `git diff` review on config changes |
 | Two-pass verify (feed + backrun lanes) | LOCKED | Detection pass is CPU-only; ONE merged `refresher.refresh_pools` per cycle; receipt/probe batch runs `join`ed with refresh — no serialized RPC per candidate | `ccfebb8`, `477c828`; review on lane edits |
+| Native-gas symbol resolution | `spec::native_symbol(chain_id)` maps 56→WBNB, 137→WPOL, else→WETH — never a symbol preference list (bridged WETH shadows WPOL → gas ~6000× high → every edge rejected) | `native_symbol_resolves_per_chain` + both call sites (gas feed, settle ctx) |
 
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any
