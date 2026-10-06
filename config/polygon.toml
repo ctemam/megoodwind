@@ -53,7 +53,7 @@ min = 100000000000000
 max = "200000000000000000000"
 
 [gate]
-min_profit_usd = 0.15
+min_profit_usd = 0.10   # probe-verified: probes gate dead edges pre-broadcast; a landed $0.10 edge at ~$0.02 gas is positive-EV
 safety_margin_bps = 4
 stable_pool_extra_margin_bps = 5
 
