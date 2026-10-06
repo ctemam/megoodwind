@@ -155,7 +155,20 @@ impl VenueRouter {
                 } else {
                     h.ema_rtt_ms * 0.7 + rtt_ms * 0.3
                 };
-                if !ok || over_budget {
+                // A paymaster merit rejection (the bundler simulated our op
+                // and it reverted — e.g. the edge decayed before inclusion)
+                // says this *op* lost, not that the venue is unhealthy.
+                // Sponsorship rejects are free for us, so treating them as
+                // venue failures benches the only submission channel while
+                // candidates keep arriving. Only transport-class faults,
+                // systematic blockers (quota/policy/paymaster balance), and
+                // over-budget RTT count toward the bench streak.
+                let merit_reject = result
+                    .as_ref()
+                    .err()
+                    .and_then(crate::pimlico::sponsorship_reject_reason)
+                    .is_some_and(|r| r == "exec_revert" || r == "rejected");
+                if (!ok || over_budget) && !merit_reject {
                     h.over_budget_streak += 1;
                     if h.over_budget_streak >= SUBMIT_BENCH_STREAK {
                         h.benched_until = Some(Instant::now() + Duration::from_secs(SUBMIT_BENCH_SECS));
@@ -187,5 +200,92 @@ impl VenueRouter {
             });
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pimlico::SponsorReject;
+
+    struct RejectVenue {
+        reason: &'static str,
+        transient: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Submitter for RejectVenue {
+        fn venue_name(&self) -> &'static str {
+            "test_reject"
+        }
+        fn tier(&self) -> SubmitTier {
+            SubmitTier::AlwaysOn
+        }
+        async fn submit(&self, _bundle: &Bundle) -> Result<SubmitResult> {
+            Err(SponsorReject {
+                reason: self.reason,
+                transient: self.transient,
+                detail: "test".into(),
+            }
+            .into())
+        }
+    }
+
+    fn empty_bundle() -> Bundle {
+        Bundle {
+            signed_txs: vec![],
+            victim_tx: None,
+            target_block: 0,
+            chain_id: 56,
+            backrun_tx: None,
+            call: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn merit_rejects_do_not_bench_venue() {
+        // exec_revert = the paymaster simulated our op and it reverted on
+        // its own merits (decayed edge). Free for us — the venue is fine.
+        let router = VenueRouter::new(
+            vec![Box::new(RejectVenue {
+                reason: "exec_revert",
+                transient: false,
+            })],
+            800,
+            1_600,
+        );
+        for _ in 0..SUBMIT_BENCH_STREAK + 2 {
+            router
+                .submit_all(&empty_bundle(), false, Duration::ZERO)
+                .await;
+        }
+        assert_eq!(router.order().len(), 1, "venue must stay routable");
+    }
+
+    #[tokio::test]
+    async fn transport_rejects_bench_venue() {
+        let router = VenueRouter::new(
+            vec![Box::new(RejectVenue {
+                reason: "transport",
+                transient: true,
+            })],
+            800,
+            1_600,
+        );
+        for _ in 0..SUBMIT_BENCH_STREAK {
+            router
+                .submit_all(&empty_bundle(), false, Duration::ZERO)
+                .await;
+        }
+        // Benched venues are dropped from order(); with a single venue the
+        // emergency-reset unbenches one on the next call to order().
+        assert!(
+            router
+                .health
+                .iter()
+                .any(|h| h.lock().unwrap().benched_until.is_some())
+                || router.order().is_empty(),
+            "transport-class failures must bench the venue"
+        );
     }
 }

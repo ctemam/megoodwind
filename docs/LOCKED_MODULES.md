@@ -25,6 +25,8 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 
 | Bait conviction attribution | LOCKED 2026-10-06 | Pool strikes require pool-attributable evidence only: `revert_blames_pool` gates `record_revert_for_path` (`insufficient_profit`=decay, `unauthorized`/`paused`/`gas_price_too_high`/`invalid_*`/`unsupported_token`=executor-side — never strike); `>BAIT_GAP_BPS` rejects convict only quarantined pair-outliers via `flag_bait_pools_in` (victim-impact >2% on thin pools is legitimate math); dry-run preview strikes use the same classifier; `exec_revert_streak`→`executor_broken` ignores `insufficient_profit` | `test_bait_pool_outlier_attribution_spares_collateral_pools`, `test_revert_blames_pool_attribution` |
 
+| Submit-venue health attribution | LOCKED 2026-10-06 | `VenueRouter` benches a venue only for transport-class faults, systematic blockers (quota/policy/paymaster-balance) or over-budget RTT; paymaster merit rejections (`exec_revert`, `rejected`) never count — the sponsored sim is a free edge-decay filter and benching it mutes the only gasless channel | `router::tests::merit_rejects_do_not_bench_venue`, `router::tests::transport_rejects_bench_venue` |
+
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any
 future change to a locked file, the diff must not touch an invariant
