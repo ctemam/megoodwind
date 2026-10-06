@@ -1742,8 +1742,24 @@ async fn backrun_pass(
                                 metrics::BACKRUN_STAGES
                                     .with_label_values(&["recheck_dead"])
                                     .inc();
+                                // Split the kill by victim state: a landed
+                                // victim means refreshed state already
+                                // includes the victim (and any competitor's
+                                // backrun) — the market ate the edge. A
+                                // still-pending victim means OUR projection
+                                // diverged from refreshed truth — a model
+                                // bug signal, not market loss.
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&[if victim_landed {
+                                        "recheck_dead_landed"
+                                    } else {
+                                        "recheck_dead_pending"
+                                    }])
+                                    .inc();
                                 info!(path_id = path.id,
                                     victim = %pending.tx_hash,
+                                    victim_landed,
+                                    victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
                                     "Backrun edge gone on re-check");
                                 continue;
                             }
