@@ -15,6 +15,7 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 | Config hygiene | LOCKED | Committed configs keep `dry_run=false`, `strict_4337`, no `copy_mode`, bait pools stripped at source; `feed.tokens` widened mids | `git diff` review on config changes |
 | Two-pass verify (feed + backrun lanes) | LOCKED | Detection pass is CPU-only; ONE merged `refresher.refresh_pools` per cycle; receipt/probe batch runs `join`ed with refresh — no serialized RPC per candidate | `ccfebb8`, `477c828`; review on lane edits |
 | Native-gas symbol resolution | `spec::native_symbol(chain_id)` maps 56→WBNB, 137→WPOL, else→WETH — never a symbol preference list (bridged WETH shadows WPOL → gas ~6000× high → every edge rejected) | `native_symbol_resolves_per_chain` + both call sites (gas feed, settle ctx) |
+| Feed-lane spread gate prices on-chain | `onchain_price(store,pool,base,quote)` computes quote-per-base from `PoolStore` (V2/AeroV2 reserve ratio, V3 sqrtP² token-oriented); feed `price_native` is discovery-only, never enters the gate | `onchain_price_orientation_v2_and_v3` test + docs/research/2026-10-05-dexscreener-integration.md |
 
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any

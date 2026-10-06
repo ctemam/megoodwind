@@ -580,13 +580,54 @@ async fn run(args: FeedArgs) {
             by_pair.entry((p.base, p.quote)).or_default().push(p);
         }
 
+        // Register + refresh every pool in a >=2-member pair group FIRST,
+        // then gate on ON-CHAIN prices. Feeds are discovery only — their
+        // price fields are CDN-cached and only measure staleness.
+        {
+            let mut gate_pools: Vec<Address> = Vec::new();
+            let mut add: Vec<PoolConfig> = Vec::new();
+            for group in by_pair.values() {
+                if group.len() < 2 {
+                    continue;
+                }
+                for p in group {
+                    gate_pools.push(p.pool);
+                    if registered.insert(p.pool) {
+                        add.push(PoolConfig {
+                            address: p.pool,
+                            protocol: p.proto,
+                            fee_bps: 0,
+                            token0: None,
+                            token1: None,
+                        });
+                    }
+                }
+            }
+            if !add.is_empty() {
+                args.refresher.add_pools(add);
+            }
+            args.refresher.refresh_pools(&args.store, &gate_pools).await;
+        }
+
         // Collect candidates across all pair groups first — then ONE
-        // merged pool registration + ONE merged refresh + ONE gas read
-        // cover every verify in the cycle (same two-pass discipline as
-        // the backrun lane; probes stay serial, they need the account
-        // context and can't be batched).
+        // merged gas read covers every verify in the cycle (same
+        // two-pass discipline as the backrun lane; probes stay serial,
+        // they need the account context and can't be batched).
         let mut todo: Vec<FeedCandidate> = Vec::new();
         for ((base, quote), mut group) in by_pair {
+            if group.len() < 2 {
+                continue;
+            }
+            // On-chain prices only — pools that failed refresh have no
+            // state and can't participate in the gate.
+            group.retain_mut(|p| {
+                if let Some(op) = onchain_price(&args.store, p.pool, base, quote) {
+                    p.price = op;
+                    true
+                } else {
+                    false
+                }
+            });
             if group.len() < 2 {
                 continue;
             }
@@ -675,36 +716,7 @@ async fn run(args: FeedArgs) {
         }
 
         if !todo.is_empty() {
-            // Register every candidate's pools, then ONE merged refresh
-            // and ONE gas read for the whole cycle.
-            let mut add = Vec::new();
-            for c in &todo {
-                for (addr, proto) in
-                    [(c.pool_in, c.proto_in), (c.pool_out, c.proto_out)]
-                {
-                    if registered.insert(addr) {
-                        add.push(PoolConfig {
-                            address: addr,
-                            protocol: proto,
-                            fee_bps: 0, // StateReader supplies real fee
-                            token0: None,
-                            token1: None,
-                        });
-                    }
-                }
-            }
-            if !add.is_empty() {
-                args.refresher.add_pools(add);
-            }
-            let mut all_pools: Vec<Address> = Vec::new();
-            for c in &todo {
-                for a in [c.pool_in, c.pool_out] {
-                    if !all_pools.contains(&a) {
-                        all_pools.push(a);
-                    }
-                }
-            }
-            args.refresher.refresh_pools(&args.store, &all_pools).await;
+            // Gate already registered + refreshed every pair-group pool.
             let gas_usd = match args.endpoint.gas_price().await {
                 Ok(gp) => {
                     // ~600k gas round trip × gas price × native price —
@@ -738,6 +750,57 @@ async fn run(args: FeedArgs) {
             }
         }
         tokio::time::sleep(Duration::from_secs(args.cfg.interval_secs.max(5))).await;
+    }
+}
+
+
+/// Pool price in "quote per base" raw units, computed from live pool
+/// state — NOT the feed's CDN-cached `price_native`. Comparing two
+/// API-reported prices across venues only measures relative staleness:
+/// it fabricates spreads that die at fresh-state sim and hides real
+/// ones that averaged out in the cache. The industry pattern is
+/// feeds-for-discovery, chain-for-pricing.
+fn onchain_price(store: &PoolStore, pool: Address, base: Address, quote: Address) -> Option<f64> {
+    let st = store.get_ref(&pool)?;
+    match &*st {
+        arb_core::types::PoolState::V2(_) | arb_core::types::PoolState::AeroV2(_) => {
+            let (token0, r0, r1) = match &*st {
+                arb_core::types::PoolState::V2(s) => (s.token0, s.reserve0, s.reserve1),
+                arb_core::types::PoolState::AeroV2(s) => (s.token0, s.reserve0, s.reserve1),
+                _ => unreachable!(),
+            };
+            let r0: f64 = r0.try_into().map(|v: u128| v as f64).unwrap_or(0.0);
+            let r1: f64 = r1.try_into().map(|v: u128| v as f64).unwrap_or(0.0);
+            if r0 <= 0.0 || r1 <= 0.0 {
+                return None;
+            }
+            if base == token0 {
+                Some(r1 / r0) // quote per base
+            } else {
+                Some(r0 / r1)
+            }
+        }
+        arb_core::types::PoolState::V3(s) => {
+            if s.sqrt_price_x96.is_zero() {
+                return None;
+            }
+            let sp: f64 = s
+                .sqrt_price_x96
+                .try_into()
+                .map(|v: u128| v as f64)
+                .unwrap_or(0.0);
+            let p = (sp / 79228162514264337593543950336.0).powi(2);
+            if !p.is_finite() || p <= 0.0 {
+                return None;
+            }
+            // V3 sqrtP encodes token1-per-token0.
+            if base == s.token0 {
+                Some(p)
+            } else {
+                Some(1.0 / p)
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1056,4 +1119,45 @@ mod tests {
     fn test_ds_normalize_drops_unlabelled_unknown_dex() {
         assert!(ds_pair("unknowndex", None).normalize().is_none());
     }
+
+    // Regression lock: the spread gate must read pool prices from live
+    // chain state, never the feed's CDN-cached price field. V2 gives
+    // quote-per-base by reserve ratio; V3 by sqrtP^2 in the pool's own
+    // token order.
+    #[test]
+    fn onchain_price_orientation_v2_and_v3() {
+        use alloy::primitives::{address, U256};
+        let store = PoolStore::new();
+        let a = address!("00000000000000000000000000000000000000a1");
+        let b = address!("00000000000000000000000000000000000000b2");
+        let pool_v2 = address!("00000000000000000000000000000000000000c1");
+        let pool_v3 = address!("00000000000000000000000000000000000000c2");
+        store.update(pool_v2, arb_core::types::PoolState::V2(arb_core::types::V2PoolState {
+            address: pool_v2,
+            token0: a,
+            token1: b,
+            reserve0: U256::from(100u64),
+            reserve1: U256::from(200u64),
+            fee_bps: 30,
+        }));
+        store.update(pool_v3, arb_core::types::PoolState::V3(arb_core::types::V3PoolState {
+            address: pool_v3,
+            token0: a,
+            token1: b,
+            sqrt_price_x96: U256::from(2u64) << 96,
+            tick: 0,
+            liquidity: 1_000_000,
+            fee: 3000,
+            fee_otz: None,
+        }));
+        // V2: quote-per-base = r1/r0 when base is token0, inverted otherwise.
+        assert_eq!(onchain_price(&store, pool_v2, a, b), Some(2.0));
+        assert_eq!(onchain_price(&store, pool_v2, b, a), Some(0.5));
+        // V3: sqrtP=2^97 → token1/token0 = 4.
+        assert_eq!(onchain_price(&store, pool_v3, a, b), Some(4.0));
+        assert_eq!(onchain_price(&store, pool_v3, b, a), Some(0.25));
+        // Unknown pool → no price, excluded from the gate.
+        assert_eq!(onchain_price(&store, a, a, b), None);
+    }
+
 }
