@@ -516,6 +516,9 @@ enabled      = true
 tokens       = ["WETH", "WBTC", "LINK", "UNI", "wstETH", "SHIB", "PEPE", "AAVE", "CRV", "LDO"]
 flash_quotes = ["WETH", "USDC", "USDT", "DAI"]
 interval_secs      = 15
+# Noise floor only — the gate is fee-aware: required spread = round-trip
+# pool fees (read live from on-chain state) + min_net margin, floored at
+# this. ETH gas (~$8 on $2k notional ≈ 40bps) needs the higher floor.
 min_spread_bps     = 50.0
 max_spread_bps     = 200.0
 min_liquidity_usd  = 50000.0

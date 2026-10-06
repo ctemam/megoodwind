@@ -1008,7 +1008,10 @@ enabled      = true
 tokens       = ["WBNB", "ETH", "BTCB", "CAKE", "LINK", "ADA", "DOT", "XRP", "DOGE", "TWT", "FLOKI", "WOO", "XVS", "BSW"]
 flash_quotes = ["WBNB", "USDT", "USDC", "FDUSD", "BUSD"]
 interval_secs      = 15
-min_spread_bps     = 30.0  # BSC gas ~$0.4 — 30bps x $2k notional still nets >$5
+# Noise floor only — the gate is fee-aware: required spread = round-trip
+# pool fees (read live from on-chain state) + min_net margin, floored at
+# this. 5 bps keeps dust out; a V2-V2 leg pair now needs ~55+ bps anyway.
+min_spread_bps     = 5.0
 max_spread_bps     = 200.0
 min_liquidity_usd  = 50000.0
 min_h1_txns        = 3

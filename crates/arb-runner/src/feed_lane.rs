@@ -620,6 +620,9 @@ async fn run(args: FeedArgs) {
             if !args.flash_quotes.contains_key(&p.base)
                 && !args.flash_quotes.contains_key(&p.quote)
             {
+                metrics::FEED_REJECTS
+                    .with_label_values(&[&args.chain, "no_flash_asset"])
+                    .inc();
                 continue; // neither side is a flash asset — can't borrow
             }
             filtered.push(p);
@@ -673,7 +676,15 @@ async fn run(args: FeedArgs) {
                     .inc();
                 continue;
             }
-            by_pair.entry((p.base, p.quote)).or_default().push(p);
+            // Canonical pair key — feeds disagree on (base,quote)
+            // orientation for the same pair (DS lists WBNB/USDT where GT
+            // lists USDT/WBNB); keying by the unordered token pair merges
+            // the venue set instead of splitting the same pools across two
+            // mirrored groups and double-simming them.
+            by_pair
+                .entry(canonical_pair_key(p.base, p.quote))
+                .or_default()
+                .push(p);
         }
 
         // Register + refresh every pool in a >=2-member pair group FIRST,
@@ -761,7 +772,15 @@ async fn run(args: FeedArgs) {
             let lo_p = &group[0];
             let hi_p = group.last().unwrap();
             let spread_bps = (hi_p.price - lo_p.price) / lo_p.price * 10_000.0;
-            if spread_bps < args.cfg.min_spread_bps {
+            // Fee-aware floor: a spread below the round-trip fee cost can
+            // never clear min_net — gate on fees + net margin instead of a
+            // flat bps, with min_spread_bps kept as an absolute noise floor.
+            let required_bps = required_spread_bps(
+                store_fee_bps(&args.store, lo_p.pool),
+                store_fee_bps(&args.store, hi_p.pool),
+                &args.cfg,
+            );
+            if spread_bps < required_bps {
                 metrics::FEED_REJECTS
                     .with_label_values(&[&args.chain, "below_spread"])
                     .inc();
@@ -884,6 +903,40 @@ async fn run(args: FeedArgs) {
     }
 }
 
+
+/// Canonical (base, quote) for pair grouping — ordered token pair so feeds
+/// reporting opposite orientations for the same pool set land in one group.
+fn canonical_pair_key(base: Address, quote: Address) -> (Address, Address) {
+    if base <= quote {
+        (base, quote)
+    } else {
+        (quote, base)
+    }
+}
+
+/// Swap fee (bps) charged by a priced pool, straight from on-chain state.
+/// V3/Algebra keep the fee in hundredths-of-a-bip raw units; V2/AeroV2 are
+/// plain bps. Unpriced pools never reach the gate — the 30 bps default is
+/// unreachable in practice.
+fn store_fee_bps(store: &PoolStore, pool: Address) -> f64 {
+    use arb_core::types::PoolState;
+    match store.get(&pool) {
+        Some(PoolState::V2(s)) => s.fee_bps as f64,
+        Some(PoolState::V3(s)) => s.fee as f64 / 100.0,
+        Some(PoolState::AeroV2(s)) => s.fee_bps as f64,
+        _ => 30.0,
+    }
+}
+
+/// Spread (bps) a candidate must exceed to clear economics by construction:
+/// round-trip swap fees + the min-net margin at max notional, with
+/// min_spread_bps kept as an absolute noise floor. A V2-V2 round trip at
+/// 25+25 bps can never profit on a 40 bps spread — it used to pass the gate
+/// and die at sim; now it dies honestly, one stage earlier.
+fn required_spread_bps(fee_in: f64, fee_out: f64, cfg: &FeedConfig) -> f64 {
+    let net_margin_bps = (cfg.min_net_usd / cfg.max_notional_usd * 10_000.0).max(1.0);
+    cfg.min_spread_bps.max(fee_in + fee_out + net_margin_bps)
+}
 
 /// Pool price in "quote per base" raw units, computed from live pool
 /// state — NOT the feed's CDN-cached `price_native`. Comparing two
@@ -1456,6 +1509,72 @@ mod tests {
         assert_eq!(pools.len(), 2);
         assert!(pools.iter().all(|e| e["until_block"].is_u64()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Locked (2026-10-06): pair grouping keys on the unordered token pair —
+    // DS and GT report opposite (base,quote) orientations for the same pool
+    // set; feeding both through split the venue group and double-simmed.
+    #[test]
+    fn canonical_pair_key_merges_feed_orientations() {
+        let a = Address::from([1u8; 20]);
+        let b = Address::from([2u8; 20]);
+        assert_eq!(canonical_pair_key(a, b), (a, b));
+        assert_eq!(canonical_pair_key(b, a), (a, b), "orientation-agnostic");
+    }
+
+    // Locked (2026-10-06): the spread gate is fee-aware. A spread below the
+    // round-trip fee can never clear min_net — a 25+25 bps V2-V2 pair needs
+    // >55 bps, a 1+1 bps V3 pair needs >7. Flat-floor candidates that could
+    // never profit used to burn sim cycles and cooldown slots.
+    #[test]
+    fn required_spread_bps_covers_round_trip_fees() {
+        let cfg = FeedConfig {
+            min_spread_bps: 5.0,
+            max_notional_usd: 2000.0,
+            min_net_usd: 1.0,
+            ..Default::default()
+        };
+        // V2-V2 at 25+25 bps → fee term dominates the noise floor.
+        assert_eq!(required_spread_bps(25.0, 25.0, &cfg), 55.0);
+        // Two 1bp V3 legs → 2bps fees + 5bps margin.
+        assert_eq!(required_spread_bps(1.0, 1.0, &cfg), 7.0);
+        // Noise floor binds below the fee term (e.g. ETH config at 50).
+        let eth_cfg = FeedConfig {
+            min_spread_bps: 50.0,
+            ..cfg.clone()
+        };
+        assert_eq!(required_spread_bps(5.0, 5.0, &eth_cfg), 50.0);
+    }
+
+    // Locked (2026-10-06): store_fee_bps converts each protocol's units to
+    // plain bps — V3 raw fee is hundredths-of-a-bip (3000 = 30bps).
+    #[test]
+    fn store_fee_bps_reads_each_protocols_units() {
+        use alloy::primitives::{address, U256};
+        let store = PoolStore::new();
+        let pool_v2 = address!("00000000000000000000000000000000000000c1");
+        let pool_v3 = address!("00000000000000000000000000000000000000c2");
+        store.update(pool_v2, arb_core::types::PoolState::V2(arb_core::types::V2PoolState {
+            address: pool_v2,
+            token0: Address::ZERO,
+            token1: Address::ZERO,
+            reserve0: U256::from(1u64),
+            reserve1: U256::from(1u64),
+            fee_bps: 25,
+        }));
+        store.update(pool_v3, arb_core::types::PoolState::V3(arb_core::types::V3PoolState {
+            address: pool_v3,
+            token0: Address::ZERO,
+            token1: Address::ZERO,
+            sqrt_price_x96: U256::from(1u64),
+            tick: 0,
+            liquidity: 1,
+            fee: 3000,
+            fee_otz: None,
+        }));
+        assert_eq!(store_fee_bps(&store, pool_v2), 25.0);
+        assert_eq!(store_fee_bps(&store, pool_v3), 30.0, "3000 hundredths-bip = 30bps");
+        assert_eq!(store_fee_bps(&store, Address::from([7u8; 20])), 30.0);
     }
 
 }

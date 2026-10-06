@@ -519,11 +519,22 @@ async fn main() -> Result<()> {
         let _ = gas_usd;
         if gross_fixed > 0.0 && gross_fixed < cfg.feed.min_net_usd { f.net_fail_fixed += 1; }
         if opt_gross > 0.0 && opt_gross < cfg.feed.min_net_usd { f.net_fail_optimal += 1; }
+        // Stored-fee diagnostics: sim honesty depends on the fee the
+        // refresher wrote into PoolState — print it next to each candidate.
+        let fee_of = |a: Address| -> String {
+            match store.get_ref(&a).map(|r| r.clone()) {
+                Some(arb_core::types::PoolState::V2(s)) => format!("v2={}bps", s.fee_bps),
+                Some(arb_core::types::PoolState::V3(s)) => format!("v3={}hpip", s.fee),
+                Some(arb_core::types::PoolState::AeroV2(s)) => format!("aero={}bps", s.fee_bps),
+                _ => "?".into(),
+            }
+        };
         reports.push(format!(
-            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?} pools {}/{}",
+            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?} pools {}/{} fees[{}/{}]",
             format!("{}", sym(*base)) + "/" + &sym(*quote),
             din, dout, spread_bps, gross_fixed, opt_gross, opt_amt,
             format!("{:.10}", format!("{pin:?}")), format!("{:.10}", format!("{pout:?}")),
+            fee_of(pin), fee_of(pout),
         ));
     }
     println!("gate: no_state={} below_spread={} suspect={} candidates={}", f.gate_no_state, f.gate_below_spread, f.gate_suspect, f.candidates);

@@ -140,6 +140,12 @@ sol! {
         function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
         function token0() external view returns (address);
         function token1() external view returns (address);
+        // swapFee() is optional — Uniswap V2 and PancakeSwap V2 pairs do not
+        // implement it; probed via allowFailure so a missing getter falls
+        // through to the factory table / config / default in the resolver.
+        // factory() is a standard UniV2-fork getter used for that fallback.
+        function swapFee() external view returns (uint256);
+        function factory() external view returns (address);
     }
 
     #[sol(rpc)]
@@ -313,6 +319,28 @@ fn default_fee_for_factory(factory: Address, chain_id: u64) -> Option<u32> {
         }
         _ => None,
     }
+}
+
+/// Resolved V2 swap fee in bps: pair-reported `swapFee()` > factory table >
+/// declared config > UniV2's 30 bps max-common default. A stored config fee
+/// of 0 means "unset" — it must never reach the quote path (a fabricated 0%
+/// fee quotes phantom profit, so the guard lives here, at the write site).
+fn resolve_v2_fee_bps(
+    onchain_swap_fee: Option<u32>,
+    factory: Option<Address>,
+    config_bps: u32,
+    chain_id: u64,
+) -> u32 {
+    if let Some(bps) = onchain_swap_fee {
+        return bps;
+    }
+    if let Some(bps) = factory.and_then(|f| default_fee_for_factory(f, chain_id)) {
+        return bps;
+    }
+    if config_bps > 0 {
+        return config_bps;
+    }
+    30
 }
 
 fn partition_pools(
@@ -699,11 +727,14 @@ impl StateRefresher {
     /// aggregate3 (single network round-trip), allowFailure per call so a
     /// dead pool can't sink the batch — unlike the all-or-nothing
     /// IStateReader chunk reads. Pools whose token pair is already in config
-    /// skip the token0/token1 calls — only getReserves is dynamic.
+    /// skip the token0/token1 calls — only getReserves is dynamic. The full
+    /// path also probes swapFee()/factory() so the fee resolves per
+    /// `resolve_v2_fee_bps` (onchain > factory table > config > 30 bps).
+    /// Returns (pool, reserve0, reserve1, token0, token1, fee_bps).
     async fn multicall_v2(
         &self,
         pools: &[Address],
-    ) -> Vec<(Address, U256, U256, Address, Address)> {
+    ) -> Vec<(Address, U256, U256, Address, Address, u32)> {
         use alloy_sol_types::SolCall;
         let mut out = Vec::with_capacity(pools.len());
 
@@ -743,6 +774,7 @@ impl StateRefresher {
                         U256::from(reserves.reserve1),
                         t0,
                         t1,
+                        self.fee_for_pool(&p),
                     ));
                 }
             }
@@ -758,6 +790,8 @@ impl StateRefresher {
                     IV2Pool::getReservesCall::new(()).abi_encode().into(),
                     IV2Pool::token0Call::new(()).abi_encode().into(),
                     IV2Pool::token1Call::new(()).abi_encode().into(),
+                    IV2Pool::swapFeeCall::new(()).abi_encode().into(),
+                    IV2Pool::factoryCall::new(()).abi_encode().into(),
                 ]
                 .map(|call_data| IMulticall3::Call3 {
                     target: p,
@@ -768,11 +802,11 @@ impl StateRefresher {
             .collect();
         let results = self.multicall_aggregate3(calls).await;
         let _dt = self.decode_timer("mc_v2");
-        if results.len() != full.len() * 3 {
+        if results.len() != full.len() * 5 {
             return out;
         }
         out.extend(full.iter().enumerate().filter_map(|(i, &p)| {
-            let base = i * 3;
+            let base = i * 5;
             let res = &results[base];
             let t0 = &results[base + 1];
             let t1 = &results[base + 2];
@@ -783,12 +817,34 @@ impl StateRefresher {
                 IV2Pool::getReservesCall::abi_decode_returns(&res.returnData[..]).ok()?;
             let token0 = IV2Pool::token0Call::abi_decode_returns(&t0.returnData[..]).ok()?;
             let token1 = IV2Pool::token1Call::abi_decode_returns(&t1.returnData[..]).ok()?;
+            // Optional probes — a missing/undecodable getter falls through to
+            // the factory table / config / default in the resolver.
+            let swap_fee = if results[base + 3].success {
+                IV2Pool::swapFeeCall::abi_decode_returns(&results[base + 3].returnData[..])
+                    .ok()
+                    .map(|f| f.to::<u32>())
+                    .filter(|&bps| (1..=10_000).contains(&bps))
+            } else {
+                None
+            };
+            let factory = if results[base + 4].success {
+                IV2Pool::factoryCall::abi_decode_returns(&results[base + 4].returnData[..])
+                    .ok()
+            } else {
+                None
+            };
             Some((
                 p,
                 U256::from(reserves.reserve0),
                 U256::from(reserves.reserve1),
                 token0,
                 token1,
+                resolve_v2_fee_bps(
+                    swap_fee,
+                    factory,
+                    self.pool_config_fee_bps(&p),
+                    self.chain_id,
+                ),
             ))
         }));
         out
@@ -805,6 +861,18 @@ impl StateRefresher {
             .map(|pc| pc.fee_bps)
             .filter(|&bps| bps > 0)
             .map(|bps| bps.saturating_mul(100))
+    }
+
+    /// Declared config fee in plain bps — the units V2 (and AeroV2) quote in.
+    /// 0 means "unset" (feed-registered pools declare no fee).
+    fn pool_config_fee_bps(&self, pool: &Address) -> u32 {
+        self.pool_configs
+            .read()
+            .unwrap()
+            .iter()
+            .find(|pc| pc.address == *pool)
+            .map(|pc| pc.fee_bps)
+            .unwrap_or(0)
     }
 
     /// Multicall3 read for V3 pools: slot0 + liquidity + fee + tokens in
@@ -1414,19 +1482,22 @@ impl StateRefresher {
                 // fee is dropped — a fabricated zero fee quotes phantom
                 // profits.
                 use alloy_sol_types::SolCall;
+                // V2State.fee is plain bps (the reader fills it from
+                // swapFee(), which reports bps) — not the V3 hundredths-of-a-
+                // bip encoding, so pool_config_fee_bps here, not _raw.
                 let map_legacy =
                     |v: Vec<IStateReader::V2StateLegacy>| -> Vec<IStateReader::V2State> {
                         v.into_iter()
                             .filter_map(|s| {
-                                self.pool_config_fee_raw(&s.pool)
-                                    .map(|fee| IStateReader::V2State {
-                                        pool: s.pool,
-                                        token0: s.token0,
-                                        token1: s.token1,
-                                        reserve0: s.reserve0,
-                                        reserve1: s.reserve1,
-                                        fee,
-                                    })
+                                let fee = self.pool_config_fee_bps(&s.pool);
+                                (fee > 0).then(|| IStateReader::V2State {
+                                    pool: s.pool,
+                                    token0: s.token0,
+                                    token1: s.token1,
+                                    reserve0: s.reserve0,
+                                    reserve1: s.reserve1,
+                                    fee,
+                                })
                             })
                             .collect()
                     };
@@ -1900,7 +1971,7 @@ impl StateRefresher {
 
         // Multicall3 results fetched inside the join (primary reader when the
         // deployed reader's method is dead or unset; the only path for V4).
-        for (pool, r0, r1, t0, t1) in &v2_mc {
+        for (pool, r0, r1, t0, t1, fee_bps) in &v2_mc {
             store.update(
                 *pool,
                 PoolState::V2(V2PoolState {
@@ -1909,7 +1980,7 @@ impl StateRefresher {
                     token1: *t1,
                     reserve0: *r0,
                     reserve1: *r1,
-                    fee_bps: self.fee_for_pool(pool),
+                    fee_bps: *fee_bps,
                 }),
             );
             updated += 1;
@@ -2012,7 +2083,7 @@ impl StateRefresher {
             if !missing_v2.is_empty() {
                 let mut salvaged = 0usize;
                 for chunk in missing_v2.chunks(Self::CHUNK_SIZE) {
-                    for (pool, r0, r1, t0, t1) in self.multicall_v2(chunk).await {
+                    for (pool, r0, r1, t0, t1, fee_bps) in self.multicall_v2(chunk).await {
                         store.update(
                             pool,
                             PoolState::V2(V2PoolState {
@@ -2021,7 +2092,7 @@ impl StateRefresher {
                                 token1: t1,
                                 reserve0: r0,
                                 reserve1: r1,
-                                fee_bps: self.fee_for_pool(&pool),
+                                fee_bps,
                             }),
                         );
                         updated += 1;
@@ -2297,7 +2368,7 @@ impl StateRefresher {
         );
 
         let mut updated = 0;
-        for (pool, r0, r1, t0, t1) in &v2_mc {
+        for (pool, r0, r1, t0, t1, fee_bps) in &v2_mc {
             store.update(
                 *pool,
                 PoolState::V2(V2PoolState {
@@ -2306,7 +2377,7 @@ impl StateRefresher {
                     token1: *t1,
                     reserve0: *r0,
                     reserve1: *r1,
-                    fee_bps: self.fee_for_pool(pool),
+                    fee_bps: *fee_bps,
                 }),
             );
             updated += 1;
@@ -2423,13 +2494,8 @@ impl StateRefresher {
     }
 
     fn fee_for_pool(&self, pool: &Address) -> u32 {
-        self.pool_configs
-            .read()
-            .unwrap()
-            .iter()
-            .find(|pc| pc.address == *pool)
-            .map(|pc| pc.fee_bps)
-            .unwrap_or(30)
+        let bps = self.pool_config_fee_bps(pool);
+        if bps > 0 { bps } else { 30 }
     }
 }
 
@@ -2759,5 +2825,27 @@ mod tests {
             vec![(0..30).map(|_| r3(true, 1)).collect()],
         );
         assert_eq!(merged3.len(), 30);
+    }
+
+    // Locked (2026-10-06): a stored V2 fee of 0 is the "unset" sentinel, NOT a
+    // real 0% fee — feed-registered pools carry fee_bps=0 and used to quote
+    // every V2 leg at zero fee (measured phantom $0.57–$2.38/candidate on BSC).
+    #[test]
+    fn test_resolve_v2_fee_never_quotes_zero() {
+        // Pair-reported swapFee() wins over everything.
+        assert_eq!(resolve_v2_fee_bps(Some(10), Some(addr(9)), 25, 56), 10);
+        // PCS V2 pairs have no swapFee() — the factory table supplies the
+        // real 25 bps (not the 30 bps generic default).
+        let pcs: Address = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73"
+            .parse()
+            .unwrap();
+        assert_eq!(resolve_v2_fee_bps(None, Some(pcs), 0, 56), 25);
+        // Declared config fee beats the default; zero/missing config and
+        // unknown factory both fall to the UniV2 max-common 30 bps.
+        assert_eq!(resolve_v2_fee_bps(None, None, 20, 1), 20);
+        assert_eq!(resolve_v2_fee_bps(None, None, 0, 1), 30);
+        assert_eq!(resolve_v2_fee_bps(None, Some(addr(9)), 0, 56), 30);
+        // Unmapped chain: no factory table, still never zero.
+        assert_eq!(resolve_v2_fee_bps(None, None, 0, 137), 30);
     }
 }

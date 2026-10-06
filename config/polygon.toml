@@ -912,7 +912,10 @@ enabled      = true
 tokens       = ["WETH", "WPOL", "LINK", "AAVE", "WBTC", "CRV", "QUICK", "SUSHI", "BAL"]
 flash_quotes = ["WETH", "USDC", "USDT", "DAI", "WPOL", "USDCe"]
 interval_secs      = 15
-min_spread_bps     = 30.0  # Polygon gas ~$0.05 — 30bps x $2k still nets >$5
+# Noise floor only — the gate is fee-aware: required spread = round-trip
+# pool fees (read live from on-chain state) + min_net margin, floored at
+# this. 5 bps keeps dust out; a V2-V2 leg pair now needs ~55+ bps anyway.
+min_spread_bps     = 5.0
 max_spread_bps     = 200.0
 min_liquidity_usd  = 50000.0
 min_h1_txns        = 3
