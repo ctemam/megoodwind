@@ -1006,3 +1006,54 @@ async fn verify_and_submit(
     let _ = opp.append_jsonl(&args.data_dir);
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ds_pair(dex_id: &str, labels: Option<Vec<&str>>) -> DsPair {
+        DsPair {
+            pair_address: "0x00000000000000000000000000000000000000aa".into(),
+            dex_id: dex_id.into(),
+            base_token: DsToken {
+                address: "0x00000000000000000000000000000000000000b1".into(),
+                symbol: "B".into(),
+            },
+            quote_token: DsToken {
+                address: "0x00000000000000000000000000000000000000b2".into(),
+                symbol: "Q".into(),
+            },
+            price_native: Some("1.0".into()),
+            liquidity: None,
+            txns: None,
+            labels: labels.map(|v| v.into_iter().map(String::from).collect()),
+        }
+    }
+
+    // Locked invariants: DS ingest gates. nomiswap is the documented BSC
+    // bait family; labels[] is the only reliable version signal; an
+    // unversioned unknown dex must never be guessed into an interface.
+
+    #[test]
+    fn test_ds_normalize_drops_nomiswap() {
+        assert!(ds_pair("nomiswap", Some(vec!["v2"])).normalize().is_none());
+        assert!(ds_pair("Nomiswap", None).normalize().is_none());
+    }
+
+    #[test]
+    fn test_ds_normalize_version_comes_from_labels() {
+        let v3 = ds_pair("pancakeswap", Some(vec!["v3"]))
+            .normalize()
+            .expect("v3 row should normalize");
+        assert!(matches!(v3.proto, Protocol::UniswapV3));
+        let v2 = ds_pair("pancakeswap", Some(vec!["v2"]))
+            .normalize()
+            .expect("v2 row should normalize");
+        assert!(matches!(v2.proto, Protocol::UniswapV2));
+    }
+
+    #[test]
+    fn test_ds_normalize_drops_unlabelled_unknown_dex() {
+        assert!(ds_pair("unknowndex", None).normalize().is_none());
+    }
+}

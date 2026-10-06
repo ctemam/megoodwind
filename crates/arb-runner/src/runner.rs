@@ -3504,6 +3504,49 @@ mod tests {
             "non-popular target token should be suppressed");
     }
 
+    // --- Locked invariants: probe classification + bait conviction ---
+    // Regression locks for the module-complete behaviors; a change that
+    // relaxes any of these must fail CI, not ship.
+
+    #[test]
+    fn test_probe_revert_classification() {
+        // A pool-internal string revert (Error(string), selector
+        // 0x08c379a0 — e.g. "Nomiswap: D") is the bait signature and must
+        // classify as pool_revert so the pools get hard-convicted. The
+        // executor's own InsufficientProfit is a separate bucket.
+        assert_eq!(
+            classify_exec_probe_revert("reverted: 0x08c379a0 Nomiswap: D"),
+            "pool_revert"
+        );
+        assert_eq!(
+            classify_exec_probe_revert("reverted: 0x4e88422a"),
+            "insufficient_profit"
+        );
+        assert_eq!(classify_exec_probe_revert("unparsable detail"), "unknown_revert");
+    }
+
+    #[test]
+    fn test_bait_pool_hard_flag_is_effectively_permanent() {
+        let pool = addr(10);
+        let path = make_path(0, addr(1), vec![(pool, addr(1), addr(2))]);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools_hard(&path, 100);
+        // 30M-block span: still convicted a million blocks later, and the
+        // whole path is suppressed through the pool check.
+        assert!(breaker.is_pool_bait_flagged(pool, 1_000_100));
+        assert!(breaker.is_path_token_suppressed(&path, 1_000_100));
+    }
+
+    #[test]
+    fn test_bait_pool_soft_flag_expires_on_schedule() {
+        let pool = addr(10);
+        let path = make_path(0, addr(1), vec![(pool, addr(1), addr(2))]);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools(&path, 100);
+        assert!(breaker.is_pool_bait_flagged(pool, 100));
+        assert!(!breaker.is_pool_bait_flagged(pool, 100 + 200));
+    }
+
     #[test]
     fn test_token_breaker_suppresses_bad_token() {
         let flash = addr(1);
