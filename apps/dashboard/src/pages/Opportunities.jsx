@@ -129,11 +129,13 @@ export default function Opportunities() {
                 <option key={c} value={c}>{c.toUpperCase()}</option>
               ))}
             </select>
-            <select value={lane} onChange={e => setLane(e.target.value)}>
-              <option value="all">ALL LANES</option>
-              {['feed', 'wallet copy', 'backrun', 'atomic arb'].map(l => (
-                <option key={l} value={l}>{l.toUpperCase()}</option>
-              ))}
+            <select value={lane} onChange={e => setLane(e.target.value)}
+              title="Strategy mode — pick one mode or all" >
+              <option value="all">ALL MODES</option>
+              <option value="atomic arb">CLASSIC ARB</option>
+              <option value="feed">PRE-DETECTED FEED</option>
+              <option value="wallet copy">WALLET COPY</option>
+              <option value="backrun">BACKRUN</option>
             </select>
             <button className={`tab${showRejected ? ' on' : ''}`} onClick={() => setShowRejected(v => !v)}>
               {showRejected ? 'all' : 'pass only'}
