@@ -2304,9 +2304,7 @@ async fn sweep_executor_profit(
         }
         swept += 1;
     }
-    if swept > 0 {
-        info!(swept, "Profit sweep cycle complete");
-    }
+    info!(checked = tokens.len(), swept, "Profit sweep cycle complete");
 }
 
 pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<()> {
