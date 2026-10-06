@@ -521,14 +521,7 @@ impl StateRefresher {
                 .map(|b| self.aggregate3_batch(b)),
         )
         .await;
-        let mut all = Vec::with_capacity(calls.len());
-        for r in parts {
-            if r.is_empty() {
-                return Vec::new();
-            }
-            all.extend(r);
-        }
-        all
+        merge_aggregate3_parts(calls.chunks(Self::MC3_MAX_CALLS), parts)
     }
 
     /// Single aggregate3 batch with transport failover. Some public endpoints
@@ -596,6 +589,66 @@ impl StateRefresher {
             }
             Vec::new()
         })
+    }
+
+    /// One-shot AMM interface detection for pools whose feed metadata can't
+    /// name the flavor (unversioned/unknown dex ids — measured: DS reports
+    /// ~36 liquid BSC pools per ingest cycle that dexId alone cannot
+    /// classify). Three selectors per pool in ONE aggregate3 batch with
+    /// allowFailure: globalState → Algebra, slot0 → V3, getReserves → V2.
+    ///
+    /// The most specific interface wins: Algebra forks (Thena, Quickswap
+    /// V3) can also answer slot0 on some deployments, and probing
+    /// globalState first keeps them off the V3 read path (which would
+    /// miss the dynamic fee). Pools answering none of the three stay
+    /// unadmitted — the caller drops them.
+    /// Returns `None` on batch transport failure (vs `Some(empty)` when
+    /// every pool answered with no supported interface) so callers can
+    /// retry next cycle instead of caching a negative verdict.
+    pub async fn probe_interfaces(
+        &self,
+        pools: &[Address],
+    ) -> Option<std::collections::HashMap<Address, Protocol>> {
+        use alloy_sol_types::SolCall;
+        if pools.is_empty() {
+            return Some(std::collections::HashMap::new());
+        }
+        let mut calls = Vec::with_capacity(pools.len() * 3);
+        for p in pools {
+            calls.push(IMulticall3::Call3 {
+                target: *p,
+                allowFailure: true,
+                callData: IAlgebraPool::globalStateCall::new(())
+                    .abi_encode()
+                    .into(),
+            });
+            calls.push(IMulticall3::Call3 {
+                target: *p,
+                allowFailure: true,
+                callData: IV3Pool::slot0Call::new(())
+                    .abi_encode()
+                    .into(),
+            });
+            calls.push(IMulticall3::Call3 {
+                target: *p,
+                allowFailure: true,
+                callData: IV2Pool::getReservesCall::new(())
+                    .abi_encode()
+                    .into(),
+            });
+        }
+        let results = self.multicall_aggregate3(calls).await;
+        if results.len() < pools.len() * 3 {
+            return None; // transport failure — no verdict to cache
+        }
+        let mut out = std::collections::HashMap::new();
+        for (i, p) in pools.iter().enumerate() {
+            let t = &results[i * 3..i * 3 + 3];
+            if let Some(proto) = classify_probe_triplet(&t[0], &t[1], &t[2]) {
+                out.insert(*p, proto);
+            }
+        }
+        Some(out)
     }
 
     /// Hot-add pools discovered mid-run (leader-scan merge). They join the
@@ -2380,6 +2433,54 @@ impl StateRefresher {
     }
 }
 
+/// Classify a pool by its probe triplet — (globalState, slot0, getReserves)
+/// in that order. Most-specific interface wins: Algebra forks can answer
+/// slot0 on some deployments, so globalState is checked first. A pool must
+/// answer with real data (success + ≥1 word) — a bare "no revert" from a
+/// fallback function doesn't count.
+fn classify_probe_triplet(
+    global_state: &IMulticall3::Result3,
+    slot0: &IMulticall3::Result3,
+    reserves: &IMulticall3::Result3,
+) -> Option<Protocol> {
+    let answered = |r: &IMulticall3::Result3| r.success && r.returnData.len() >= 32;
+    if answered(global_state) {
+        Some(Protocol::Algebra)
+    } else if answered(slot0) {
+        Some(Protocol::UniswapV3)
+    } else if answered(reserves) {
+        Some(Protocol::UniswapV2)
+    } else {
+        None
+    }
+}
+
+/// Merge per-chunk aggregate3 results back into call order. One
+/// transport-level batch failure must not zero out the entire refresh —
+/// on flaky public endpoints a single bad batch previously dropped EVERY
+/// pool in the bucket (measured live: 46/46 priceable Polygon V3 pools
+/// went unpriced because one concurrent chunk timed out). A failed chunk
+/// yields `success:false` placeholders so per-pool decode filtering drops
+/// just its calls; the output length always equals the total call count.
+fn merge_aggregate3_parts<'a>(
+    chunks: impl Iterator<Item = &'a [IMulticall3::Call3]>,
+    parts: Vec<Vec<IMulticall3::Result3>>,
+) -> Vec<IMulticall3::Result3> {
+    let mut all = Vec::new();
+    for (chunk, r) in chunks.zip(parts) {
+        if r.is_empty() {
+            warn!(calls = chunk.len(), "aggregate3 chunk failed wholesale — marking calls failed");
+            all.extend((0..chunk.len()).map(|_| IMulticall3::Result3 {
+                success: false,
+                returnData: alloy_primitives::Bytes::new(),
+            }));
+        } else {
+            all.extend(r);
+        }
+    }
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2568,5 +2669,95 @@ mod tests {
         assert!(!cb.is_dead("V2"), "a successful read clears the streak");
         cb.note_failure("V2");
         assert!(!cb.is_dead("V2"), "counter restarts — needs a fresh streak");
+    }
+
+    fn r3(success: bool, words: usize) -> IMulticall3::Result3 {
+        IMulticall3::Result3 {
+            success,
+            returnData: vec![0u8; words * 32].into(),
+        }
+    }
+
+    /// LOCKED: feed-lane coverage fix — pools whose dex id can't name the
+    /// AMM flavor get probed on-chain instead of dropped. Most-specific
+    /// interface wins: Algebra (globalState) before V3 (slot0) before V2
+    /// (getReserves); a contract that answers none stays unadmitted.
+    #[test]
+    fn test_probe_triplet_classification() {
+        let dead = r3(false, 0);
+        // Real UniV3 pool: globalState reverts, slot0 answers 7 words,
+        // getReserves reverts.
+        assert_eq!(
+            classify_probe_triplet(&dead, &r3(true, 7), &dead),
+            Some(Protocol::UniswapV3)
+        );
+        // Slipstream-style slot0 (6 words) still counts as V3.
+        assert_eq!(
+            classify_probe_triplet(&dead, &r3(true, 6), &dead),
+            Some(Protocol::UniswapV3)
+        );
+        // Algebra pool that also answers slot0 must classify Algebra —
+        // reading it as V3 would miss the dynamic fee.
+        assert_eq!(
+            classify_probe_triplet(&r3(true, 7), &r3(true, 7), &dead),
+            Some(Protocol::Algebra)
+        );
+        // Plain V2 pool.
+        assert_eq!(
+            classify_probe_triplet(&dead, &dead, &r3(true, 3)),
+            Some(Protocol::UniswapV2)
+        );
+        // Answered but empty returnData (bare fallback) doesn't count.
+        assert_eq!(
+            classify_probe_triplet(&dead, &r3(true, 0), &dead),
+            None
+        );
+        // Nothing answers → unadmitted.
+        assert_eq!(classify_probe_triplet(&dead, &dead, &dead), None);
+    }
+
+    /// LOCKED: aggregate3 batch resilience — a wholesale-failed chunk
+    /// must emit `success:false` placeholders (output len == call count,
+    /// order preserved), never zero out sibling chunks. Regression lock
+    /// for the measured Polygon wipe (6/52 pools priced because one
+    /// timed-out chunk nulled the whole V3 bucket).
+    #[test]
+    fn test_merge_aggregate3_parts_failed_chunk_only_drops_itself() {
+        let mk = |n: usize| {
+            (0..n)
+                .map(|i| IMulticall3::Call3 {
+                    target: addr(i as u8 + 1),
+                    allowFailure: true,
+                    callData: vec![0u8; 4].into(),
+                })
+                .collect::<Vec<_>>()
+        };
+        // 60 calls → 2 chunks of 30 (MC3_MAX_CALLS=30). Second chunk's
+        // transport dies.
+        let calls = mk(60);
+        let ok_part: Vec<IMulticall3::Result3> = (0..30).map(|_| r3(true, 1)).collect();
+        let merged = merge_aggregate3_parts(
+            calls.chunks(StateRefresher::MC3_MAX_CALLS),
+            vec![ok_part, Vec::new()],
+        );
+        assert_eq!(merged.len(), 60);
+        assert!(merged[..30].iter().all(|r| r.success));
+        assert!(merged[30..].iter().all(|r| !r.success));
+        // Chunk ordering is positional — a failed first chunk must not
+        // shift later chunks' results onto wrong calls.
+        let merged2 = merge_aggregate3_parts(
+            calls.chunks(StateRefresher::MC3_MAX_CALLS),
+            vec![Vec::new(), (0..30).map(|_| r3(true, 2)).collect()],
+        );
+        assert_eq!(merged2.len(), 60);
+        assert!(merged2[..30].iter().all(|r| !r.success));
+        assert!(merged2[30..].iter().all(|r| r.success && r.returnData.len() == 64));
+        // Empty tail: fewer parts than chunks (shouldn't happen, but
+        // zip must not panic or fabricate results).
+        let merged3 = merge_aggregate3_parts(
+            calls.chunks(StateRefresher::MC3_MAX_CALLS),
+            vec![(0..30).map(|_| r3(true, 1)).collect()],
+        );
+        assert_eq!(merged3.len(), 30);
     }
 }
