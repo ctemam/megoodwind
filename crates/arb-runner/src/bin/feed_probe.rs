@@ -12,11 +12,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use alloy_primitives::{Address, U256};
+use alloy::providers::Provider;
+use alloy::sol;
+use alloy_primitives::{address, Address, Bytes, U256};
+use alloy_sol_types::SolCall;
 use anyhow::Result;
 use serde::Deserialize;
 
-use arb_core::types::Protocol;
+use arb_core::types::{PoolState, Protocol};
+use arb_core::AmmQuoter;
 use arb_paths::{HopTemplate, PathTemplate};
 use arb_rpc::Endpoint;
 use arb_sim::optimize::path_max_flash;
@@ -27,6 +31,168 @@ use arb_state::{PoolStore, StateRefresher};
 #[path = "../config.rs"]
 mod config;
 
+
+sol! {
+    // UniV3-periphery QuoterV2 — same interface the feed lane's step-4b
+    // divergence check calls on-chain. A quoter resolves the pool from its
+    // own factory's create2: confirm factory.getPool == the hop pool first
+    // or a same-tokens-same-fee pool under another factory gets priced.
+    interface IV3QuoterV2 {
+        struct QuoteExactInputSingleParams {
+            address tokenIn;
+            address tokenOut;
+            uint256 amountIn;
+            uint24 fee;
+            uint160 sqrtPriceLimitX96;
+        }
+        function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+            external
+            returns (
+                uint256 amountOut,
+                uint160 sqrtPriceX96After,
+                uint32 initializedTicksCrossed,
+                uint256 gasEstimate
+            );
+    }
+    interface IV3Factory {
+        function getPool(address tokenA, address tokenB, uint24 fee)
+            external
+            view
+            returns (address pool);
+    }
+}
+
+// (QuoterV2, its V3 factory) — 1:1 with feed_lane::v3_quoters.
+fn v3_quoters(chain_id: u64) -> Vec<(Address, Address)> {
+    match chain_id {
+        56 => vec![
+            (
+                address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997"),
+                address!("0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"),
+            ),
+            (
+                address!("78D78E420Da98ad378D7799bE8f4AF69033EB077"),
+                address!("db1d10011ad0ff90774d0c6bb92e5c5c8b4461f7"),
+            ),
+        ],
+        1 | 137 | 42161 | 10 => vec![(
+            address!("61fFE014bA17989E743c5F6cB21bF9697530B21e"),
+            address!("1F98431c8aD98523631AE4a59f267346ea31F984"),
+        )],
+        _ => vec![],
+    }
+}
+
+async fn qv2_leg(
+    endpoint: &Endpoint,
+    quoter_cache: &mut HashMap<Address, Option<Address>>,
+    chain_id: u64,
+    pool: Address,
+    fee: u32,
+    token_in: Address,
+    token_out: Address,
+    amount_in: U256,
+) -> Option<U256> {
+    let params = IV3QuoterV2::QuoteExactInputSingleParams {
+        tokenIn: token_in,
+        tokenOut: token_out,
+        amountIn: amount_in,
+        fee: alloy_primitives::Uint::<24, 1>::from(fee),
+        sqrtPriceLimitX96: alloy_primitives::Uint::<160, 3>::ZERO,
+    };
+    let calldata = IV3QuoterV2::quoteExactInputSingleCall { params }.abi_encode();
+    let try_call = |q: Address| {
+        let calldata = calldata.clone();
+        let endpoint = endpoint;
+        async move {
+            let req = alloy::rpc::types::TransactionRequest::default()
+                .to(q)
+                .input(Bytes::from(calldata).into());
+            let raw = endpoint.provider().call(req).await.ok()?;
+            IV3QuoterV2::quoteExactInputSingleCall::abi_decode_returns(&raw)
+                .ok()
+                .map(|r| r.amountOut)
+        }
+    };
+    let owns_pool = |factory: Address| {
+        let endpoint = endpoint;
+        async move {
+            let calldata = IV3Factory::getPoolCall {
+                tokenA: token_in,
+                tokenB: token_out,
+                fee: alloy_primitives::Uint::<24, 1>::from(fee),
+            }
+            .abi_encode();
+            let req = alloy::rpc::types::TransactionRequest::default()
+                .to(factory)
+                .input(Bytes::from(calldata).into());
+            match endpoint.provider().call(req).await {
+                Ok(raw) => IV3Factory::getPoolCall::abi_decode_returns(&raw)
+                    .map(|r| r == pool)
+                    .unwrap_or(false),
+                Err(_) => false,
+            }
+        }
+    };
+    match quoter_cache.get(&pool) {
+        Some(&Some(q)) => return try_call(q).await,
+        Some(&None) => return None,
+        None => {}
+    }
+    for (q, factory) in v3_quoters(chain_id) {
+        if !owns_pool(factory).await {
+            continue;
+        }
+        if let Some(out) = try_call(q).await {
+            quoter_cache.insert(pool, Some(q));
+            return Some(out);
+        }
+    }
+    quoter_cache.insert(pool, None);
+    None
+}
+
+/// Chained round-trip output with UniV3 legs re-quoted on-chain via
+/// QuoterV2 (V2 stays local — constant-product is exact). None when a
+/// UniV3 leg has no answering quoter (Algebra/Slipstream/other factories).
+async fn qv2_round_trip(
+    endpoint: &Endpoint,
+    quoter_cache: &mut HashMap<Address, Option<Address>>,
+    chain_id: u64,
+    store: &PoolStore,
+    path: &PathTemplate,
+) -> Option<U256> {
+    let mut amount = path.flash_amount;
+    for hop in &path.hops {
+        let v3_fee = match store.get_ref(&hop.pool) {
+            Some(r) => match &*r {
+                PoolState::V3(s) if hop.protocol == Protocol::UniswapV3 => {
+                    Some(s.fee)
+                }
+                _ => None,
+            },
+            None => return None,
+        };
+        amount = match v3_fee {
+            Some(fee) => {
+                qv2_leg(endpoint, quoter_cache, chain_id, hop.pool, fee,
+                        hop.token_in, hop.token_out, amount).await?
+            }
+            None => {
+                let r = store.get_ref(&hop.pool)?;
+                match &*r {
+                    PoolState::V2(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::V3(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::Curve(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::Wombat(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::Dodo(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::AeroV2(s) => s.quote(hop.token_in, amount).ok()?,
+                }
+            }
+        };
+    }
+    Some(amount)
+}
 
 // ─── Feed response models (1:1 with feed_lane.rs) ──────────────────────────
 
@@ -454,6 +620,7 @@ async fn main() -> Result<()> {
 
     // ── Spread gate + fixed-size sim + optimal-size sim ──
     let mut reports: Vec<String> = Vec::new();
+    let mut quoter_cache: HashMap<Address, Option<Address>> = HashMap::new();
     for ((base, quote), mut group) in &mut by_pair {
         if group.len() < 2 { continue; }
         group.retain_mut(|p| {
@@ -519,6 +686,27 @@ async fn main() -> Result<()> {
         let _ = gas_usd;
         if gross_fixed > 0.0 && gross_fixed < cfg.feed.min_net_usd { f.net_fail_fixed += 1; }
         if opt_gross > 0.0 && opt_gross < cfg.feed.min_net_usd { f.net_fail_optimal += 1; }
+        // On-chain QuoterV2 truth for UniV3 legs — the local V3 quoter is
+        // constant-L single-tick; thin pools diverge far past the haircut.
+        let qv2 = qv2_round_trip(&endpoint, &mut quoter_cache, chain_id, &store, &path).await;
+        let qv2_note = match (qv2, &sim) {
+            (Some(out), Some(s)) => {
+                let real_gross = (out.saturating_sub(flash_amount).to::<u128>() as f64)
+                    / 10f64.powi(bdec as i32) * busd;
+                let sim_out = flash_amount + s.gross_profit;
+                let div = if !out.is_zero() {
+                    (sim_out.to::<u128>() as f64 - out.to::<u128>() as f64)
+                        / out.to::<u128>() as f64 * 1e4
+                } else { f64::INFINITY };
+                format!(" qv2=${:.2}({:+.0}bps)", real_gross, div)
+            }
+            (Some(out), None) => {
+                let real_gross = (out.saturating_sub(flash_amount).to::<u128>() as f64)
+                    / 10f64.powi(bdec as i32) * busd;
+                format!(" qv2=${:.2}(sim=fail)", real_gross)
+            }
+            (None, _) => " qv2=n/a".into(),
+        };
         // Stored-fee diagnostics: sim honesty depends on the fee the
         // refresher wrote into PoolState — print it next to each candidate.
         let fee_of = |a: Address| -> String {
@@ -530,9 +718,9 @@ async fn main() -> Result<()> {
             }
         };
         reports.push(format!(
-            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?} pools {}/{} fees[{}/{}]",
+            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?}{} pools {}/{} fees[{}/{}]",
             format!("{}", sym(*base)) + "/" + &sym(*quote),
-            din, dout, spread_bps, gross_fixed, opt_gross, opt_amt,
+            din, dout, spread_bps, gross_fixed, opt_gross, opt_amt, qv2_note,
             format!("{:.10}", format!("{pin:?}")), format!("{:.10}", format!("{pout:?}")),
             fee_of(pin), fee_of(pout),
         ));

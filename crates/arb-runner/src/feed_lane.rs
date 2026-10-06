@@ -19,7 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alloy::providers::Provider;
-use alloy_primitives::{Address, Bytes, U256};
+use alloy::sol;
+use alloy_primitives::{address, Address, Bytes, U256};
 use alloy_sol_types::SolCall;
 use serde::Deserialize;
 use tracing::{info, warn};
@@ -27,7 +28,8 @@ use tracing::{info, warn};
 use arb_core::opportunity::{
     ActionableOpportunity, ExecutionStatus, SimulationStatus,
 };
-use arb_core::types::Protocol;
+use arb_core::types::{PoolState, Protocol};
+use arb_core::AmmQuoter;
 use arb_paths::{HopTemplate, PathTemplate};
 use arb_rpc::Endpoint;
 use arb_sim::optimize::path_max_flash;
@@ -459,6 +461,9 @@ async fn run(args: FeedArgs) {
     let mut sniffed: HashMap<Address, Protocol> = HashMap::new();
     // Pools that reverted at exec — suppressed for 1h after 2 strikes.
     let mut suppressed: HashMap<Address, (u32, Instant)> = HashMap::new();
+    // pool -> QuoterV2 deployment that answers for it (None = every known
+    // quoter reverted — non-UniV3-factory V3 pool, skip the check).
+    let mut v3_quoter_cache: HashMap<Address, Option<Address>> = HashMap::new();
     // (borrow, pool_in, pool_out) re-eval cooldown.
     let mut cooldown: HashMap<(Address, Address, Address), Instant> = HashMap::new();
     // Pools already pushed into the refresher config.
@@ -876,8 +881,14 @@ async fn run(args: FeedArgs) {
                 Err(_) => 0.0,
             };
             for cand in &todo {
-                let fails =
-                    verify_and_submit(&args, cand, &mut next_id, gas_usd).await;
+                let fails = verify_and_submit(
+                    &args,
+                    cand,
+                    &mut next_id,
+                    gas_usd,
+                    &mut v3_quoter_cache,
+                )
+                .await;
                 if let Some((pool, strikes)) = fails {
                     let (n, _) = suppressed
                         .get(&pool)
@@ -1085,6 +1096,207 @@ async fn fetch(client: &reqwest::Client, url: &str) -> FetchOutcome {
     }
 }
 
+sol! {
+    // UniV3-periphery QuoterV2 — the industry-standard on-chain quoter.
+    // Non-view by design: it runs the real multi-tick swap under eth_call and
+    // returns the exact amountOut the pool would pay.
+    interface IV3QuoterV2 {
+        struct QuoteExactInputSingleParams {
+            address tokenIn;
+            address tokenOut;
+            uint256 amountIn;
+            uint24 fee;
+            uint160 sqrtPriceLimitX96;
+        }
+        function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+            external
+            returns (
+                uint256 amountOut,
+                uint160 sqrtPriceX96After,
+                uint32 initializedTicksCrossed,
+                uint256 gasEstimate
+            );
+    }
+    // UniV3-fork factory — getPool resolves the create2 address a quoter
+    // will price for (tokenA, tokenB, fee).
+    interface IV3Factory {
+        function getPool(address tokenA, address tokenB, uint24 fee)
+            external
+            view
+            returns (address pool);
+    }
+}
+
+/// (QuoterV2, its V3 factory) deployments per chain. A quoter silently
+/// resolves the pool from ITS OWN factory's create2 — for a (tokens, fee)
+/// tuple that also exists under another factory it would price the WRONG
+/// pool. `v3_leg_out` therefore confirms `factory.getPool(tin, tout, fee)
+/// == hop.pool` before trusting a quoter's answer.
+fn v3_quoters(chain_id: u64) -> Vec<(Address, Address)> {
+    match chain_id {
+        56 => vec![
+            (
+                address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997"), // PCS V3 QuoterV2
+                address!("0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"), // PCS V3 factory
+            ),
+            (
+                address!("78D78E420Da98ad378D7799bE8f4AF69033EB077"), // UniV3 QuoterV2 (BSC)
+                // its factory() reads back 0xdb1d…4461f7 — the community
+                // UniV3-BSC deployment DS tags "uniswap", NOT the newer
+                // canonical deploy at 0xdB1d…Ba9745.
+                address!("db1d10011ad0ff90774d0c6bb92e5c5c8b4461f7"),
+            ),
+        ],
+        // Canonical Uniswap v3 deployments share one address across chains.
+        1 | 137 | 42161 | 10 => vec![(
+            address!("61fFE014bA17989E743c5F6cB21bF9697530B21e"), // UniV3 QuoterV2
+            address!("1F98431c8aD98523631AE4a59f267346ea31F984"), // UniV3 factory
+        )],
+        _ => vec![],
+    }
+}
+
+async fn call_v3_quoter(
+    args: &FeedArgs,
+    quoter: Address,
+    calldata: &[u8],
+) -> Option<U256> {
+    let req = alloy::rpc::types::TransactionRequest::default()
+        .to(quoter)
+        .input(Bytes::copy_from_slice(calldata).into());
+    let raw = args.endpoint.provider().call(req).await.ok()?;
+    IV3QuoterV2::quoteExactInputSingleCall::abi_decode_returns(&raw)
+        .ok()
+        .map(|r| r.amountOut)
+}
+
+/// Does `factory` derive `pool` for (token_in, token_out, fee)? The check
+/// pins a quoter to the exact hop pool — a quoter for a foreign factory
+/// would otherwise price a same-tokens-same-fee pool that isn't ours.
+async fn factory_owns_pool(
+    args: &FeedArgs,
+    factory: Address,
+    pool: Address,
+    fee: u32,
+    token_in: Address,
+    token_out: Address,
+) -> bool {
+    let calldata = IV3Factory::getPoolCall {
+        tokenA: token_in,
+        tokenB: token_out,
+        fee: alloy_primitives::Uint::<24, 1>::from(fee),
+    }
+    .abi_encode();
+    let req = alloy::rpc::types::TransactionRequest::default()
+        .to(factory)
+        .input(Bytes::from(calldata).into());
+    match args.endpoint.provider().call(req).await {
+        Ok(raw) => IV3Factory::getPoolCall::abi_decode_returns(&raw)
+            .map(|r| r == pool)
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// One UniV3 leg's real output via eth_call to QuoterV2, at the chained
+/// sim amount. `cache` maps pool -> the quoter that answered (or None when
+/// every deployment reverted = pool isn't a UniV3-factory clone we know —
+/// Algebra, Slipstream, Sushi V3 — the leg then stays local and the
+/// revm exec-probe remains the gate).
+async fn v3_leg_out(
+    args: &FeedArgs,
+    cache: &mut HashMap<Address, Option<Address>>,
+    pool: Address,
+    fee: u32,
+    token_in: Address,
+    token_out: Address,
+    amount_in: U256,
+) -> Option<U256> {
+    let params = IV3QuoterV2::QuoteExactInputSingleParams {
+        tokenIn: token_in,
+        tokenOut: token_out,
+        amountIn: amount_in,
+        fee: alloy_primitives::Uint::<24, 1>::from(fee),
+        sqrtPriceLimitX96: alloy_primitives::Uint::<160, 3>::ZERO,
+    };
+    let calldata = IV3QuoterV2::quoteExactInputSingleCall { params }.abi_encode();
+    match cache.get(&pool) {
+        Some(&Some(q)) => return call_v3_quoter(args, q, &calldata).await,
+        Some(&None) => return None,
+        None => {}
+    }
+    for (q, factory) in v3_quoters(args.chain_id) {
+        if !factory_owns_pool(args, factory, pool, fee, token_in, token_out)
+            .await
+        {
+            continue;
+        }
+        if let Some(out) = call_v3_quoter(args, q, &calldata).await {
+            cache.insert(pool, Some(q));
+            return Some(out);
+        }
+    }
+    cache.insert(pool, None);
+    None
+}
+
+/// Re-quote the round trip with UniV3 legs priced on-chain: the local V3
+/// quoter is a constant-L single-tick approximation and on thin pools it
+/// overshoots real executable output far past its multi-tick haircut
+/// (measured +196…+100445bps vs QuoterV2 on live BSC pairs). V2 legs keep
+/// the local quote — constant-product is exact. Returns None when any
+/// UniV3 leg can't be resolved on-chain, so callers fall through to the
+/// exec-probe exactly as before.
+async fn onchain_round_trip_out(
+    args: &FeedArgs,
+    path: &PathTemplate,
+    cache: &mut HashMap<Address, Option<Address>>,
+) -> Option<U256> {
+    let mut amount = path.flash_amount;
+    for hop in &path.hops {
+        let v3 = match args.store.get_ref(&hop.pool) {
+            Some(r) => match &*r {
+                PoolState::V3(s) if hop.protocol == Protocol::UniswapV3 => {
+                    Some(s.fee)
+                }
+                _ => None,
+            },
+            None => return None,
+        };
+        amount = match v3 {
+            Some(fee) => {
+                v3_leg_out(
+                    args,
+                    cache,
+                    hop.pool,
+                    fee,
+                    hop.token_in,
+                    hop.token_out,
+                    amount,
+                )
+                .await?
+            }
+            None => {
+                // Same zero-copy quote dispatch as evaluate_path.
+                let pool_ref = args.store.get_ref(&hop.pool)?;
+                match &*pool_ref {
+                    PoolState::V2(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::V3(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::Curve(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::Wombat(s) => {
+                        s.quote(hop.token_in, amount).ok()?
+                    }
+                    PoolState::Dodo(s) => s.quote(hop.token_in, amount).ok()?,
+                    PoolState::AeroV2(s) => {
+                        s.quote(hop.token_in, amount).ok()?
+                    }
+                }
+            }
+        };
+    }
+    Some(amount)
+}
+
 /// Steps 3+4: local sim on the cycle's merged refresh → eth_call probe →
 /// venue submit. `gas_usd` is the cycle-level gas estimate — pools were
 /// already registered and refreshed once for all candidates.
@@ -1094,6 +1306,7 @@ async fn verify_and_submit(
     c: &FeedCandidate,
     next_id: &mut u32,
     gas_usd: f64,
+    v3_quoter_cache: &mut HashMap<Address, Option<Address>>,
 ) -> Option<(Address, u32)> {
     let mut opp = ActionableOpportunity::new(
         &args.chain,
@@ -1209,6 +1422,49 @@ async fn verify_and_submit(
             .with_label_values(&[&args.chain, "net_floor"])
             .inc();
         return None;
+    }
+
+    // Step 4b — on-chain truth for V3 legs. The local V3 quoter is a
+    // constant-L single-tick approximation whose error blows past its
+    // multi-tick haircut on thin pools (measured +196…+100445bps vs
+    // QuoterV2 on live BSC pairs). Re-quote UniV3 legs on-chain at the
+    // sim's chained amounts; if the real round trip can't cover min_net,
+    // die here — one eth_call per V3 leg instead of a revm probe plus a
+    // cooldown slot. No pool strike: the divergence is our model's error,
+    // not the pool's. Legs whose factory has no known quoter stay local
+    // and fall through to the exec-probe as before.
+    if let Some(real_out) =
+        onchain_round_trip_out(args, &path, v3_quoter_cache).await
+    {
+        let real_gross_usd = (real_out.saturating_sub(flash_amount).to::<u128>()
+            as f64)
+            / 10f64.powi(borrow_dec as i32)
+            * borrow_usd;
+        if real_gross_usd - gas_usd < args.cfg.min_net_usd {
+            let sim_out = flash_amount + sim.gross_profit;
+            let div_bps = if !real_out.is_zero() {
+                (sim_out.to::<u128>() as f64 - real_out.to::<u128>() as f64)
+                    / real_out.to::<u128>() as f64
+                    * 1e4
+            } else {
+                f64::INFINITY
+            };
+            opp.simulation_status = SimulationStatus::Fail;
+            opp.rejection_reason = "v3_quoter_divergence".into();
+            let _ = opp.append_jsonl(&args.data_dir);
+            metrics::FEED_REJECTS
+                .with_label_values(&[&args.chain, "v3_quoter_divergence"])
+                .inc();
+            info!(
+                chain = %args.chain,
+                pair = %c.pair_label,
+                div_bps,
+                sim_net_usd = gross_usd - gas_usd,
+                onchain_net_usd = real_gross_usd - gas_usd,
+                "feed: rejected on QuoterV2 divergence"
+            );
+            return None;
+        }
     }
 
     // Build the executor call — same executeV4Arbitrage entry point as the
@@ -1575,6 +1831,46 @@ mod tests {
         assert_eq!(store_fee_bps(&store, pool_v2), 25.0);
         assert_eq!(store_fee_bps(&store, pool_v3), 30.0, "3000 hundredths-bip = 30bps");
         assert_eq!(store_fee_bps(&store, Address::from([7u8; 20])), 30.0);
+    }
+
+    // Locked (2026-10-06): UniV3 legs in feed candidates are re-quoted
+    // on-chain via QuoterV2 before exec — the local constant-L V3 quoter
+    // overestimates executable output on thin pools far past its haircut
+    // (measured +196…+100445bps vs QuoterV2 on live BSC pairs). A quoter
+    // resolves the pool from ITS factory's create2, so each entry pairs a
+    // quoter with its factory and `factory_owns_pool` confirms the hop's
+    // pool is the exact deployment the quoter would price.
+    #[test]
+    fn v3_quoters_pairs_each_deployment_with_its_factory() {
+        let bsc = v3_quoters(56);
+        assert_eq!(bsc.len(), 2);
+        assert_eq!(
+            bsc[0],
+            (
+                address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997"),
+                address!("0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"),
+            ),
+            "PCS V3 QuoterV2 + factory"
+        );
+        assert_eq!(
+            bsc[1],
+            (
+                address!("78D78E420Da98ad378D7799bE8f4AF69033EB077"),
+                address!("db1d10011ad0ff90774d0c6bb92e5c5c8b4461f7"),
+            ),
+            "Uniswap V3 QuoterV2 + factory on BSC"
+        );
+        for chain in [1u64, 137, 42161, 10] {
+            assert_eq!(
+                v3_quoters(chain),
+                vec![(
+                    address!("61fFE014bA17989E743c5F6cB21bF9697530B21e"),
+                    address!("1F98431c8aD98523631AE4a59f267346ea31F984"),
+                )],
+                "canonical UniV3 QuoterV2 + factory on chain {chain}"
+            );
+        }
+        assert!(v3_quoters(8453).is_empty(), "unmapped chain → skip check");
     }
 
 }
