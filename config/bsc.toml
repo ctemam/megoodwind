@@ -1024,7 +1024,13 @@ min_spread_bps     = 5.0
 max_spread_bps     = 200.0
 min_liquidity_usd  = 50000.0
 min_h1_txns        = 3
-max_notional_usd   = 2000.0
+# Deep-pool thin edges scale ~linearly with size (measured round-trip
+# cost 29.5->35.7bps over $500->$16k on USDT/WBNB — fee-dominated, impact
+# grows slowly). Borrow is PCS V4 take/settle at 0% premium, contract
+# minProfitBasisPoints=0, and minOut=flash_amount makes oversizing
+# revert-safe. 4x headroom lets the optimizer peak above the gas+min_net
+# floor on deep pools; thin pools stay capped by pool_share_bps.
+max_notional_usd   = 8000.0
 pool_share_bps     = 1500.0
 min_net_usd        = 1.0
 [[pools]]

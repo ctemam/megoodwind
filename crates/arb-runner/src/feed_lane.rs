@@ -1173,6 +1173,8 @@ async fn call_v3_quoter(
 /// Does `factory` derive `pool` for (token_in, token_out, fee)? The check
 /// pins a quoter to the exact hop pool — a quoter for a foreign factory
 /// would otherwise price a same-tokens-same-fee pool that isn't ours.
+/// Returns None on transport failure — a timed-out call is not evidence
+/// the pool isn't there, and must not poison the quoter cache.
 async fn factory_owns_pool(
     args: &FeedArgs,
     factory: Address,
@@ -1180,7 +1182,7 @@ async fn factory_owns_pool(
     fee: u32,
     token_in: Address,
     token_out: Address,
-) -> bool {
+) -> Option<bool> {
     let calldata = IV3Factory::getPoolCall {
         tokenA: token_in,
         tokenB: token_out,
@@ -1190,12 +1192,12 @@ async fn factory_owns_pool(
     let req = alloy::rpc::types::TransactionRequest::default()
         .to(factory)
         .input(Bytes::from(calldata).into());
-    match args.endpoint.provider().call(req).await {
-        Ok(raw) => IV3Factory::getPoolCall::abi_decode_returns(&raw)
+    let raw = args.endpoint.provider().call(req).await.ok()?;
+    Some(
+        IV3Factory::getPoolCall::abi_decode_returns(&raw)
             .map(|r| r == pool)
             .unwrap_or(false),
-        Err(_) => false,
-    }
+    )
 }
 
 /// One UniV3 leg's real output via eth_call to QuoterV2, at the chained
@@ -1225,18 +1227,28 @@ async fn v3_leg_out(
         Some(&None) => return None,
         None => {}
     }
+    // Hits are cached; misses are NOT — a transport failure must not
+    // permanently strip the on-chain check from a pool (same policy as
+    // `sniffed`). Only a run where every factory definitively answered
+    // "not mine" earns the None cache.
+    let mut saw_transport_err = false;
     for (q, factory) in v3_quoters(args.chain_id) {
-        if !factory_owns_pool(args, factory, pool, fee, token_in, token_out)
+        match factory_owns_pool(args, factory, pool, fee, token_in, token_out)
             .await
         {
-            continue;
-        }
-        if let Some(out) = call_v3_quoter(args, q, &calldata).await {
-            cache.insert(pool, Some(q));
-            return Some(out);
+            Some(true) => {
+                if let Some(out) = call_v3_quoter(args, q, &calldata).await {
+                    cache.insert(pool, Some(q));
+                    return Some(out);
+                }
+            }
+            Some(false) => {}
+            None => saw_transport_err = true,
         }
     }
-    cache.insert(pool, None);
+    if !saw_transport_err {
+        cache.insert(pool, None);
+    }
     None
 }
 

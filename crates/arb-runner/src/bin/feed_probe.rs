@@ -127,10 +127,12 @@ async fn qv2_leg(
                 .to(factory)
                 .input(Bytes::from(calldata).into());
             match endpoint.provider().call(req).await {
-                Ok(raw) => IV3Factory::getPoolCall::abi_decode_returns(&raw)
-                    .map(|r| r == pool)
-                    .unwrap_or(false),
-                Err(_) => false,
+                Ok(raw) => Some(
+                    IV3Factory::getPoolCall::abi_decode_returns(&raw)
+                        .map(|r| r == pool)
+                        .unwrap_or(false),
+                ),
+                Err(_) => None,
             }
         }
     };
@@ -139,16 +141,24 @@ async fn qv2_leg(
         Some(&None) => return None,
         None => {}
     }
+    // Misses are not cached on transport failure — same policy as
+    // feed_lane's `sniffed`: a dead endpoint isn't evidence.
+    let mut saw_transport_err = false;
     for (q, factory) in v3_quoters(chain_id) {
-        if !owns_pool(factory).await {
-            continue;
-        }
-        if let Some(out) = try_call(q).await {
-            quoter_cache.insert(pool, Some(q));
-            return Some(out);
+        match owns_pool(factory).await {
+            Some(true) => {
+                if let Some(out) = try_call(q).await {
+                    quoter_cache.insert(pool, Some(q));
+                    return Some(out);
+                }
+            }
+            Some(false) => {}
+            None => saw_transport_err = true,
         }
     }
-    quoter_cache.insert(pool, None);
+    if !saw_transport_err {
+        quoter_cache.insert(pool, None);
+    }
     None
 }
 
@@ -686,6 +696,49 @@ async fn main() -> Result<()> {
         let _ = gas_usd;
         if gross_fixed > 0.0 && gross_fixed < cfg.feed.min_net_usd { f.net_fail_fixed += 1; }
         if opt_gross > 0.0 && opt_gross < cfg.feed.min_net_usd { f.net_fail_optimal += 1; }
+        // Net-vs-size curve — answers whether ANY flash_amount clears the
+        // gas floor for thin-positive edges (fleet observed $0.015–$0.041
+        // nets dying at ~$0.046). Local curve = what find_optimal_amount
+        // sees; qv2 curve = on-chain truth at the same sizes, so the peak
+        // and its position are measured, not modeled.
+        let gas_floor = 0.046f64; // fleet-reported net floor this window
+        // Uncapped ceiling: path_max_flash's default_max arg is the $2k
+        // notional — the optimizer never sees sizes above it. Scan a
+        // depth-only bound (20x notional cap) so a peak above $2k is
+        // visible and means "config cap blocks a real edge".
+        let uncapped_max =
+            path_max_flash(&path, &store, 0.05, flash_amount * U256::from(20u64));
+        let mut peak_local = 0.0f64;
+        let mut peak_local_amt = U256::ZERO;
+        let mut peak_qv2 = f64::MIN;
+        let mut peak_qv2_amt = U256::ZERO;
+        for i in 0..=6u32 {
+            if uncapped_max <= min_amt { break; }
+            let amt = min_amt
+                + (uncapped_max - min_amt) * U256::from(i) / U256::from(6u32);
+            let curve_path = mkpath(amt);
+            if let Some(s) = evaluate_path(&curve_path, &store) {
+                let g = (s.gross_profit.to::<u128>() as f64)
+                    / 10f64.powi(bdec as i32) * busd;
+                if g > peak_local { peak_local = g; peak_local_amt = amt; }
+            }
+            if let Some(out) = qv2_round_trip(
+                &endpoint, &mut quoter_cache, chain_id, &store, &curve_path,
+            ).await {
+                let g = (out.saturating_sub(amt).to::<u128>() as f64)
+                    / 10f64.powi(bdec as i32) * busd;
+                if g > peak_qv2 { peak_qv2 = g; peak_qv2_amt = amt; }
+            }
+        }
+        let curve_note = format!(
+            " peak[local=${:.3}@{:.0} qv2={}@{:.0}]{}",
+            peak_local,
+            (peak_local_amt.to::<u128>() as f64) / 10f64.powi(bdec as i32),
+            if peak_qv2 == f64::MIN { "n/a".into() } else { format!("${:.3}", peak_qv2) },
+            (peak_qv2_amt.to::<u128>() as f64) / 10f64.powi(bdec as i32),
+            if peak_qv2 > gas_floor + cfg.feed.min_net_usd { " RESCUES" }
+            else if peak_qv2 > 0.0 { " (no size clears gas)" } else { "" },
+        );
         // On-chain QuoterV2 truth for UniV3 legs — the local V3 quoter is
         // constant-L single-tick; thin pools diverge far past the haircut.
         let qv2 = qv2_round_trip(&endpoint, &mut quoter_cache, chain_id, &store, &path).await;
@@ -718,9 +771,10 @@ async fn main() -> Result<()> {
             }
         };
         reports.push(format!(
-            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?}{} pools {}/{} fees[{}/{}]",
+            "  cand {} ({}→{}): spread={:.1}bps fixed=${:.2} opt=${:.2}@{:?}{}{} pools {}/{} fees[{}/{}]",
             format!("{}", sym(*base)) + "/" + &sym(*quote),
             din, dout, spread_bps, gross_fixed, opt_gross, opt_amt, qv2_note,
+            curve_note,
             format!("{:.10}", format!("{pin:?}")), format!("{:.10}", format!("{pout:?}")),
             fee_of(pin), fee_of(pout),
         ));
