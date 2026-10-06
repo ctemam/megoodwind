@@ -701,7 +701,10 @@ async fn main() -> Result<()> {
         // nets dying at ~$0.046). Local curve = what find_optimal_amount
         // sees; qv2 curve = on-chain truth at the same sizes, so the peak
         // and its position are measured, not modeled.
-        let gas_floor = 0.046f64; // fleet-reported net floor this window
+        // Net floor under sponsored UserOps: gas is paid by the paymaster
+        // (89fe6bb zeroes the margin), so the floor is min_net_usd alone
+        // ($0.01). Non-sponsored chains would add gas_usd here.
+        let floor = cfg.feed.min_net_usd;
         // Uncapped ceiling: path_max_flash's default_max arg is the $2k
         // notional — the optimizer never sees sizes above it. Scan a
         // depth-only bound (20x notional cap) so a peak above $2k is
@@ -736,8 +739,8 @@ async fn main() -> Result<()> {
             (peak_local_amt.to::<u128>() as f64) / 10f64.powi(bdec as i32),
             if peak_qv2 == f64::MIN { "n/a".into() } else { format!("${:.3}", peak_qv2) },
             (peak_qv2_amt.to::<u128>() as f64) / 10f64.powi(bdec as i32),
-            if peak_qv2 > gas_floor + cfg.feed.min_net_usd { " RESCUES" }
-            else if peak_qv2 > 0.0 { " (no size clears gas)" } else { "" },
+            if peak_qv2 > floor { " RESCUES" }
+            else if peak_qv2 > 0.0 { " (below net floor)" } else { "" },
         );
         // On-chain QuoterV2 truth for UniV3 legs — the local V3 quoter is
         // constant-L single-tick; thin pools diverge far past the haircut.
