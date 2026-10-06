@@ -1145,6 +1145,14 @@ fn spawn_pool_hot_reload(
     config_path: String,
     chain: String,
     known_pools: HashSet<Address>,
+    routing: Arc<tokio::sync::RwLock<RoutingTables>>,
+    pool_infos: Arc<RwLock<Vec<PoolInfo>>>,
+    flash_tokens: Vec<Address>,
+    flash_amounts: HashMap<Address, U256>,
+    chain_id: u64,
+    v4_keys: HashMap<Address, arb_paths::template::V4Key>,
+    quarantined: Arc<RwLock<HashSet<Address>>>,
+    circuit_breaker: Arc<std::sync::Mutex<PathCircuitBreaker>>,
 ) {
     tokio::spawn(async move {
         let mut known = known_pools;
@@ -1181,6 +1189,7 @@ fn spawn_pool_hot_reload(
             .unwrap_or_default();
             let mut new_cfgs: Vec<PoolConfig> = Vec::new();
             let mut new_addrs: Vec<Address> = Vec::new();
+            let mut new_pool_infos: Vec<PoolInfo> = Vec::new();
             for p in &re_cfg.pools {
                 let Ok(addr) = p.pseudo_address() else { continue };
                 if bait_set.contains(&addr) {
@@ -1208,6 +1217,13 @@ fn spawn_pool_hot_reload(
                     token0: Some(t0),
                     token1: Some(t1),
                 });
+                new_pool_infos.push(PoolInfo {
+                    address: addr,
+                    protocol,
+                    token0: t0,
+                    token1: t1,
+                    liquidity_hint: 0.0,
+                });
                 let key = if t0 < t1 { (t0, t1) } else { (t1, t0) };
                 pair_to_pools
                     .write()
@@ -1225,6 +1241,29 @@ fn spawn_pool_hot_reload(
             let warmed = refresher.refresh_pools(&store, &new_addrs).await;
             metrics::POOLS_HOT.with_label_values(&[&chain]).inc_by(added as f64);
             info!(added, warmed, tracked = known.len(), "Hot-loaded discovered pools");
+
+            // Rebuild cyclic routing so discovered pools can actually
+            // form paths — startup enumeration was frozen, so merged
+            // pools could feed victim projection but never carry a
+            // cyclic arb themselves. Path ids are positional; the path
+            // breaker is index-keyed, so it resets with the new table.
+            // std-guard work finishes before the routing write await —
+            // holding a std RwLock guard across .await is !Send.
+            let tables = {
+                let mut infos = pool_infos.write().unwrap();
+                infos.extend(new_pool_infos);
+                {
+                    let q = quarantined.read().unwrap();
+                    infos.retain(|pi| !q.contains(&pi.address));
+                }
+                build_routing_tables(
+                    &infos, &flash_tokens, &flash_amounts, chain_id, &v4_keys,
+                )
+            };
+            let n_paths = tables.paths.len();
+            *routing.write().await = tables;
+            *circuit_breaker.lock().unwrap() = PathCircuitBreaker::new();
+            info!(paths = n_paths, "Routing tables rebuilt with hot-loaded pools");
         }
     });
 }
@@ -1237,6 +1276,44 @@ fn spawn_pool_hot_reload(
 /// used to leave victims ~1-2s old at first eval, which is the race
 /// window competitors close in.
 ///
+/// Cyclic routing state: paths, the pool->paths index, and the presigned
+/// calldata pool are all keyed by the same enumeration, so they must swap
+/// atomically when hot-loaded pools join — a mismatched presign pool
+/// would sign calldata for a different path's route.
+struct RoutingTables {
+    paths: Vec<PathTemplate>,
+    pool_to_paths: HashMap<Address, Vec<usize>>,
+    presign_pool: PresignPool,
+}
+
+/// Rebuild the full routing set from the pool graph. Path ids are
+/// positional (path_id indexes into `paths`), so every consumer must go
+/// through the same generation — callers holding a read guard see one
+/// consistent snapshot.
+fn build_routing_tables(
+    pool_infos: &[PoolInfo],
+    flash_tokens: &[Address],
+    flash_amounts: &HashMap<Address, U256>,
+    chain_id: u64,
+    v4_keys: &HashMap<Address, arb_paths::template::V4Key>,
+) -> RoutingTables {
+    let paths = PathEnumerator::new(
+        pool_infos.to_vec(),
+        flash_tokens.to_vec(),
+        flash_amounts.clone(),
+    )
+    .with_limits(spec::MAX_PATH_HOPS, 25_000, 200)
+    .enumerate();
+    let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
+    for (idx, path) in paths.iter().enumerate() {
+        for hop in &path.hops {
+            pool_to_paths.entry(hop.pool).or_default().push(idx);
+        }
+    }
+    let presign_pool = PresignPool::new_with_v4(&paths, chain_id, v4_keys);
+    RoutingTables { paths, pool_to_paths, presign_pool }
+}
+
 /// The mutable singletons (breakers, profit gate, smart account) sit
 /// behind std::sync::Mutex shared with the block loop; every use is a
 /// statement-scoped CPU op, never held across .await.
@@ -1245,7 +1322,7 @@ struct BackrunCtx {
     refresher: Arc<StateRefresher>,
     endpoint: Arc<Endpoint>,
     cfg: Arc<AppConfig>,
-    paths: Arc<Vec<PathTemplate>>,
+    routing: Arc<tokio::sync::RwLock<RoutingTables>>,
     ready_templates: Arc<Vec<(String, std::collections::HashSet<Address>)>>,
     leader_observer: Option<arb_leaders::LeaderObserver>,
     copy_lane: Option<crate::copy_lane::CopyLane>,
@@ -1254,11 +1331,9 @@ struct BackrunCtx {
     token_decimals: Arc<RwLock<HashMap<Address, u32>>>,
     flash_bounds: Arc<HashMap<Address, (U256, U256)>>,
     quarantined: Arc<RwLock<HashSet<Address>>>,
-    pool_to_paths: Arc<HashMap<Address, Vec<usize>>>,
     optimization_iterations: usize,
     dry_run: bool,
     router: Arc<arb_submit::router::VenueRouter>,
-    presign_pool: Arc<PresignPool>,
     signers: Arc<Vec<PrivateKeySigner>>,
     signer_rot: Arc<std::sync::atomic::AtomicUsize>,
     pimlico_venue: Option<PimlicoSubmitter>,
@@ -1282,7 +1357,11 @@ async fn backrun_pass(
     let refresher = &ctx.refresher;
     let endpoint = &ctx.endpoint;
     let cfg = &ctx.cfg;
-    let paths = &ctx.paths;
+    // One consistent routing snapshot for the whole pass — the read
+    // guard is a tokio RwLock (Send across awaits); hot-loaded pool
+    // merges wait out this pass before swapping tables.
+    let rt = ctx.routing.read().await;
+    let paths = &rt.paths;
     let ready_templates = &ctx.ready_templates;
     let leader_observer = &ctx.leader_observer;
     let copy_lane = &ctx.copy_lane;
@@ -1291,11 +1370,11 @@ async fn backrun_pass(
     let token_decimals = ctx.token_decimals.read().unwrap().clone();
     let flash_bounds = &ctx.flash_bounds;
     let quarantined = &ctx.quarantined;
-    let pool_to_paths = &ctx.pool_to_paths;
+    let pool_to_paths = &rt.pool_to_paths;
     let optimization_iterations = ctx.optimization_iterations;
     let dry_run = ctx.dry_run;
     let router = &ctx.router;
-    let presign_pool = &ctx.presign_pool;
+    let presign_pool = &rt.presign_pool;
     let signers = &ctx.signers;
     let signer_rot = &ctx.signer_rot;
     let pimlico_venue = &ctx.pimlico_venue;
@@ -1801,7 +1880,7 @@ async fn backrun_pass(
                             let submit_signer = &signers[signer_rot
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                                 % signers.len()];
-                            if let Ok(mut bundle) = presign_pool.build_fast(
+                            if let Ok(mut bundle) = rt.presign_pool.build_fast(
                                 path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
                             ).await {
                                 if cfg.submission.strict_4337 {
@@ -2376,19 +2455,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     let pair_to_pools = Arc::new(RwLock::new(pair_to_pools));
     let pool_tokens = Arc::new(RwLock::new(pool_tokens));
     let known_pools: HashSet<Address> = pool_infos.iter().map(|p| p.address).collect();
-    spawn_pool_hot_reload(
-        Arc::clone(&refresher),
-        Arc::clone(&store),
-        Arc::clone(&pair_to_pools),
-        Arc::clone(&pool_tokens),
-        config_path.to_string(),
-        chain_name.clone(),
-        known_pools,
-    );
     let mut quarantined: std::collections::HashSet<Address> =
         std::collections::HashSet::new();
 
-    let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
+    // Shared pool graph — the hot-reload task appends merged pools here
+    // and rebuilds routing tables from the full list.
+    let pool_infos = Arc::new(RwLock::new(pool_infos));
+    let enumerator = PathEnumerator::new(
+        pool_infos.read().unwrap().clone(),
+        flash_tokens.clone(),
+        flash_amounts.clone(),
+    )
         .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
     let paths = enumerator.enumerate();
     info!(total_paths = paths.len(), max_hops = spec::MAX_PATH_HOPS, "Path enumeration complete");
@@ -2776,12 +2853,14 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     // the next block tick (~1-2s of dead latency removed from the race
     // window). Mutexes are std::sync (CPU-scoped holds, never over .await).
     let cfg = Arc::new(cfg);
-    let paths = Arc::new(paths);
+    let routing = Arc::new(tokio::sync::RwLock::new(RoutingTables {
+        paths,
+        pool_to_paths,
+        presign_pool,
+    }));
     let ready_templates = Arc::new(ready_templates);
-    let pool_to_paths = Arc::new(pool_to_paths);
     let quarantined = Arc::new(RwLock::new(quarantined));
     let flash_bounds = Arc::new(flash_bounds);
-    let presign_pool = Arc::new(presign_pool);
     let signers = Arc::new(signers);
     let signer_rot = Arc::new(signer_rot);
     let circuit_breaker = Arc::new(std::sync::Mutex::new(circuit_breaker));
@@ -2796,7 +2875,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         refresher: refresher.clone(),
         endpoint: endpoint.clone(),
         cfg: cfg.clone(),
-        paths: paths.clone(),
+        routing: routing.clone(),
         ready_templates,
         leader_observer,
         copy_lane,
@@ -2805,11 +2884,9 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         token_decimals: token_decimals.clone(),
         flash_bounds: flash_bounds.clone(),
         quarantined: quarantined.clone(),
-        pool_to_paths,
         optimization_iterations,
         dry_run,
         router: router.clone(),
-        presign_pool: presign_pool.clone(),
         signers: signers.clone(),
         signer_rot: signer_rot.clone(),
         pimlico_venue: pimlico_venue.clone(),
@@ -2823,6 +2900,24 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         smart_account: smart_account.clone(),
         latest_block: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     });
+
+    spawn_pool_hot_reload(
+        Arc::clone(&refresher),
+        Arc::clone(&store),
+        Arc::clone(&pair_to_pools),
+        Arc::clone(&pool_tokens),
+        config_path.to_string(),
+        chain_name.clone(),
+        known_pools,
+        routing.clone(),
+        pool_infos.clone(),
+        flash_tokens.clone(),
+        flash_amounts.clone(),
+        cfg.chain.chain_id,
+        v4_keys.clone(),
+        quarantined.clone(),
+        circuit_breaker.clone(),
+    );
     {
         let ctx = backrun_ctx.clone();
         tokio::spawn(async move {
@@ -2923,9 +3018,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         }
 
         // === Two-pass evaluate-then-optimize ===
-        let initial_results = evaluate_all(&paths, &store);
+        // One routing snapshot per block: paths / pool_to_paths /
+        // presign_pool swap atomically when hot-loaded pools rebuild.
+        let rt = routing.read().await;
+        let initial_results = evaluate_all(&rt.paths, &store);
         let pass1_count = initial_results.len();
-        metrics::PATHS_EVALUATED.inc_by(paths.len() as f64);
+        metrics::PATHS_EVALUATED.inc_by(rt.paths.len() as f64);
 
         // Stale-state filter: pools whose refresh keeps failing (timeouts,
         // RPC blacklists) hold old ticks that fabricate spreads — paths
@@ -2934,12 +3032,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         let stale_filtered = initial_results.into_iter()
             .filter(|r| r.profit_bps >= min_initial_bps)
             .filter(|r| !circuit_breaker.lock().unwrap().is_suppressed(r.path_id, block_number))
-            .filter(|r| !token_breaker.lock().unwrap().is_path_token_suppressed(&paths[r.path_id as usize], block_number))
+            .filter(|r| !token_breaker.lock().unwrap().is_path_token_suppressed(&rt.paths[r.path_id as usize], block_number))
             .collect::<Vec<_>>();
         let (stale_hit, candidates): (Vec<_>, Vec<_>) = stale_filtered
             .into_iter()
             .partition(|r| {
-                paths[r.path_id as usize]
+                rt.paths[r.path_id as usize]
                     .hops
                     .iter()
                     .any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS))
@@ -2953,7 +3051,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             metrics::PROFITABLE_FOUND.inc_by(candidates.len() as f64);
             for c in &candidates {
                 let sym = token_syms
-                    .get(&paths[c.path_id as usize].flash_token)
+                    .get(&rt.paths[c.path_id as usize].flash_token)
                     .map(String::as_str)
                     .unwrap_or("?");
                 metrics::PROFITABLE_BY_TOKEN.with_label_values(&[sym]).inc();
@@ -2971,7 +3069,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 candidates
                     .par_iter()
                     .map(|candidate| {
-                        let path = &paths[candidate.path_id as usize];
+                        let path = &rt.paths[candidate.path_id as usize];
                         let (min_amt, token_max) = flash_bounds.get(&path.flash_token).copied()
                             .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
                         let liquidity_max = path_max_flash(path, &store, 0.05, token_max);
@@ -3010,7 +3108,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                     metrics::GATE_REJECTS.with_label_values(&[label]).inc();
                 }
                 let Some((opt_result, decision)) = res else { continue };
-                let path = &paths[candidate.path_id as usize];
+                let path = &rt.paths[candidate.path_id as usize];
                 optimized_count += 1;
                 metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
                 if let Some(reason) = decision.reject_reason {
@@ -3042,7 +3140,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             }
 
             if let Some((best, effective_usd)) = best_result {
-                let hop_pools: Vec<String> = paths[best_path_idx]
+                let hop_pools: Vec<String> = rt.paths[best_path_idx]
                     .hops
                     .iter()
                     .map(|h| format!("{}", h.pool))
@@ -3054,7 +3152,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 // "actionable" must always mean "ready to execute".
                 let mut logged_opp = log_accepted_opportunity(
                     chain_label, "classic", "classic_engine",
-                    &format!("blk{block_number}"), &paths[best_path_idx],
+                    &format!("blk{block_number}"), &rt.paths[best_path_idx],
                     effective_usd, best.profit_bps, false);
                 let feed_dir = format!("data/leaders/{chain_label}");
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
@@ -3066,13 +3164,13 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 if !dry_run && executor_broken {
                     // Skip — the executor reverts in simulation; nothing lands.
                 } else if !dry_run && cfg.lanes.classic_arb {
-                    let optimized_path = &paths[best_path_idx];
+                    let optimized_path = &rt.paths[best_path_idx];
 
                     let target_block = block_number + 3;
                     let submit_signer = &signers[signer_rot
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                         % signers.len()];
-                    match presign_pool.build_fast(
+                    match rt.presign_pool.build_fast(
                         best.path_id, best.flash_amount, &endpoint, arb_contract, submit_signer, target_block,
                     ).await {
                         Ok(bundle) => {
@@ -3142,13 +3240,13 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                                 if reason == "pool_revert" {
                                                     token_breaker.lock().unwrap()
                                                         .flag_bait_pools_hard(
-                                                            &paths[best_path_idx],
+                                                            &rt.paths[best_path_idx],
                                                             block_number,
                                                         );
                                                 } else {
                                                     token_breaker.lock().unwrap()
                                                         .record_revert_for_path(
-                                                            &paths[best_path_idx],
+                                                            &rt.paths[best_path_idx],
                                                             block_number,
                                                         );
                                                 }
@@ -3380,7 +3478,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                         let submit_signer = &signers[signer_rot
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                             % signers.len()];
-                        match presign_pool
+                        match rt.presign_pool
                             .build_fast(best.path_id, best.flash_amount, &endpoint,
                                 arb_contract, submit_signer, target_block)
                             .await
@@ -3399,7 +3497,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                     // (each preview is a bundler call + seconds of budget).
                                     if e.to_string().contains("exec_revert") {
                                         circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
-                                        if let Some(p) = paths.iter().find(|p| p.id == best.path_id) {
+                                        if let Some(p) = rt.paths.iter().find(|p| p.id == best.path_id) {
                                             token_breaker.lock().unwrap().record_revert_for_path(p, block_number);
                                         }
                                     }
