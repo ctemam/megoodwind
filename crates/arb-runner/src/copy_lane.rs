@@ -30,6 +30,7 @@ use alloy_sol_types::SolCall;
 use arb_leaders::{LeaderRegistry, LeadersConfig};
 use arb_mempool::watcher::PendingSwap;
 use arb_core::types::PoolState;
+use arb_core::AmmQuoter;
 use arb_state::PoolStore;
 use arb_submit::router::VenueRouter;
 use arb_submit::{Bundle, UserOpCall};
@@ -342,13 +343,16 @@ impl CopyLane {
             let (a, _b) = (pair[0], pair[1]);
             let (pool_addr, _) = hops[i];
             let state = self.store.get(&pool_addr)?;
-            let PoolState::V2(v2) = state else { return None };
-            let (r_in, r_out) = if v2.token0 == a {
-                (v2.reserve0, v2.reserve1)
-            } else {
-                (v2.reserve1, v2.reserve0)
+            // Same AmmQuoter dispatch as evaluate_path — mirrored swaps
+            // through V3/other registered pools must not die unpriced.
+            amt = match &state {
+                PoolState::V2(s) => s.quote(a, amt).ok()?,
+                PoolState::V3(s) => s.quote(a, amt).ok()?,
+                PoolState::Curve(s) => s.quote(a, amt).ok()?,
+                PoolState::Wombat(s) => s.quote(a, amt).ok()?,
+                PoolState::Dodo(s) => s.quote(a, amt).ok()?,
+                PoolState::AeroV2(s) => s.quote(a, amt).ok()?,
             };
-            amt = eval_v2_step(amt, r_in, r_out, v2.fee_bps)?;
         }
         Some(amt)
     }
@@ -408,43 +412,122 @@ impl CopyLane {
             // tx lands before ours. `min_out` tightens to the worse of the
             // stale and fresh sims; a hop whose fresh read fails falls back
             // to stored reserves rather than shipping blind.
+            // Fresh-state reads: getReserves only answers on V2 pools —
+            // V3 hops get a QuoterV2 on-chain re-quote below, other pool
+            // types fall back to their local quoter.
             let mut read_futs = Vec::with_capacity(hops.len());
-            for (pool_addr, _) in &hops {
-                let cd = getReservesCall {}.abi_encode();
-                read_futs.push(endpoint.eth_call_timed(*pool_addr, cd.into()));
+            let mut v2_idx = Vec::with_capacity(hops.len());
+            for (i, (pool_addr, _)) in hops.iter().enumerate() {
+                if matches!(store.get(pool_addr), Some(PoolState::V2(_))) {
+                    let cd = getReservesCall {}.abi_encode();
+                    read_futs.push(endpoint.eth_call_timed(*pool_addr, cd.into()));
+                    v2_idx.push(i);
+                }
             }
-            let reads = futures::future::join_all(read_futs).await;
+            let v2_reads = futures::future::join_all(read_futs).await;
             let mut amt = amount_in;
             let mut fallback_hops = 0usize;
             let mut sim_ok = true;
+            let mut v3_cache: std::collections::HashMap<Address, Option<Address>> =
+                std::collections::HashMap::new();
             for (i, pair) in path.windows(2).enumerate() {
-                let (a, _b) = (pair[0], pair[1]);
+                let (a, b) = (pair[0], pair[1]);
                 let (pool_addr, fee_bps) = hops[i];
-                let fresh = reads[i].as_ref().ok().and_then(|(ret, _)| {
-                    if ret.len() >= 64 {
-                        Some((
-                            U256::from_be_slice(&ret[..32]),
-                            U256::from_be_slice(&ret[32..64]),
-                        ))
-                    } else {
-                        None
+                match store.get(&pool_addr) {
+                    Some(PoolState::V2(v2)) => {
+                        let fresh = v2_idx
+                            .iter()
+                            .position(|&j| j == i)
+                            .and_then(|r| v2_reads[r].as_ref().ok())
+                            .and_then(|(ret, _)| {
+                                if ret.len() >= 64 {
+                                    Some((
+                                        U256::from_be_slice(&ret[..32]),
+                                        U256::from_be_slice(&ret[32..64]),
+                                    ))
+                                } else {
+                                    None
+                                }
+                            });
+                        let (r0, r1) = match fresh {
+                            Some((r0, r1)) => (r0, r1),
+                            None => {
+                                fallback_hops += 1;
+                                (v2.reserve0, v2.reserve1)
+                            }
+                        };
+                        let (r_in, r_out) =
+                            if v2.token0 == a { (r0, r1) } else { (r1, r0) };
+                        match eval_v2_step(amt, r_in, r_out, fee_bps) {
+                            Some(o) => amt = o,
+                            None => {
+                                sim_ok = false;
+                                break;
+                            }
+                        }
                     }
-                });
-                let (r0, r1, token0) = match (fresh, store.get(&pool_addr)) {
-                    (Some((r0, r1)), Some(PoolState::V2(v2))) => (r0, r1, v2.token0),
-                    (Some((r0, r1)), _) => (r0, r1, a),
-                    (None, Some(PoolState::V2(v2))) => {
-                        fallback_hops += 1;
-                        (v2.reserve0, v2.reserve1, v2.token0)
+                    Some(PoolState::V3(v3)) => {
+                        // On-chain QuoterV2 re-quote at the chained amount —
+                        // the store's raw pool fee, not config bps.
+                        match crate::feed_lane::v3_leg_out(
+                            &endpoint,
+                            chain_id,
+                            &mut v3_cache,
+                            pool_addr,
+                            v3.fee,
+                            a,
+                            b,
+                            amt,
+                        )
+                        .await
+                        {
+                            Some(o) => amt = o,
+                            None => match v3.quote(a, amt) {
+                                Ok(o) => {
+                                    fallback_hops += 1;
+                                    amt = o;
+                                }
+                                Err(_) => {
+                                    sim_ok = false;
+                                    break;
+                                }
+                            },
+                        }
                     }
-                    _ => {
-                        sim_ok = false;
-                        break;
-                    }
-                };
-                let (r_in, r_out) = if token0 == a { (r0, r1) } else { (r1, r0) };
-                match eval_v2_step(amt, r_in, r_out, fee_bps) {
-                    Some(o) => amt = o,
+                    Some(state) => match &state {
+                        PoolState::Curve(s) => match s.quote(a, amt) {
+                            Ok(o) => amt = o,
+                            Err(_) => {
+                                sim_ok = false;
+                                break;
+                            }
+                        },
+                        PoolState::Wombat(s) => match s.quote(a, amt) {
+                            Ok(o) => amt = o,
+                            Err(_) => {
+                                sim_ok = false;
+                                break;
+                            }
+                        },
+                        PoolState::Dodo(s) => match s.quote(a, amt) {
+                            Ok(o) => amt = o,
+                            Err(_) => {
+                                sim_ok = false;
+                                break;
+                            }
+                        },
+                        PoolState::AeroV2(s) => match s.quote(a, amt) {
+                            Ok(o) => amt = o,
+                            Err(_) => {
+                                sim_ok = false;
+                                break;
+                            }
+                        },
+                        _ => {
+                            sim_ok = false;
+                            break;
+                        }
+                    },
                     None => {
                         sim_ok = false;
                         break;

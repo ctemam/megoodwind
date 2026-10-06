@@ -1157,14 +1157,14 @@ fn v3_quoters(chain_id: u64) -> Vec<(Address, Address)> {
 }
 
 async fn call_v3_quoter(
-    args: &FeedArgs,
+    endpoint: &Endpoint,
     quoter: Address,
     calldata: &[u8],
 ) -> Option<U256> {
     let req = alloy::rpc::types::TransactionRequest::default()
         .to(quoter)
         .input(Bytes::copy_from_slice(calldata).into());
-    let raw = args.endpoint.provider().call(req).await.ok()?;
+    let raw = endpoint.provider().call(req).await.ok()?;
     IV3QuoterV2::quoteExactInputSingleCall::abi_decode_returns(&raw)
         .ok()
         .map(|r| r.amountOut)
@@ -1176,7 +1176,7 @@ async fn call_v3_quoter(
 /// Returns None on transport failure — a timed-out call is not evidence
 /// the pool isn't there, and must not poison the quoter cache.
 async fn factory_owns_pool(
-    args: &FeedArgs,
+    endpoint: &Endpoint,
     factory: Address,
     pool: Address,
     fee: u32,
@@ -1192,7 +1192,7 @@ async fn factory_owns_pool(
     let req = alloy::rpc::types::TransactionRequest::default()
         .to(factory)
         .input(Bytes::from(calldata).into());
-    let raw = args.endpoint.provider().call(req).await.ok()?;
+    let raw = endpoint.provider().call(req).await.ok()?;
     Some(
         IV3Factory::getPoolCall::abi_decode_returns(&raw)
             .map(|r| r == pool)
@@ -1205,8 +1205,9 @@ async fn factory_owns_pool(
 /// every deployment reverted = pool isn't a UniV3-factory clone we know —
 /// Algebra, Slipstream, Sushi V3 — the leg then stays local and the
 /// revm exec-probe remains the gate).
-async fn v3_leg_out(
-    args: &FeedArgs,
+pub(crate) async fn v3_leg_out(
+    endpoint: &Arc<Endpoint>,
+    chain_id: u64,
     cache: &mut HashMap<Address, Option<Address>>,
     pool: Address,
     fee: u32,
@@ -1223,7 +1224,7 @@ async fn v3_leg_out(
     };
     let calldata = IV3QuoterV2::quoteExactInputSingleCall { params }.abi_encode();
     match cache.get(&pool) {
-        Some(&Some(q)) => return call_v3_quoter(args, q, &calldata).await,
+        Some(&Some(q)) => return call_v3_quoter(endpoint, q, &calldata).await,
         Some(&None) => return None,
         None => {}
     }
@@ -1232,12 +1233,12 @@ async fn v3_leg_out(
     // `sniffed`). Only a run where every factory definitively answered
     // "not mine" earns the None cache.
     let mut saw_transport_err = false;
-    for (q, factory) in v3_quoters(args.chain_id) {
-        match factory_owns_pool(args, factory, pool, fee, token_in, token_out)
+    for (q, factory) in v3_quoters(chain_id) {
+        match factory_owns_pool(endpoint, factory, pool, fee, token_in, token_out)
             .await
         {
             Some(true) => {
-                if let Some(out) = call_v3_quoter(args, q, &calldata).await {
+                if let Some(out) = call_v3_quoter(endpoint, q, &calldata).await {
                     cache.insert(pool, Some(q));
                     return Some(out);
                 }
@@ -1278,7 +1279,8 @@ async fn onchain_round_trip_out(
         amount = match v3 {
             Some(fee) => {
                 v3_leg_out(
-                    args,
+                    &args.endpoint,
+                    args.chain_id,
                     cache,
                     hop.pool,
                     fee,
