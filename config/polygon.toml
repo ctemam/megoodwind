@@ -927,7 +927,7 @@ min_h1_txns        = 3
 # floor on deep pools; thin pools stay capped by pool_share_bps.
 max_notional_usd   = 8000.0
 pool_share_bps     = 1500.0
-min_net_usd        = 1.0
+min_net_usd        = 0.01
 [[pools]]
 name = "AUTO_USDCe_USDC_0"
 address = "0x7bcd99ae248e86ecab7a5b23451d73825117f54d"

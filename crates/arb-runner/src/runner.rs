@@ -3126,6 +3126,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                 blocked: blocked.clone(),
                 data_dir: format!("data/leaders/{chain_label}"),
                 submit_enabled: feed_submit,
+                sponsored_gas: cfg.submission.strict_4337,
             });
         }
     }

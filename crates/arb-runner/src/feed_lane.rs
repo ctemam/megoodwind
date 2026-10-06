@@ -74,6 +74,9 @@ pub struct FeedArgs {
     pub data_dir: String,
     /// Lanes kill switch AND scanner.dry_run must both permit real submits.
     pub submit_enabled: bool,
+    /// ERC-4337 sponsored mode: the paymaster pays gas, so gas_usd is NOT
+    /// our cost — the net floor applies to raw gross, not gross-minus-gas.
+    pub sponsored_gas: bool,
 }
 
 // ---- GeckoTerminal response model ---------------------------------------
@@ -1429,7 +1432,10 @@ async fn verify_and_submit(
 
     // Step 4 — abort if gross can't cover gas (cycle-level estimate).
     opp.gas_usd = gas_usd;
-    if gross_usd - gas_usd < args.cfg.min_net_usd {
+    // Sponsored mode carries no gas cost on our side — the floor applies
+    // to raw gross. Verified sub-dollar positives are real settled profit.
+    let margin_usd = if args.sponsored_gas { 0.0 } else { gas_usd };
+    if gross_usd - margin_usd < args.cfg.min_net_usd {
         opp.rejection_reason = "negative_net_after_gas".into();
         let _ = opp.append_jsonl(&args.data_dir);
         metrics::FEED_REJECTS
@@ -1454,7 +1460,7 @@ async fn verify_and_submit(
             as f64)
             / 10f64.powi(borrow_dec as i32)
             * borrow_usd;
-        if real_gross_usd - gas_usd < args.cfg.min_net_usd {
+        if real_gross_usd - margin_usd < args.cfg.min_net_usd {
             let sim_out = flash_amount + sim.gross_profit;
             let div_bps = if !real_out.is_zero() {
                 (sim_out.to::<u128>() as f64 - real_out.to::<u128>() as f64)
