@@ -27,6 +27,8 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 
 | Submit-venue health attribution | LOCKED 2026-10-06 | `VenueRouter` benches a venue only for transport-class faults, systematic blockers (quota/policy/paymaster-balance) or over-budget RTT; paymaster merit rejections (`exec_revert`, `rejected`) never count — the sponsored sim is a free edge-decay filter and benching it mutes the only gasless channel | `router::tests::merit_rejects_do_not_bench_venue`, `router::tests::transport_rejects_bench_venue` |
 
+| Profit settlement sweep | LOCKED 2026-10-06 | Every `PROFIT_SWEEP_INTERVAL` (15 min, minute-summary cadence) the runner reads `balanceOf(executor)` for each configured token; balances above `PROFIT_TRANSFER_MIN_USD` (env, default $5) are settled to `PROFIT_WALLET` via a sponsored UserOp calling `emergencyWithdraw(token, wallet, balance)` (onlyOwner = the smart account, so sponsorship is required — never an EOA tx); sweeps only run live (`!dry_run && !smoke_test`) and skip zero/under-floor balances so no wasted ops | manual verify (sweep log `Profit sweep submitted`) |
+
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any
 future change to a locked file, the diff must not touch an invariant
