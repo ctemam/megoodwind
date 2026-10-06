@@ -268,13 +268,13 @@ impl CopyLane {
         // Pick the concrete pool per hop first — the same list is reused for
         // the stale sim here and the fresh on-chain re-read in spawn_submit.
         let Some(hops) = self.pick_hops(&d.path, &d.pools_touched) else {
-            self.reject("sim_unsupported");
+            self.reject("no_tracked_hop");
             return;
         };
         // Resting-state sim for the record — any hop we cannot price yields
         // no bounded minOut, so we skip rather than ship a blind copy.
         let Some(sim_out) = self.eval_hops(&d.path, &hops, amount_in) else {
-            self.reject("sim_unsupported");
+            self.reject("hop_unpriced");
             return;
         };
         let min_out = sim_out * U256::from(10_000 - self.slippage_bps) / U256::from(10_000);
