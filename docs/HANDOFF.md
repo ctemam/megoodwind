@@ -32,7 +32,33 @@ Rust workspace (alloy 1.8.x): multi-chain flash-loan arbitrage engine. Crates `a
 
 ## Suspected remaining blocker space (start here)
 
-- V3 quote is now multi-tick-aware but pool.tick_data is sparse — verify sizing honesty.
-- Feed lane: only filters/gates — is there executable edge in non-major pairs being dropped by shape assumptions (pair-group keys, flash-token coverage)?
-- UserOp inclusion latency vs decay — any venue allowing faster landing on free tiers.
-- Whether candidates the funnel never produces exist on-chain (sampling cross-DEX quotes directly).
+Resolved 2026-10-06 (commits `3c61429` + `d103b39`, verified live on BSC+Polygon):
+- ~~Unlabeled dex ids dropped at ingest~~ → `probe_interfaces` batch-probes
+  slot0/globalState/getReserves; ~49 BSC / ~67 Polygon pools/cycle rescued.
+- ~~One divergent pool poisoned pair groups~~ → `trim_divergent` + persisted
+  `_bait_pools.json` conviction (live: USDT/USDC 0.637-vs-0.9998 outlier
+  excluded every cycle).
+- ~~One failed aggregate3 chunk zeroed whole refreshes~~ → per-chunk
+  `success:false` placeholders (Polygon 6/52→36/52 priced).
+- ~~Fixed $2000 notional~~ → `find_optimal_amount` sizing before eval.
+- ~~Non-major coverage~~ → top-60 token scan adds only ~5 groups, all majors;
+  breadth exhausted — not a lever.
+
+Residual blocker hierarchy (measured, evidence-ordered):
+1. **Edge scarcity on majors**: honest on-chain spreads 1–31bps vs 30–50bps
+   gates; fee-adjusted depth leaves ~$0. The funnel correctly rejects
+   unprofitable edges — it is no longer blind.
+2. **UserOp inclusion latency vs decay**: unmeasured end-to-end (free RPCs
+   cap eth_getLogs at ~200 blocks; SA 0x18ed49…d8d2, nonce 6, all ops
+   deployments). Measure once submissions exist — or fund the EOA path
+   (user-side lever).
+3. **V3 tick-cross honesty**: `quote_multi_tick_approx` approximates;
+   exec probe backstops. Needs a spread-passing V3 pair to measure.
+4. **Free-RPC transport ceiling**: chunk timeouts blacklist endpoints in
+   rotation; per-chunk isolation contains it.
+
+Live verification trail: BSC `probed`=49 + DOGE/WBNB candidate→sim_fail;
+Polygon `probed`=67 + WPOL/USDT0 73.9bps→sim pass→`negative_net_after_gas`
+(gas est ~600k×280gwei≈$0.035 — honest). End-to-end path proven:
+discover→gate→sim→economics. Candidates now flow; submissions await a
+real edge.
