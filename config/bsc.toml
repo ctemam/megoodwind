@@ -6,6 +6,8 @@ rpc_https = "${BSC_RPC_URL}"
 # 429/timeout (spec §Network Resiliency). Pruned 2026-10-04 by latency_bench:
 # dwellir fails every eth_call; blastapi + both 48.club bench >85ms p50.
 rpc_https_pool = [
+    "https://bsc.drpc.org",
+    "https://bsc-rpc.publicnode.com",
     "https://bsc-dataseed.binance.org",
     "https://bsc-dataseed.bnbchain.org",
     "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",

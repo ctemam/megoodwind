@@ -7,7 +7,6 @@ rpc_https_pool = [
     "https://polygon.drpc.org",
     "https://polygon.publicnode.com",
     "https://polygon.rpc.thirdweb.com",
-    "https://polygon.gateway.tenderly.co",
 ]
 rpc_wss = "wss://polygon-bor-rpc.publicnode.com"
 rpc_wss_pool = [
