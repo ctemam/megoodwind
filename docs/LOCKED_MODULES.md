@@ -23,6 +23,8 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 | aggregate3 partial failure | `merge_aggregate3_parts`: a wholesale-failed chunk emits `success:false` placeholders — output len == call count, order preserved; it must never zero sibling chunks (measured wipe: 6/52 pools priced → 36/52 after fix) | `refresher::tests::test_merge_aggregate3_parts_failed_chunk_only_drops_itself` |
 | Feed-lane sizing = optimizer | `verify_and_submit` sizes each candidate with `find_optimal_amount` on `[floor, path_max_flash]` before eval/calldata — the fixed `flash_amount` is only the ceiling/default, never the sizing decision | code review on verify_and_submit; `feed_probe --gap` opt-vs-fixed column |
 
+| Bait conviction attribution | LOCKED 2026-10-06 | Pool strikes require pool-attributable evidence only: `revert_blames_pool` gates `record_revert_for_path` (`insufficient_profit`=decay, `unauthorized`/`paused`/`gas_price_too_high`/`invalid_*`/`unsupported_token`=executor-side — never strike); `>BAIT_GAP_BPS` rejects convict only quarantined pair-outliers via `flag_bait_pools_in` (victim-impact >2% on thin pools is legitimate math); dry-run preview strikes use the same classifier; `exec_revert_streak`→`executor_broken` ignores `insufficient_profit` | `test_bait_pool_outlier_attribution_spares_collateral_pools`, `test_revert_blames_pool_attribution` |
+
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any
 future change to a locked file, the diff must not touch an invariant
