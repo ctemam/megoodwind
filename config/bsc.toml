@@ -88,7 +88,7 @@ max = 100000000000000
 
 [scanner.flash_bounds.WBNB]
 min = 1000000000000000
-max = 500000000000000000000
+max = "500000000000000000000"
 
 [gate]
 min_profit_usd = 0.60

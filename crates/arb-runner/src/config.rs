@@ -202,8 +202,30 @@ pub struct ScannerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FlashBounds {
-    pub min: u64,
-    pub max: u64,
+    #[serde(deserialize_with = "de_u128_int_or_str")]
+    pub min: u128,
+    #[serde(deserialize_with = "de_u128_int_or_str")]
+    pub max: u128,
+}
+
+/// Flash bounds are raw token units — big caps (e.g. 500k of an
+/// 18-decimal token) overflow TOML's i64 integer range, so the field
+/// accepts either a TOML integer or a quoted decimal string.
+fn de_u128_int_or_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    // toml only ever produces i64 for integer literals — keep the int
+    // variant i64 so untagged matching actually engages.
+    enum V {
+        I(i64),
+        S(String),
+    }
+    match V::deserialize(d)? {
+        V::I(i) if i >= 0 => Ok(i as u128),
+        V::I(_) => Err(D::Error::custom("flash bound must be non-negative")),
+        V::S(s) => s.parse::<u128>().map_err(D::Error::custom),
+    }
 }
 
 #[derive(Debug, Deserialize)]
