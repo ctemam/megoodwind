@@ -32,7 +32,7 @@ use arb_submit::puissant::PuissantSubmitter;
 use arb_submit::warp::WarpSubmitter;
 use arb_submit::pimlico::{PimlicoConfig, PimlicoSubmitter};
 use arb_submit::presign::PresignPool;
-use arb_submit::{SubmitTier, Submitter};
+use arb_submit::{Bundle, SubmitTier, Submitter, UserOpCall};
 
 use crate::config::{spec, AppConfig};
 use crate::metrics;
@@ -65,6 +65,8 @@ alloy::sol! {
     struct ProbeResult3 { bool success; bytes returnData; }
     function aggregate3(ProbeCall3[] calldata calls) external payable returns (ProbeResult3[] memory);
     function tickSpacing() external view returns (int24);
+    function balanceOf(address owner) external view returns (uint256);
+    function emergencyWithdraw(address token, address to, uint256 amount) external;
 }
 
 /// Quoter deployments verified on-chain (quoter.factory() matches the
@@ -2232,6 +2234,81 @@ async fn backrun_pass(
             }
 }
 
+/// Interval between executor profit sweeps to PROFIT_WALLET.
+const PROFIT_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
+
+/// Settle accumulated executor profit to PROFIT_WALLET: for every configured
+/// token whose executor balance exceeds `min_usd`, submit a sponsored UserOp
+/// calling `emergencyWithdraw(token, wallet, balance)` (onlyOwner = the
+/// smart account the op executes as). Sweeping an empty contract is a no-op —
+/// the op is only built when a balance clears the floor.
+async fn sweep_executor_profit(
+    endpoint: &Endpoint,
+    arb_contract: Address,
+    wallet: Address,
+    tokens: &HashMap<String, Address>,
+    token_usd_prices: &HashMap<Address, f64>,
+    token_decimals: &HashMap<Address, u32>,
+    min_usd: f64,
+    chain_id: u64,
+    venue: &PimlicoSubmitter,
+) {
+    let mut swept = 0u32;
+    for (symbol, taddr) in tokens {
+        let cd = balanceOfCall {
+            owner: arb_contract,
+        }
+        .abi_encode();
+        let req = alloy::rpc::types::TransactionRequest::default()
+            .to(*taddr)
+            .input(cd.into());
+        let Ok(ret) = endpoint.provider().call(req).await else {
+            continue;
+        };
+        let bal = U256::try_from_be_slice(&ret).unwrap_or(U256::ZERO);
+        if bal.is_zero() {
+            continue;
+        }
+        let dec = token_decimals.get(taddr).copied().unwrap_or(18) as i32;
+        let price = token_usd_prices.get(taddr).copied().unwrap_or(0.0);
+        let bal_f: f64 = bal.try_into().map(|v: u128| v as f64).unwrap_or(f64::MAX);
+        let usd = bal_f / 10f64.powi(dec) * price;
+        if usd < min_usd {
+            continue;
+        }
+        let data = emergencyWithdrawCall {
+            token: *taddr,
+            to: wallet,
+            amount: bal,
+        }
+        .abi_encode();
+        let bundle = Bundle {
+            signed_txs: vec![],
+            victim_tx: None,
+            target_block: 0,
+            chain_id,
+            backrun_tx: None,
+            call: Some(UserOpCall {
+                to: arb_contract,
+                data: data.into(),
+            }),
+        };
+        match venue.submit(&bundle).await {
+            Ok(r) if r.success => info!(
+                token = %symbol, usd = format!("{:.2}", usd),
+                userop = ?r.bundle_hash,
+                "Profit sweep submitted — executor -> PROFIT_WALLET"
+            ),
+            Ok(r) => warn!(token = %symbol, usd, error = ?r.error, "Profit sweep venue-rejected"),
+            Err(e) => warn!(token = %symbol, usd, error = %e, "Profit sweep venue error"),
+        }
+        swept += 1;
+    }
+    if swept > 0 {
+        info!(swept, "Profit sweep cycle complete");
+    }
+}
+
 pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<()> {
     use rayon::prelude::*;
     let started = chrono::Utc::now();
@@ -2873,6 +2950,23 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         warn!(chain = %cfg.chain.name, "arb_contract unset/invalid — executor calls will revert; scan-only mode");
         Address::ZERO
     });
+
+    // Profit settlement: realized profit accumulates inside the executor
+    // contract (onlyOwner = the Pimlico smart account). A periodic sponsored
+    // UserOp calls emergencyWithdraw(token, PROFIT_WALLET, balance) to settle
+    // it to the Commander's wallet — sponsored, so the sweep is gas-free.
+    let profit_wallet: Option<Address> = std::env::var("PROFIT_WALLET")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|a: &Address| !a.is_zero());
+    let profit_sweep_min_usd: f64 = std::env::var("PROFIT_TRANSFER_MIN_USD")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(5.0);
+    let mut last_profit_sweep = Instant::now() - PROFIT_SWEEP_INTERVAL;
+    if profit_wallet.is_none() {
+        info!("PROFIT_WALLET unset — profit stays in the executor until configured");
+    }
     let dry_run = dry_run_override;
     metrics::DRY_RUN.set(if dry_run { 1.0 } else { 0.0 });
 
@@ -3671,6 +3765,29 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
             last_scans = scans_now;
             last_submitted = submitted_now;
             last_summary = Instant::now();
+
+            // Profit settlement sweep — every PROFIT_SWEEP_INTERVAL, move
+            // each configured token the executor holds above the USD floor
+            // to PROFIT_WALLET via a sponsored emergencyWithdraw UserOp.
+            if !dry_run && !smoke_test && last_profit_sweep.elapsed() >= PROFIT_SWEEP_INTERVAL {
+                last_profit_sweep = Instant::now();
+                if let (Some(venue), Some(wallet)) = (pimlico_venue.as_ref(), profit_wallet) {
+                    let prices_snap = token_usd_prices.read().unwrap().clone();
+                    let dec_snap = token_decimals.read().unwrap().clone();
+                    sweep_executor_profit(
+                        &endpoint,
+                        arb_contract,
+                        wallet,
+                        &tokens,
+                        &prices_snap,
+                        &dec_snap,
+                        profit_sweep_min_usd,
+                        cfg.chain.chain_id,
+                        venue,
+                    )
+                    .await;
+                }
+            }
         }
 
         // Status JSON every 5 seconds
