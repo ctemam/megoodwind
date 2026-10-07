@@ -703,6 +703,37 @@ impl TokenCircuitBreaker {
         self.persist_bait();
     }
 
+    /// A landed trade that executed cleanly but retained dust — the edge
+    /// priced in at sim was gone by inclusion. First offense earns the
+    /// normal suppression window; a pool with any prior conviction gets
+    /// the same permanent span a hard bait revert does (verified on-chain:
+    /// pools 0xd8f0… and 0x1a3f… produced dust lands twice each, burning
+    /// $5.4 of real sponsored gas on ETH).
+    fn flag_dust_land_pool(&mut self, pool: Address, block: u64) {
+        let prior = self
+            .pool_stats
+            .get(&pool)
+            .map(|s| s.suppressed_until_block > 0)
+            .unwrap_or(false);
+        let span = if prior { 30_000_000 } else { self.suppression_blocks };
+        let s = self
+            .pool_stats
+            .entry(pool)
+            .or_insert(TokenBreakerStats {
+                consecutive_reverts: 0,
+                last_revert_block: 0,
+                suppressed_until_block: 0,
+            });
+        let until = block + span;
+        if until > s.suppressed_until_block {
+            s.suppressed_until_block = until;
+            metrics::BAIT_SUSPECT.inc();
+            warn!(pool = %pool, until_block = until, permanent = prior,
+                "Dust-land bait conviction — pool suppressed");
+        }
+        self.persist_bait();
+    }
+
     fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
         let mut tripped = false;
         for hop in &path.hops {
@@ -841,6 +872,9 @@ struct SettleCtx {
     token_decimals: HashMap<Address, u32>,
     native_usd: f64,
     chain: String,
+    /// Shared pool breaker — dust lands convict their route pools so the
+    /// same bait can't charge gas twice.
+    token_breaker: Option<Arc<std::sync::Mutex<TokenCircuitBreaker>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1056,12 +1090,20 @@ fn record_settlement(
     submit_id: &str,
     res: &SettleResult,
     opp_ids: &[String],
+    block: u64,
 ) {
     let outcome_label = match res.outcome {
         TxOutcome::Success => "settled",
         TxOutcome::Revert => "revert",
         TxOutcome::Dropped => "dropped",
     };
+    // Dust land: the op executed and repaid but retained ~nothing while
+    // burning real gas — the quoted edge was bait or fully decayed. Convict
+    // every route pool of the settled opportunities; repeat offenders get
+    // a permanent flag.
+    let dust_land = matches!(res.outcome, TxOutcome::Success)
+        && res.gas_usd > 0.25
+        && res.realized_usd + res.gas_usd < 0.25;
     metrics::SETTLEMENTS
         .with_label_values(&[ctx.chain.as_str(), outcome_label])
         .inc();
@@ -1097,6 +1139,16 @@ fn record_settlement(
         let Some(o) = opps.iter().find(|o| o.opportunity_id == *id) else {
             continue;
         };
+        if dust_land && block > 0 {
+            if let Some(breaker) = &ctx.token_breaker {
+                let mut b = breaker.lock().unwrap();
+                for p in &o.route_pools {
+                    if let Ok(pool) = p.parse::<Address>() {
+                        b.flag_dust_land_pool(pool, block);
+                    }
+                }
+            }
+        }
         let mut o = o.clone();
         o.unix_ms = now_ms;
         o.settled_net_usd = res.realized_usd;
@@ -1155,7 +1207,8 @@ fn spawn_settlement(
         if let Some((pid, sender, blk)) = cb {
             let _ = sender.send((pid, res.outcome, blk)).await;
         }
-        record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids);
+        let block = ctx.endpoint.block_number().await.unwrap_or(0);
+        record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids, block);
     });
 }
 /// Feed one gate-accepted candidate into the opportunities log so the
@@ -3064,7 +3117,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         .get(spec::native_symbol(cfg.chain.chain_id))
         .and_then(|a| token_usd_prices.get(a).copied())
         .unwrap_or(0.0);
-    let settle_ctx = SettleCtx {
+    let mut settle_ctx = SettleCtx {
         endpoint: endpoint.clone(),
         bundler_url: cfg.submission.pimlico_bundler_url.clone(),
         arb_contract,
@@ -3072,6 +3125,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
         token_decimals: token_decimals.clone(),
         native_usd,
         chain: chain_name.clone(),
+        token_breaker: None,
     };
 
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
@@ -3164,6 +3218,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
     let signer_rot = Arc::new(signer_rot);
     let circuit_breaker = Arc::new(std::sync::Mutex::new(circuit_breaker));
     let token_breaker = Arc::new(std::sync::Mutex::new(token_breaker));
+    settle_ctx.token_breaker = Some(token_breaker.clone());
     let smart_account = Arc::new(std::sync::Mutex::new(smart_account));
     let local_fork = std::sync::Arc::new(std::sync::Mutex::new(None));
     let profit_gate = Arc::new(std::sync::Mutex::new(profit_gate));
@@ -3738,7 +3793,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<
                                         TxOutcome::Dropped => {}
                                     }
                                     record_settlement(&settle_ctx, hash_venue, &hash, &res,
-                                        &[logged_opp.opportunity_id.clone()]);
+                                        &[logged_opp.opportunity_id.clone()], block_number);
                                     let landed_ok = metrics::SUBMIT_LANDED.with_label_values(&["success"]).get() as u64;
                                     let landed_revert = metrics::SUBMIT_LANDED.with_label_values(&["revert"]).get() as u64;
                                     let status = if landed_ok > 0 { "SUCCESS" } else if landed_revert > 0 { "REVERT" } else { "DROPPED" };
