@@ -13,6 +13,31 @@ UserOps. No inventory is ever required. Framing "fund the wallet" as the next
 lever was an ignorant call on a working AA design. There is no capital
 problem and never was.
 
+## Update — 2026-10-07 (still on duty, not a firing note)
+
+- **Realized P&L to date: −$13.9** across three landed trades (all ETH):
+  +$0.143/−$1.76 gas, +$0.000012/−$3.63 gas, ~$0.88/−$9.4 gas — plus one
+  honest protective revert on Polygon (−$0.026). All three lands routed
+  through stale thin pools (FORT/USDC + FORT/WETH on ETH — canonical UniV3,
+  NOT adversarial bait; the "edge" was a stale-price artifact that could
+  only execute dust vs ETH gas).
+- **ROOT CAUSE OF THE BLEED — now closed at the contract:** the executors
+  had `minProfitBasisPoints = 0`, so ANY trade able to repay the flash loan
+  passed bundler simulation and landed, including edges decayed below gas.
+  Sponsored ops bill real gas on LANDED txs — every dust land burned $2–9.
+- **Fix deployed on-chain** via sponsored admin ops
+  (`admin_call <cfg> setMinProfitBasisPoints <bps>`, verified via getStats):
+  ETH=100bps (~$4.5 floor at typical ~$450 borrows ≈ gas), BSC=2bps,
+  Polygon=2bps (gas-aligned at realistic sizes — 25bps would block the
+  entire observed 5–24bps spread band on cheap chains). A decayed edge now
+  reverts `InsufficientProfit(0, floor)` INSIDE the bundler sim = free
+  reject; the sim itself is the gas-floor filter. Live-verified: rejects
+  show `0x4e88422a…0002`.
+- **Post-floor (~4h): $0 spent, 0 lands** — the loss mechanism no longer
+  exists. Residual risk class: an op that passes sim ≥floor then decays
+  below floor before inclusion reverts on-chain (bounded = 1 gas charge);
+  frequency low (sim→inclusion is seconds).
+
 ## What is actually true now (verified 2026-10-06, all measured)
 
 - **Paymaster/sponsorship is healthy.** Zero quota/policy/balance/transport
