@@ -114,6 +114,10 @@ pub struct CopyLane {
     /// token pairs currently being factory-resolved (one probe per pair).
     resolving: Arc<DashSet<(Address, Address)>>,
     data_dir: std::path::PathBuf,
+    /// Cached bait-convicted pool set (ms-loaded-at, pools) — refreshed
+    /// from the shared _bait_pools.json at most once a minute so
+    /// settle-time dust convictions take effect without a restart.
+    bait: std::sync::Mutex<(u64, HashSet<Address>)>,
 }
 
 fn now_ms() -> u64 {
@@ -193,7 +197,36 @@ impl CopyLane {
             approved: DashSet::new(),
             resolving: Arc::new(DashSet::new()),
             data_dir: std::path::PathBuf::from("data/leaders"),
+            bait: std::sync::Mutex::new((0, HashSet::new())),
         })
+    }
+
+    /// Any picked hop in the bait-convicted pool set. Pools are convicted
+    /// by exec probes, credibility gates and post-settlement dust lands —
+    /// a copy through one burns sponsored gas for nothing.
+    fn bait_flagged(&self, hops: &[(Address, u32)]) -> bool {
+        const TTL_MS: u64 = 60_000;
+        let mut g = self.bait.lock().unwrap();
+        if now_ms().saturating_sub(g.0) > TTL_MS {
+            let mut set = HashSet::new();
+            if let Ok(s) = std::fs::read_to_string(
+                self.data_dir.join(&self.chain).join("_bait_pools.json"),
+            ) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    if let Some(arr) = v.get("pools").and_then(|a| a.as_array()) {
+                        for e in arr {
+                            if let Some(p) = e.get("pool").and_then(|p| p.as_str()) {
+                                if let Ok(a) = p.parse::<Address>() {
+                                    set.insert(a);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            *g = (now_ms(), set);
+        }
+        hops.iter().any(|(p, _)| g.1.contains(p))
     }
 
     fn reject(&self, reason: &'static str) {
@@ -283,6 +316,10 @@ impl CopyLane {
             self.reject("no_tracked_hop");
             return;
         };
+        if self.bait_flagged(&hops) {
+            self.reject("bait_pool");
+            return;
+        }
         // Resting-state sim for the record — any hop we cannot price yields
         // no bounded minOut, so we skip rather than ship a blind copy.
         let Some(sim_out) = self.eval_hops(&d.path, &hops, amount_in) else {

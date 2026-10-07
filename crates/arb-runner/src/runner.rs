@@ -1101,9 +1101,12 @@ fn record_settlement(
     // burning real gas — the quoted edge was bait or fully decayed. Convict
     // every route pool of the settled opportunities; repeat offenders get
     // a permanent flag.
+    // Retained <20% of the gas bill (or <$0.25) = dust: the edge priced
+    // in at verify was gone by inclusion. Flat-$0.25 missed a $0.74 gross
+    // on a $9 gas op (tx 0x6dd24e6e) — scale the bar with the burn.
     let dust_land = matches!(res.outcome, TxOutcome::Success)
         && res.gas_usd > 0.25
-        && res.realized_usd + res.gas_usd < 0.25;
+        && res.realized_usd + res.gas_usd < (res.gas_usd * 0.20).max(0.25);
     metrics::SETTLEMENTS
         .with_label_values(&[ctx.chain.as_str(), outcome_label])
         .inc();
@@ -1682,6 +1685,16 @@ async fn backrun_pass(
             candidate_ids.dedup();
             candidate_ids
                 .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.read().unwrap().contains(&h.pool)));
+            // Bait-convicted pools are excluded here exactly as the cyclic
+            // scan does — without this a settled-out bait pool still
+            // reached the backrun submit path (verified: tx 0x6dd24e6e
+            // burned $8.5 through two pools already in _bait_pools.json).
+            candidate_ids.retain(|&i| {
+                !ctx.token_breaker
+                    .lock()
+                    .unwrap()
+                    .is_path_token_suppressed(&paths[i], block_number)
+            });
             let stale_n = candidate_ids.len();
             candidate_ids
                 .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
@@ -2008,7 +2021,23 @@ async fn backrun_pass(
                     let pending = &pv.pending;
                     let matched: Vec<&(String, std::collections::HashSet<Address>)> =
                         pv.matched.iter().map(|&i| &ready_templates[i]).collect();
-                    let scored = pv.scored;
+                    // Belt-and-suspenders at the submit boundary: deferred
+                    // re-entries and leader-template paths both bypass the
+                    // Pass-A candidate retains, so bait suppression must
+                    // also gate what reaches verify+submit.
+                    let scored: Vec<_> = pv
+                        .scored
+                        .into_iter()
+                        .filter(|(pidx, _, _, _, _)| {
+                            !ctx.token_breaker
+                                .lock()
+                                .unwrap()
+                                .is_path_token_suppressed(&paths[*pidx], block_number)
+                        })
+                        .collect();
+                    if scored.is_empty() {
+                        continue;
+                    }
                     // If the victim already landed, the refreshed store IS
                     // the post-victim state — re-projecting the swap would
                     // double-count its impact. Re-project only while the
