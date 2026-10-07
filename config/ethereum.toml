@@ -504,6 +504,13 @@ TK_0xf629cbd94d3791c9250152bd8dfbdf380e2a3b9c = "0xf629cbd94d3791c9250152bd8dfbd
 TK_0x090993bcc9dd600d15805d5ff070941cac6a506f = "0x090993bcc9dd600d15805d5ff070941cac6a506f"
 TK_0x112b08621e27e10773ec95d250604a041f36c582 = "0x112b08621e27e10773ec95d250604a041f36c582"
 TK_0x7ddc52c4de30e94be3a6a0a2b259b2850f421989 = "0x7ddc52c4de30e94be3a6a0a2b259b2850f421989"
+TK_0x8236a87084f8b84306f72007f36f2618a5634494 = "0x8236a87084f8b84306f72007f36f2618a5634494"
+TK_0x9ac9468e7e3e1d194080827226b45d0b892c77fd = "0x9ac9468e7e3e1d194080827226b45d0b892c77fd"
+TK_0x9cb78dafb19053fd1ad0d2ba0c10cf4250bfd1aa = "0x9cb78dafb19053fd1ad0d2ba0c10cf4250bfd1aa"
+TK_0x137ddb47ee24eaa998a535ab00378d6bfa84f893 = "0x137ddb47ee24eaa998a535ab00378d6bfa84f893"
+TK_0x35d8949372d46b7a3d5a56006ae77b215fc69bc0 = "0x35d8949372d46b7a3d5a56006ae77b215fc69bc0"
+TK_0xa83149a75591839c81cceb60fd5a8da938176dc9 = "0xa83149a75591839c81cceb60fd5a8da938176dc9"
+TK_0xc123727e8bf0d61edc8dcfa66b545929056fa8d0 = "0xc123727e8bf0d61edc8dcfa66b545929056fa8d0"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -8785,6 +8792,105 @@ name = "AUTO_TK_0x090993bcc9dd600d15805d5ff070941cac6a506f_WETH_25"
 address = "0xdc3378b8a29b0e551cea9d1c5ae5335f48cd767a"
 protocol = "v2"
 token0 = "TK_0x090993bcc9dd600d15805d5ff070941cac6a506f"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_TK_0x8236a87084f8b84306f72007f36f2618a5634494_1"
+address = "0x0b599ebf4e05af48b56d38e2dde520570c366460"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "TK_0x8236a87084f8b84306f72007f36f2618a5634494"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x9ac9468e7e3e1d194080827226b45d0b892c77fd_WETH_25"
+address = "0xbc7ce7b6b5437d7d715fbb1cc7b4ec12399c5516"
+protocol = "v2"
+token0 = "TK_0x9ac9468e7e3e1d194080827226b45d0b892c77fd"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_WETH_25"
+address = "0xbb2b8038a1640196fbe3e38816f3e67cba72d940"
+protocol = "v2"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x9cb78dafb19053fd1ad0d2ba0c10cf4250bfd1aa_WETH_25"
+address = "0x33f79134b3c40f42744998870a0cbfc3c60f9806"
+protocol = "v2"
+token0 = "TK_0x9cb78dafb19053fd1ad0d2ba0c10cf4250bfd1aa"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x3845badade8e6dff049820680d1f14bd3903a5d0_TK_0x557b933a7c2c45672b610f8954a3deb39a51a8ca_25"
+address = "0x5d95bb70e1d8b7fabc286bbc163642b3c39097a7"
+protocol = "v2"
+token0 = "TK_0x3845badade8e6dff049820680d1f14bd3903a5d0"
+token1 = "TK_0x557b933a7c2c45672b610f8954a3deb39a51a8ca"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x6b3595068778dd592e39a122f4f5a5cf09c90fe2_WETH_30"
+address = "0x87c7056bbe6084f03304196be51c6b90b6d85aa2"
+protocol = "v3"
+token0 = "TK_0x6b3595068778dd592e39a122f4f5a5cf09c90fe2"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x0492560fa7cfd6a85e50d8be3f77318994f8f429_TK_0xc123727e8bf0d61edc8dcfa66b545929056fa8d0_25"
+address = "0xa0a997315fd31eb0072222ad3db6eab74b60adc2"
+protocol = "v2"
+token0 = "TK_0x0492560fa7cfd6a85e50d8be3f77318994f8f429"
+token1 = "TK_0xc123727e8bf0d61edc8dcfa66b545929056fa8d0"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_WBTC_WETH_30"
+address = "0xcbcdf9626bc03e24f779434178a73a0b4bad62ed"
+protocol = "v3"
+token0 = "WBTC"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x35d8949372d46b7a3d5a56006ae77b215fc69bc0_TK_0x73a15fed60bf67631dc6cd7bc5b6e8da8190acf5_1"
+address = "0xabfca96716cf2911bbb50a4cdbcbaffa2ef8ecda"
+protocol = "v3"
+token0 = "TK_0x35d8949372d46b7a3d5a56006ae77b215fc69bc0"
+token1 = "TK_0x73a15fed60bf67631dc6cd7bc5b6e8da8190acf5"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x137ddb47ee24eaa998a535ab00378d6bfa84f893_WETH_25"
+address = "0xe2b4f23956a0d4553bde2d0dcd21c604beb7db64"
+protocol = "v2"
+token0 = "TK_0x137ddb47ee24eaa998a535ab00378d6bfa84f893"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0xa83149a75591839c81cceb60fd5a8da938176dc9_WETH_25"
+address = "0x9c4e3b7583b4844cf2bff332eab42585f4159c17"
+protocol = "v2"
+token0 = "TK_0xa83149a75591839c81cceb60fd5a8da938176dc9"
 token1 = "WETH"
 fee_bps = 25
 

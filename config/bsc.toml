@@ -666,6 +666,8 @@ TK_0xf0ef322332d654334d173673af147f2dbca1ffff = "0xf0ef322332d654334d173673af147
 TK_0x0bb150dfa86ea5d7742f07fefcd8e8eda81d64ef = "0x0bb150dfa86ea5d7742f07fefcd8e8eda81d64ef"
 TK_0x5506599c722389a60580b5213ea1da60d64754a1 = "0x5506599c722389a60580b5213ea1da60d64754a1"
 TK_0x87aa6aeb62ff128aaa96e275d7b24cd12a72aba1 = "0x87aa6aeb62ff128aaa96e275d7b24cd12a72aba1"
+TK_0x0e4f6209ed984b21edea43ace6e09559ed051d48 = "0x0e4f6209ed984b21edea43ace6e09559ed051d48"
+TK_0x40b8129b786d766267a7a118cf8c07e31cdb6fde = "0x40b8129b786d766267a7a118cf8c07e31cdb6fde"
 [[pools]]
 name = "V2_ETH_WBNB"
 address = "0x74E4716E431f45807DCF19f284c7aA99F18a4fbc"
@@ -3494,5 +3496,32 @@ protocol = "v3"
 token0 = "TK_0x0bb150dfa86ea5d7742f07fefcd8e8eda81d64ef"
 token1 = "USDT"
 fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x0e4f6209ed984b21edea43ace6e09559ed051d48_USDT_1"
+address = "0x4620f5c127a6055fbebb1f71327d60ff079c9060"
+protocol = "v3"
+token0 = "TK_0x0e4f6209ed984b21edea43ace6e09559ed051d48"
+token1 = "USDT"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_TK_0x40b8129b786d766267a7a118cf8c07e31cdb6fde_USDC_1"
+address = "0x916f992df86795f24de6c268cfb9031fbb1155da"
+protocol = "v3"
+token0 = "TK_0x40b8129b786d766267a7a118cf8c07e31cdb6fde"
+token1 = "USDC"
+fee_bps = 1
+
+
+[[pools]]
+name = "AUTO_USDT_TK_0x924fa68a0fc644485b8df8abfa0a41c2e7744444_25"
+address = "0x78796f190e2974ca81134b1b0741bd50e4cdda6b"
+protocol = "v2"
+token0 = "USDT"
+token1 = "TK_0x924fa68a0fc644485b8df8abfa0a41c2e7744444"
+fee_bps = 25
 
 
