@@ -501,6 +501,9 @@ TK_0xf477ac7719e2e659001455cdda0cc8f3ad10b604 = "0xf477ac7719e2e659001455cdda0cc
 TK_0x5d455bab234291474e88316feb81bca6e553199b = "0x5d455bab234291474e88316feb81bca6e553199b"
 TK_0x8e870d67f660d95d5be530380d0ec0bd388289e1 = "0x8e870d67f660d95d5be530380d0ec0bd388289e1"
 TK_0xf629cbd94d3791c9250152bd8dfbdf380e2a3b9c = "0xf629cbd94d3791c9250152bd8dfbdf380e2a3b9c"
+TK_0x090993bcc9dd600d15805d5ff070941cac6a506f = "0x090993bcc9dd600d15805d5ff070941cac6a506f"
+TK_0x112b08621e27e10773ec95d250604a041f36c582 = "0x112b08621e27e10773ec95d250604a041f36c582"
+TK_0x7ddc52c4de30e94be3a6a0a2b259b2850f421989 = "0x7ddc52c4de30e94be3a6a0a2b259b2850f421989"
 [scanner.paths]
 max_hops = 4
 max_paths_per_flash_token = 25000
@@ -8710,6 +8713,78 @@ name = "AUTO_TK_0x5d455bab234291474e88316feb81bca6e553199b_WETH_25"
 address = "0x9b909de9312be37276d5664b11c04150a6eaf2f3"
 protocol = "v2"
 token0 = "TK_0x5d455bab234291474e88316feb81bca6e553199b"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_TK_0x32b4d049fe4c888d2b92eecaf729f44df6b1f36e_USDC_100"
+address = "0x468fb0cd8d52b5b7db6f35f249e87f08ad90f644"
+protocol = "v3"
+token0 = "TK_0x32b4d049fe4c888d2b92eecaf729f44df6b1f36e"
+token1 = "USDC"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x6f40d4a6237c257fff2db00fa0510deeecd303eb_WETH_100"
+address = "0xc1cd3d0913f4633b43fcddbcd7342bc9b71c676f"
+protocol = "v3"
+token0 = "TK_0x6f40d4a6237c257fff2db00fa0510deeecd303eb"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_DAI_WETH_25"
+address = "0xc3d03e4f041fd4cd388c549ee2a29a9e5075882f"
+protocol = "v2"
+token0 = "DAI"
+token1 = "WETH"
+fee_bps = 25
+
+
+[[pools]]
+name = "AUTO_USDC_TK_0xc00e94cb662c3520282e6f5717214004a7f26888_100"
+address = "0x4786bb29a1589854204a4e62dcbe26a571224c0f"
+protocol = "v3"
+token0 = "USDC"
+token1 = "TK_0xc00e94cb662c3520282e6f5717214004a7f26888"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x112b08621e27e10773ec95d250604a041f36c582_WETH_30"
+address = "0x6916f79669f745aebd82433583c85665bfae6fbb"
+protocol = "v3"
+token0 = "TK_0x112b08621e27e10773ec95d250604a041f36c582"
+token1 = "WETH"
+fee_bps = 30
+
+
+[[pools]]
+name = "AUTO_TK_0x090993bcc9dd600d15805d5ff070941cac6a506f_WETH_100"
+address = "0x1ee3eeee1708f529638a26e031d30779073be0a8"
+protocol = "v3"
+token0 = "TK_0x090993bcc9dd600d15805d5ff070941cac6a506f"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x7ddc52c4de30e94be3a6a0a2b259b2850f421989_WETH_100"
+address = "0xc2fa5fd1c1ad37701ef1b26c5f0680ac807e3efd"
+protocol = "v3"
+token0 = "TK_0x7ddc52c4de30e94be3a6a0a2b259b2850f421989"
+token1 = "WETH"
+fee_bps = 100
+
+
+[[pools]]
+name = "AUTO_TK_0x090993bcc9dd600d15805d5ff070941cac6a506f_WETH_25"
+address = "0xdc3378b8a29b0e551cea9d1c5ae5335f48cd767a"
+protocol = "v2"
+token0 = "TK_0x090993bcc9dd600d15805d5ff070941cac6a506f"
 token1 = "WETH"
 fee_bps = 25
 
