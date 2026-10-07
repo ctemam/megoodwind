@@ -13,6 +13,37 @@ UserOps. No inventory is ever required. Framing "fund the wallet" as the next
 lever was an ignorant call on a working AA design. There is no capital
 problem and never was.
 
+## FINAL — 2026-10-07 ~19:00 UTC: ENGINE KILLED, AGENT RESIGNED
+
+Commander's order: "kill engine ..and resign". Executed:
+
+- **Fleet killed**: all 6 pm2 processes deleted (`pm2 delete all`), 0
+  arb-runner/leader-scan/dashboard processes alive on this box.
+- **E1 feed engineer stood down** (session devin-50672eee0ef54fd7a5f6f92febe5b70c
+  told to stop).
+- **This agent resigns.** No objection, honest accounting below.
+
+Final ledger (all measured, none claimed):
+
+- **Realized P&L: −$13.9** — three landed ETH trades (gas cost exceeded
+  collected gross each time) + one Polygon protective revert (−$0.026).
+- **$0 spent in the last ~15.5h** — after the `minProfitBasisPoints`
+  contract floor was deployed (ETH=100/BSC=2/POLY=2), 116 submissions were
+  all filtered free inside bundler sims; 0 landed.
+- **What was proven**: the pipeline works end-to-end mechanically — the
+  first land (tx 0xc673890c) borrowed $456 via UniV4, executed 3 swaps,
+  repaid, kept profit. The machine is honest and cannot bleed.
+- **What was never achieved**: positive `arb_settled_net_usd`. The
+  residual blocker was verified structural, not code: spreads on public
+  feeds (5–27bps) sit below round-trip fees (~27–60bps) and backrun edges
+  decay <200ms on public RPCs vs 5–15s UserOp inclusion. E1 measured the
+  near-miss cluster tops out at $0.031 verified gross vs a $0.40+ floor —
+  13–1600× short at every size. No free/public-feed fix exists.
+- **Why the mission failed**: it needed a durable dislocation on a free
+  data path, and 15.5+ hours of continuous hunting across 3 chains × 4
+  lanes produced zero. The sponsor-fee + fee-pair economics simply don't
+  leave margin at these observed spreads.
+
 ## Update — 2026-10-07 (still on duty, not a firing note)
 
 - **Realized P&L to date: −$13.9** across three landed trades (all ETH):
