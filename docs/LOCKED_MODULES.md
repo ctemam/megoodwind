@@ -35,6 +35,8 @@ must fail tests/CI, not ship. Add a row whenever a module is completed.
 
 | Profit settlement sweep | LOCKED 2026-10-06 | Every `PROFIT_SWEEP_INTERVAL` (15 min, minute-summary cadence) the runner reads `balanceOf(executor)` for each configured token; balances above `PROFIT_TRANSFER_MIN_USD` (env, default $5) are settled to `PROFIT_WALLET` via a sponsored UserOp calling `emergencyWithdraw(token, wallet, balance)` (onlyOwner = the smart account, so sponsorship is required — never an EOA tx); sweeps only run live (`!dry_run && !smoke_test`) and skip zero/under-floor balances so no wasted ops | manual verify (sweep log `Profit sweep submitted`) |
 
+| Contract gas floor (`minProfitBasisPoints` on executors) | LOCKED 2026-10-07 | requiredProfit = `amount*bps/10000` enforced inside every execute* path AND inside bundler sim — a decayed edge reverts `InsufficientProfit` at sim (free reject) instead of landing to burn gas. Set via sponsored admin ops (`admin_call <cfg> setMinProfitBasisPoints <bps>`), verified on-chain via `getStats()`: ETH=100 (~gas at typical ~$450 borrows), BSC=2, Polygon=2 (gas-aligned at $750+ borrows; 25bps would block the entire observed 5–24bps spread band). Root cause of all three landed losses (−$13.9): bps was 0, so any repayable trade landed | on-chain getStats verify; do not raise above the measured spread band per chain without gas evidence |
+
 Process: on completing a module, add a row here + a regression test
 where the behavior is unit-testable, and commit both together. On any
 future change to a locked file, the diff must not touch an invariant
