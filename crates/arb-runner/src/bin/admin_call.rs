@@ -5,6 +5,7 @@
 //! flash-borrow asset:
 //!
 //!   cargo run --release --bin admin_call -- config/bsc.toml setTokenSupport 0x<token> true
+//!   cargo run --release --bin admin_call -- config/bsc.toml setMinProfitBasisPoints 25
 //!
 //! Sponsored gas, same venue path the live lanes use.
 
@@ -24,6 +25,7 @@ use arb_submit::{Bundle, Submitter, UserOpCall};
 
 sol! {
     function setTokenSupport(address token, bool supported) external;
+    function setMinProfitBasisPoints(uint256 _minProfitBps) external;
 }
 
 #[path = "../config.rs"]
@@ -40,13 +42,31 @@ async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let config_path = args.next().unwrap_or_else(|| "config/bsc.toml".to_string());
     let method = args.next().unwrap_or_default();
-    let token: Address = args
-        .next()
-        .unwrap_or_default()
-        .parse()
-        .map_err(|_| anyhow::anyhow!("usage: admin_call <cfg> setTokenSupport <token> <true|false>"))?;
-    let supported = args.next().unwrap_or_default() == "true";
-    anyhow::ensure!(method == "setTokenSupport", "unsupported method {method}");
+    let data = match method.as_str() {
+        "setTokenSupport" => {
+            let token: Address = args
+                .next()
+                .unwrap_or_default()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("usage: admin_call <cfg> setTokenSupport <token> <true|false>"))?;
+            let supported = args.next().unwrap_or_default() == "true";
+            info!(token = %token, supported, "encoding setTokenSupport");
+            setTokenSupportCall { token, supported }.abi_encode()
+        }
+        "setMinProfitBasisPoints" => {
+            let bps: u64 = args
+                .next()
+                .unwrap_or_default()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("usage: admin_call <cfg> setMinProfitBasisPoints <bps>"))?;
+            info!(bps, "encoding setMinProfitBasisPoints");
+            setMinProfitBasisPointsCall {
+                _minProfitBps: alloy_primitives::U256::from(bps),
+            }
+            .abi_encode()
+        }
+        _ => anyhow::bail!("unsupported method {method}"),
+    };
 
     let cfg = config::load_config(&config_path)?;
     anyhow::ensure!(cfg.submission.pimlico_enabled, "pimlico_enabled is false");
@@ -80,12 +100,7 @@ async fn main() -> Result<()> {
     let venue = PimlicoSubmitter::new(pim_cfg, endpoint, signer, cfg.chain.chain_id);
 
     let arb_contract: Address = cfg.chain.arb_contract.parse()?;
-    let data = setTokenSupportCall {
-        token,
-        supported,
-    }
-    .abi_encode();
-    info!(token = %token, supported, "submitting setTokenSupport UserOp");
+    info!(method, "submitting admin UserOp");
     let bundle = Bundle {
         signed_txs: vec![],
         victim_tx: None,
@@ -100,7 +115,7 @@ async fn main() -> Result<()> {
 
     match venue.submit(&bundle).await {
         Ok(res) => {
-            info!(success = res.success, "setTokenSupport UserOp submitted");
+            info!(success = res.success, method, "admin UserOp submitted");
             if !res.success {
                 warn!(error = ?res.error, "venue rejected the op");
             }
