@@ -17,7 +17,7 @@
 //! Usage: cargo run --release --bin profit_profile -- <config.toml> [cycles]
 //! Default: 3 cycles. Every line is prefixed so `grep` slices cleanly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alloy_primitives::{Address, U256};
@@ -25,6 +25,7 @@ use anyhow::Result;
 
 use arb_core::types::*;
 use arb_core::AmmQuoter;
+use arb_mempool::MempoolWatcher;
 use arb_paths::{PathEnumerator, PathTemplate};
 use arb_rpc::Endpoint;
 use arb_sim::evaluate::evaluate_all;
@@ -32,6 +33,7 @@ use arb_sim::optimize::{find_optimal_amount, path_max_flash};
 use arb_sim::ProfitGate;
 use arb_state::refresher::{PoolConfig, StateRefresher};
 use arb_state::PoolStore;
+use tokio::sync::mpsc;
 
 #[path = "../config.rs"]
 mod config;
@@ -155,6 +157,14 @@ async fn main() -> Result<()> {
     // 0 = only pass-1 survivors get optimized; 1 = every path gets optimized
     // (counterfactual: does the fixed-probe filter drop profitable paths?).
     let optimize_all: bool = args.iter().any(|a| a == "--optimize-all");
+    // --backrun <secs>: instead of scanning resting state, stream pending swaps
+    // for `secs` seconds, project each onto the pool(s) it hits, and measure
+    // post-swap profitability — the mode the runner's backrun path uses.
+    let backrun_secs: Option<u64> = args
+        .iter()
+        .position(|a| a == "--backrun")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok());
 
     let cfg = config::load_config(config_path)?;
     println!("PROFILER chain={} config={config_path} cycles={cycles} optimize_all={optimize_all}", cfg.chain.name);
@@ -194,24 +204,25 @@ async fn main() -> Result<()> {
     let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().expect("bad pool addr"),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| PoolConfig {
+            address,
             protocol: p.parse_protocol(),
             fee_bps: p.fee_bps,
             token0: tokens.get(&p.token0).copied(),
             token1: tokens.get(&p.token1).copied(),
-        })
+        }))
         .collect();
 
     let mut pool_infos: Vec<arb_paths::enumerate::PoolInfo> = cfg
         .pools
         .iter()
-        .map(|p| arb_paths::enumerate::PoolInfo {
-            address: p.address.parse().expect("bad pool addr"),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| arb_paths::enumerate::PoolInfo {
+            address,
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
-        })
+            liquidity_hint: 0.0,
+        }))
         .collect();
 
     // Same boot normalization the runner applies: Uniswap-family token0 <
@@ -242,6 +253,16 @@ async fn main() -> Result<()> {
         println!("PROFILER normalized_flipped_pools={normalized}");
     }
 
+    let (v4_specs, _, invalid_v4) = config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
+    pool_infos.retain(|pi| !invalid_v4.contains(&pi.address));
+
+    let pool_fee_bps: HashMap<Address, u32> =
+        pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse().unwrap_or(Address::ZERO);
     let refresher = StateRefresher::new(
@@ -249,7 +270,8 @@ async fn main() -> Result<()> {
         state_reader,
         pool_configs,
         cfg.chain.chain_id,
-    );
+    )
+    .with_v4_pools(v4_specs);
 
     let flash_tokens: Vec<Address> = cfg.scanner.flash_tokens.iter().map(|n| tokens[n]).collect();
     let flash_amounts: HashMap<Address, U256> = cfg
@@ -271,17 +293,483 @@ async fn main() -> Result<()> {
     println!("PROFILER paths={} max_hops={}", paths.len(), config::spec::MAX_PATH_HOPS);
 
     // Production gate and the permissive counterfactual (no margin/floor).
-    let real_gate = ProfitGate::new(
+    let real_gate = ProfitGate::with_protocol_margins(
         cfg.scanner.min_profit_bps,
         config::min_profit_usd_floor(cfg.gate.min_profit_usd),
         cfg.gate.safety_margin_bps,
         cfg.gate.stable_pool_extra_margin_bps,
+        cfg.gate
+            .protocol_margins
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, &v)| (config::parse_protocol_name(k), v))
+                    .collect()
+            })
+            .unwrap_or_default(),
         token_usd_prices.clone(),
         token_decimals.clone(),
     );
     let free_gate = ProfitGate::new(
         0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone(),
     );
+
+    if let Some(secs) = backrun_secs {
+        // Same indexes the runner's backrun path uses.
+        let mut pair_to_pools: HashMap<(Address, Address), Vec<(Address, u32)>> = HashMap::new();
+        for p in &pool_infos {
+            let key = if p.token0 < p.token1 { (p.token0, p.token1) } else { (p.token1, p.token0) };
+            let fee = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
+            pair_to_pools.entry(key).or_default().push((p.address, fee));
+        }
+        let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
+        for (idx, path) in paths.iter().enumerate() {
+            for hop in &path.hops {
+                pool_to_paths.entry(hop.pool).or_default().push(idx);
+            }
+        }
+
+        // Leader wallet intelligence — same observer as the runner loop:
+        // scores every sender, auto-promotes candidates, persists JSONL.
+        let leader_observer = {
+            let enabled = !cfg.leaders.wallets.is_empty() || cfg.leaders.discover;
+            enabled.then(|| {
+                arb_leaders::LeaderObserver::new(
+                    arb_leaders::LeaderRegistry::new(&cfg.leaders),
+                    std::path::PathBuf::from("data/leaders"),
+                    cfg.chain.name.clone(),
+                    &cfg.leaders,
+                )
+            })
+        };
+        if let Some(o) = &leader_observer {
+            println!("PROFILER leaders enabled=1 wallets={} discover={}",
+                o.wallet_count(), cfg.leaders.discover);
+        }
+
+        // Fresh state so projections sit on current reserves.
+        let _ = refresher.refresh(&store).await?;
+        pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
+
+        // Quarantine pools whose implied price diverges >3x from same-pair
+        // peers — broken/exhausted state fabricates phantom arb legs.
+        let pool_tokens: HashMap<Address, (Address, Address)> = pool_infos
+            .iter()
+            .map(|p| (p.address, (p.token0, p.token1)))
+            .collect();
+        let quarantined = arb_mempool::impact::quarantine_outlier_pools(
+            &store, &pair_to_pools, &pool_tokens, 3.0);
+        if !quarantined.is_empty() {
+            println!("PROFILER quarantined_pools={quarantined:?}");
+        }
+
+        // Sim verification gate — Commander directive: discovery→execution is
+        // auto-approved ONLY after our own simulator reproduces a positive
+        // profit through a shadow strategy's route pools on live state.
+        // Bounded cap $25 notional. replay/shadow records are evaluated;
+        // mark_verified performs the shadow->bounded_live auto-transition.
+        {
+            const VERIFY_CAP_USD: f64 = 25.0;
+            let mut strat = arb_leaders::StrategyRegistry::load(&cfg.chain.name, 20_000);
+            let mut hi = store.last_block();
+            if hi == 0 {
+                if let Ok(b) = endpoint.block_number().await {
+                    store.set_block(b);
+                    hi = b;
+                }
+            }
+            let mut n_ver = 0u32;
+            let mut verified_out: Vec<(String, f64)> = Vec::new();
+            let mut eval_out: Vec<(String, f64, bool)> = Vec::new();
+            // Observe-state records with decoded routes are sim'd too —
+            // evidence thresholds (min_txs) would otherwise starve
+            // single-big-tx leaders, and the simulator is the real gate.
+            let ids: Vec<(String, Vec<String>)> = strat
+                .records
+                .values()
+                .filter(|r| matches!(r.state,
+                    arb_leaders::StrategyState::Observe
+                        | arb_leaders::StrategyState::Shadow
+                        | arb_leaders::StrategyState::Replay
+                        | arb_leaders::StrategyState::BoundedLive))
+                .filter(|r| !r.route_pools.is_empty())
+                .map(|r| (r.strategy_id.clone(), r.route_pools.clone()))
+                .collect();
+            for (id, route) in &ids {
+                // Per-chain shadow-sim accounting (expansion spec metrics).
+                arb_leaders::LEADER_SHADOW_ATTEMPTS
+                    .with_label_values(&[cfg.chain.name.as_str()])
+                    .inc();
+                // Candidate paths sharing at least one route pool, minus quarantined.
+                let mut cand: HashMap<usize, usize> = HashMap::new();
+                for p in route {
+                    let pa = match p.parse::<Address>() { Ok(a) => a, Err(_) => continue };
+                    if let Some(v) = pool_to_paths.get(&pa) {
+                        for &i in v { *cand.entry(i).or_default() += 1; }
+                    }
+                }
+                let mut ranked: Vec<usize> = cand.iter()
+                    .filter(|(&i, _)| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)))
+                    .map(|(&i, _)| i)
+                    .collect();
+                ranked.sort_unstable_by(|&a, &b| cand[&b].cmp(&cand[&a]));
+                let mut best_usd = 0.0;
+                let mut best_pools: HashSet<Address> = HashSet::new();
+                for &pi in ranked.iter().take(30) {
+                    let path = &paths[pi];
+                    let (min_a, token_max) = flash_bounds
+                        .get(&path.flash_token)
+                        .copied()
+                        .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
+                    let hi = token_max.min(path_max_flash(path, &store, 0.05, token_max));
+                    if let Some((_, prof)) = find_optimal_amount(
+                        path, &store, min_a, hi,
+                        cfg.scanner.optimization_iterations) {
+                        if !prof.is_zero() {
+                            let usd = usd_value(
+                                prof, &path.flash_token,
+                                &token_usd_prices, &token_decimals);
+                            if usd > best_usd {
+                                best_usd = usd;
+                                best_pools = path.hops.iter().map(|h| h.pool).collect();
+                            }
+                        }
+                    }
+                }
+                // Honest coverage: the reproduction only counts if the winning
+                // path traverses EVERY pool in the leader's route — overlap on
+                // one pool is a different trade, not a replay.
+                let route_covered = !route.is_empty() && route.iter().all(|p| {
+                    p.parse::<Address>().map(|a| best_pools.contains(&a)).unwrap_or(false)
+                });
+                if best_usd > 0.0 {
+                    arb_leaders::LEADER_SHADOW_POSITIVE
+                        .with_label_values(&[cfg.chain.name.as_str()])
+                        .inc();
+                    // Promotion to bounded_live requires reproducing the
+                    // leader's literal route, not just a profitable neighbor.
+                    if route_covered && strat.mark_verified(id, best_usd, VERIFY_CAP_USD) {
+                        println!("VERIFY {id} profit_usd={best_usd:.1} cap_usd={VERIFY_CAP_USD} -> bounded_live");
+                        n_ver += 1;
+                    }
+                    verified_out.push((id.clone(), best_usd));
+                }
+                eval_out.push((id.clone(), best_usd, route_covered));
+            }
+            // ---- Complete pending opportunity records with sim outcomes.
+            // Commander directive: a record is actionable only when OUR
+            // simulator reproduces positive net ON THE LEADER'S OWN ROUTE —
+            // leader evidence alone is never sufficient, and a profitable
+            // neighbor path is a different trade (route_partially_covered).
+            {
+                let opp_dir = format!("data/leaders/{}", cfg.chain.name);
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64).unwrap_or(0);
+                let mut opps = arb_core::opportunity::load_opportunities(&opp_dir);
+                for (id, usd, covered) in &eval_out {
+                    let prefix = format!("{}/{id}/", cfg.chain.name);
+                    let mut o = match opps.iter()
+                        .filter(|o| o.opportunity_id.starts_with(&prefix))
+                        .max_by_key(|o| o.unix_ms)
+                    {
+                        Some(o) => { let mut c = o.clone(); c.unix_ms = now_ms; c }
+                        None => arb_core::opportunity::ActionableOpportunity::new(
+                            &cfg.chain.name, id,
+                            id.split('/').next().unwrap_or(""), "sim_eval",
+                            ids.iter().find(|(i, _)| i == id)
+                                .map(|(_, r)| r.clone()).unwrap_or_default()),
+                    };
+                    if *usd > 0.0 && !covered {
+                        // Positive sim but not on the leader's literal route:
+                        // record the signal, block actionability honestly.
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Pass;
+                        o.allbright_net_usd = *usd;
+                        if o.rejection_reason.is_empty()
+                            || o.rejection_reason == "route_untracked" {
+                            o.rejection_reason = "route_partially_covered".into();
+                            arb_leaders::OPPORTUNITY_REJECTED
+                                .with_label_values(&[cfg.chain.name.as_str(), "route_partially_covered"])
+                                .inc();
+                        }
+                        // A rejection reason makes the record non-actionable —
+                        // downgrade any stale Ready from an earlier weaker gate.
+                        if !o.is_actionable()
+                            && o.execution_status
+                                == arb_core::opportunity::ExecutionStatus::Ready {
+                            o.execution_status =
+                                arb_core::opportunity::ExecutionStatus::None;
+                        }
+                    } else if *usd > 0.0 {
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Pass;
+                        o.allbright_net_usd = *usd;
+                        if o.rejection_reason == "route_untracked"
+                            || o.rejection_reason == "route_partially_covered" {
+                            o.rejection_reason.clear();
+                        }
+                        // Replay-positive is evidence for scoring, never a
+                        // live-ready opportunity — only the runner's
+                        // post-re-check path may stamp execution_status=Ready.
+                        if o.is_actionable() {
+                            arb_leaders::OPPORTUNITY_TOTAL
+                                .with_label_values(&[cfg.chain.name.as_str(), "actionable"])
+                                .inc();
+                        }
+                        arb_leaders::OPPORTUNITY_TOTAL
+                            .with_label_values(&[cfg.chain.name.as_str(), "replay_positive"])
+                            .inc();
+                        println!(
+                            "LEADER_OPPORTUNITY {} allbright_net_usd={usd:.1} \
+                             sim=pass exec={:?}",
+                            o.opportunity_id, o.execution_status);
+                    } else {
+                        o.simulation_status =
+                            arb_core::opportunity::SimulationStatus::Fail;
+                        o.execution_status =
+                            arb_core::opportunity::ExecutionStatus::None;
+                        if o.rejection_reason.is_empty() {
+                            o.rejection_reason = "negative_net_after_gas".into();
+                            arb_leaders::OPPORTUNITY_REJECTED
+                                .with_label_values(&[cfg.chain.name.as_str(), "negative_net_after_gas"])
+                                .inc();
+                        }
+                    }
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[cfg.chain.name.as_str(), "replay_attempts"])
+                        .inc();
+                    let _ = o.append_jsonl(&opp_dir);
+                }
+            }
+            if n_ver > 0 || !ids.is_empty() {
+                let _ = strat.expire_stale(hi);
+                let _ = strat.save();
+            }
+            // Persist the sim funnel for the dashboard — honest record of the
+            // discovery->execution gate: how many strategies our own simulator
+            // evaluated this run and how many reproduced positive profit.
+            let unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let report = serde_json::json!({
+                "evaluated": ids.len(), "verified": n_ver, "block": hi,
+                "cap_usd": VERIFY_CAP_USD, "unix_ms": unix_ms,
+                "results": verified_out.iter()
+                    .map(|(id, p)| serde_json::json!({"strategy_id": id, "profit_usd": p}))
+                    .collect::<Vec<_>>(),
+            });
+            let dir = format!("data/leaders/{}", cfg.chain.name);
+            let _ = std::fs::create_dir_all(&dir);
+            if let Err(e) = std::fs::write(
+                format!("{dir}/_verify.json"), serde_json::to_string(&report).unwrap()) {
+                eprintln!("VERIFY report write failed: {e}");
+            }
+            println!("STRATEGY_VERIFY evaluated={} verified={n_ver} block={hi}", ids.len());
+        }
+
+        let mut wss_urls = cfg.chain.rpc_wss_pool.clone();
+        wss_urls.retain(|u| !u.trim().is_empty());
+        if wss_urls.is_empty() {
+            wss_urls.push(cfg.chain.rpc_wss.clone());
+        }
+        let mut wss_sources: Vec<arb_mempool::WssSource> = wss_urls
+            .into_iter()
+            .map(arb_mempool::WssSource::public)
+            .collect();
+        for url in &cfg.chain.private_mempool_wss {
+            wss_sources.push(arb_mempool::WssSource {
+                url: url.clone(),
+                auth: cfg.chain.private_mempool_auth.clone(),
+            });
+        }
+        let (tx, mut rx) = mpsc::channel(1000);
+        let cid = cfg.chain.chain_id;
+        tokio::spawn(async move {
+            let watcher = MempoolWatcher::with_sources(wss_sources, cid);
+            let _ = watcher.start(tx).await;
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        let mut last_refresh = std::time::Instant::now();
+        let (mut n_rx, mut n_amt, mut n_pair, mut n_cand) = (0u64, 0u64, 0u64, 0u64);
+        let (mut n_prof, mut n_gate) = (0u64, 0u64);
+        let mut best_bps = 0u32;
+        let mut top: Vec<(u32, f64, &'static str, String, Option<f64>)> = Vec::new();
+        let mut router_stats: HashMap<&'static str, (u64, u64)> = HashMap::new();
+        let mut dumped = 0u32;
+
+        while std::time::Instant::now() < deadline {
+            let pending = match tokio::time::timeout(
+                std::time::Duration::from_millis(100), rx.recv(),
+            ).await {
+                Ok(Some(p)) => p,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
+            n_rx += 1;
+            if let Some(o) = &leader_observer {
+                o.observe(&pending);
+            }
+            router_stats.entry(pending.decoded.router).or_insert((0, 0)).0 += 1;
+            if last_refresh.elapsed() > std::time::Duration::from_secs(20) {
+                let _ = refresher.refresh(&store).await;
+                last_refresh = std::time::Instant::now();
+            }
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                // Direct pool calls carry no input amount in calldata —
+                // it's recovered from reserves inside projection.
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => {
+                    if dumped < 3 {
+                        dumped += 1;
+                        let hex: String = pending.raw_input.iter().map(|b| format!("{b:02x}")).collect();
+                        println!("PROFILER   DUMP {} to={} len={} calldata={}",
+                            pending.decoded.router, pending.to, pending.raw_input.len(), hex);
+                    }
+                    continue;
+                }
+            };
+            n_amt += 1;
+            router_stats.get_mut(pending.decoded.router).map(|s| s.1 += 1);
+            // Project every hop of the pending path onto tracked pools;
+            // a pair match on ANY hop (not just the first) now counts.
+            // Direct calls name the pool itself — always a "pair match" in
+            // spirit; the projection drops untracked pools itself.
+            let hit_any_pair = pending.decoded.direct.is_some() || pending.decoded.path.windows(2).any(|w| {
+                let (a, b) = (w[0], w[1]);
+                pair_to_pools.contains_key(&if a < b { (a, b) } else { (b, a) })
+            }) || (pending.decoded.token_in.is_some()
+                && pending.decoded.token_out.is_some()
+                && {
+                    let (a, b) = (pending.decoded.token_in.unwrap(), pending.decoded.token_out.unwrap());
+                    pair_to_pools.contains_key(&if a < b { (a, b) } else { (b, a) })
+                });
+            if !hit_any_pair { continue; }
+            n_pair += 1;
+            let Some((projected, hit_pools, victim_usd, _max_move)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools,
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
+            let mut cand: Vec<usize> = Vec::new();
+            for pa in &hit_pools {
+                if quarantined.contains(pa) { continue; }
+                if let Some(ids) = pool_to_paths.get(pa) {
+                    cand.extend_from_slice(ids);
+                }
+            }
+            if cand.is_empty() { continue; }
+            cand.sort_unstable();
+            cand.dedup();
+            cand.retain(|&i| !paths[i].hops.iter().any(|h| quarantined.contains(&h.pool)));
+            if cand.is_empty() { continue; }
+            n_cand += 1;
+
+            let mut best_for_swap: Option<(U256, u32, Address)> = None;
+            let mut best_path: Option<usize> = None;
+            let mut victim_usd_dbg = victim_usd;
+            // Cheap screen: rank candidate paths by single-point profit at
+            // their min flash amount so the 20 full optimizations go to the
+            // most promising routes instead of the first 20 by index.
+            let mut screened: Vec<(usize, U256)> = cand
+                .iter()
+                .map(|&i| {
+                    let p = &paths[i];
+                    let min_a = flash_bounds
+                        .get(&p.flash_token)
+                        .map(|b| b.0)
+                        .unwrap_or(p.flash_amount);
+                    // Two probe points: unimodal profit curves can start at
+                    // zero for small clips — a mid-size probe catches paths
+                    // that only profit at larger flash amounts.
+                    let hi_probe = (min_a * U256::from(10u32))
+                        .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                            .unwrap_or(p.flash_amount * U256::from(10u32)));
+                    let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                        .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                    (i, s)
+                })
+                .collect();
+            screened.sort_by(|a, b| b.1.cmp(&a.1));
+            for &(pidx, _) in screened.iter().take(20) {
+                let path = &paths[pidx];
+                let (min_a, token_max) = flash_bounds
+                    .get(&path.flash_token)
+                    .copied()
+                    .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
+                let liq_max = path_max_flash(path, &projected, 0.05, token_max);
+                let hi = token_max.min(liq_max);
+                let Some((amt, prof)) =
+                    find_optimal_amount(path, &projected, min_a, hi, cfg.scanner.optimization_iterations)
+                else { continue };
+                if prof.is_zero() { continue; }
+                let bps: u32 = ((prof * U256::from(10000u32)) / amt).try_into().unwrap_or(u32::MAX);
+                let sim = arb_sim::SimResult {
+                    path_id: path.id,
+                    flash_token: path.flash_token,
+                    flash_amount: amt,
+                    final_amount: amt + prof,
+                    gross_profit: prof,
+                    profit_bps: bps,
+                };
+                let dec = real_gate.should_submit(&sim, path);
+                // Cap: a backrun can't extract more than the victim's input.
+                // Capped candidates are phantom projections — excluded from
+                // gate_pass AND the best/top display, same as the runner.
+                // Implausible decoded victim size (>~$100M) = decode garbage,
+                // same unverifiable class as an exceeded cap.
+                let capped = victim_usd.map_or(false, |v| {
+                    v > 1e8 || dec.effective_profit_usd > v
+                });
+                if dec.accept && !capped {
+                    n_gate += 1;
+                    if best_for_swap.map_or(true, |(p, _, _)| prof > p) {
+                        best_for_swap = Some((prof, bps, path.flash_token));
+                        best_path = Some(pidx);
+                    }
+                }
+            }
+            if let Some((prof, bps, ft)) = best_for_swap {
+                n_prof += 1;
+                if bps > best_bps { best_bps = bps; }
+                let usd = usd_value(prof, &ft, &token_usd_prices, &token_decimals);
+                let pools_dbg = best_path
+                    .map(|i| paths[i].hops.iter().map(|h| format!("{:#x}", h.pool)).collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
+                top.push((bps, usd, pending.decoded.router, pools_dbg, victim_usd_dbg));
+            }
+        }
+        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        println!(
+            "PROFILER backrun window_secs={secs} pending_rx={n_rx} with_amount={n_amt} \
+             pair_match={n_pair} candidates={n_cand} projected_profitable={n_prof} \
+             gate_pass={n_gate} best_bps={best_bps}"
+        );
+        for (bps, usd, router, pools, vusd) in top.iter().take(10) {
+            println!("PROFILER   BACKRUN bps={bps} gross_usd={usd:.4} router={router} victim_usd={vusd:?} pools={pools}");
+        }
+        let mut rs: Vec<_> = router_stats.into_iter().collect();
+        rs.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        for (router, (dec, amt)) in rs {
+            println!("PROFILER   ROUTER {router} decoded={dec} with_amount={amt}");
+        }
+        if let Some(o) = &leader_observer {
+            println!(
+                "PROFILER leaders wallets={} discovered={} scored_senders={}",
+                o.wallet_count(),
+                o.discovered_wallets(),
+                o.scored_senders()
+            );
+            for (addr, score, obs, class) in o.top_senders(10) {
+                println!(
+                    "PROFILER   LEADER score={score:.1} obs={obs} class={class} {addr:#x}"
+                );
+            }
+        }
+        return Ok(());
+    }
 
     let mut best_ever: Option<(f64, String)> = None;
     let mut gate_hist: HashMap<&'static str, u64> = HashMap::new();

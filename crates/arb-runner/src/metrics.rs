@@ -1,6 +1,6 @@
 use prometheus::{
-    register_counter, register_counter_vec, register_gauge, register_histogram,
-    Counter, CounterVec, Gauge, Histogram, Encoder, TextEncoder,
+    register_counter, register_counter_vec, register_gauge, register_gauge_vec, register_histogram,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram, Encoder, TextEncoder,
 };
 use tokio::task::JoinHandle;
 use tracing::info;
@@ -55,6 +55,83 @@ lazy_static::lazy_static! {
         &["status"]
     ).unwrap();
 
+    // ─── Wallet-copy lane ───
+    pub static ref COPY_SIGNALS: CounterVec = register_counter_vec!(
+        "arb_copy_signals_total",
+        "Copy-eligible leader swaps seen by the copy lane",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_REJECTS: CounterVec = register_counter_vec!(
+        "arb_copy_rejects_total",
+        "Copy lane rejections by stage",
+        &["chain", "reason"]
+    ).unwrap();
+
+    pub static ref COPY_SUBMITTED: CounterVec = register_counter_vec!(
+        "arb_copy_submitted_total",
+        "Copy swaps submitted to the 4337 venue",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_APPROVALS: CounterVec = register_counter_vec!(
+        "arb_copy_approvals_total",
+        "Smart-account token approvals submitted by the copy lane",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_RESOLVED: CounterVec = register_counter_vec!(
+        "arb_copy_resolved_pairs_total",
+        "Pairs factory-resolved into the copy lane's pool index",
+        &["chain"]
+    ).unwrap();
+
+    pub static ref COPY_FRESH: CounterVec = register_counter_vec!(
+        "arb_copy_fresh_resim_total",
+        "Copy lane submit-time reserve re-read outcomes",
+        &["chain", "result"]
+    ).unwrap();
+
+    pub static ref POOLS_HOT: CounterVec = register_counter_vec!(
+        "arb_pools_hot_added_total",
+        "Pools hot-loaded into the live set from config reloads",
+        &["chain"]
+    ).unwrap();
+
+    /// Pools ingested per feed source per cycle (gt_geckoterminal /
+    /// ds_dexscreener) — visibility into which host is supplying coverage.
+    pub static ref FEED_INGESTED: CounterVec = register_counter_vec!(
+        "arb_feed_ingested_total",
+        "Feed pools ingested per source",
+        &["chain", "source"]
+    ).unwrap();
+
+    pub static ref FEED_SCANNED: CounterVec = register_counter_vec!(
+        "arb_feed_scanned_total",
+        "Feed lane: token polls completed",
+        &["chain"]
+    ).unwrap();
+    pub static ref FEED_CANDIDATES: CounterVec = register_counter_vec!(
+        "arb_feed_candidates_total",
+        "Feed lane: spread pairs passing rigid filters",
+        &["chain"]
+    ).unwrap();
+    pub static ref FEED_REJECTS: CounterVec = register_counter_vec!(
+        "arb_feed_rejects_total",
+        "Feed lane: candidate rejections by reason",
+        &["chain", "reason"]
+    ).unwrap();
+    pub static ref FEED_VERIFIED: CounterVec = register_counter_vec!(
+        "arb_feed_verified_total",
+        "Feed lane: fresh-state verification outcomes",
+        &["chain", "result"]
+    ).unwrap();
+    pub static ref FEED_SUBMITTED: CounterVec = register_counter_vec!(
+        "arb_feed_submitted_total",
+        "Feed lane: executions submitted to venues",
+        &["chain"]
+    ).unwrap();
+
     pub static ref WARP_SPEND_USD: Counter = register_counter!(
         "arb_warp_spend_usd_total",
         "Total USD spent on Warp/Trader calls at $0.15 each"
@@ -70,6 +147,21 @@ lazy_static::lazy_static! {
         "arb_state_refresh_seconds",
         "State refresh latency in seconds",
         vec![0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5]
+    ).unwrap();
+
+    /// Phase-1 latency budget: pending-swap receipt → first candidate
+    /// evaluation, and pending receipt → bundle submit. These are the two
+    /// numbers that decide whether we win the same-block backrun race.
+    pub static ref PENDING_TO_EVAL: Histogram = register_histogram!(
+        "arb_pending_to_eval_seconds",
+        "Pending-swap receive to candidate evaluation latency in seconds",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    ).unwrap();
+
+    pub static ref PENDING_TO_SUBMIT: Histogram = register_histogram!(
+        "arb_pending_to_submit_seconds",
+        "Pending-swap receive to backrun bundle submit latency in seconds",
+        vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
     ).unwrap();
 
     pub static ref CURRENT_BLOCK: Gauge = register_gauge!(
@@ -92,6 +184,16 @@ lazy_static::lazy_static! {
         "Paths suppressed by circuit breaker"
     ).unwrap();
 
+    pub static ref BAIT_SUSPECT: Counter = register_counter!(
+        "arb_bait_suspect_total",
+        "Pools suppressed by bait telemetry (repeated gate-pass-then-revert signature)"
+    ).unwrap();
+
+    pub static ref STALE_SUPPRESSED: Counter = register_counter!(
+        "arb_stale_suppressed_total",
+        "Candidate paths suppressed for containing pools whose state refresh is stale"
+    ).unwrap();
+
     pub static ref BUILDER_SIM_REJECT: Counter = register_counter!(
         "arb_builder_sim_reject_total",
         "Builder simulation rejections (pre-revert signal)"
@@ -109,6 +211,30 @@ lazy_static::lazy_static! {
         vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 50.0]
     ).unwrap();
 
+    /// Candidates the profit gate ACCEPTED — the "would have submitted"
+    /// count in dry-run, the pre-submission count live.
+    pub static ref GATE_ACCEPTS: Counter = register_counter!(
+        "arb_gate_accepts_total",
+        "Profit-gate accepted candidates (resting + backrun)"
+    ).unwrap();
+
+    /// Cumulative projected net USD of gate-accepted candidates — the
+    /// pipeline's projected P&L before execution. Resting accepts add their
+    /// own value; backrun accepts add the BEST path per victim event (all
+    /// paths for one victim extract the same dislocation — summing would
+    /// multiply-count a single opportunity).
+    pub static ref ACCEPTED_PROFIT_USD: Counter = register_counter!(
+        "arb_accepted_profit_usd_total",
+        "Cumulative projected net USD of accepted candidates (per-victim max)"
+    ).unwrap();
+
+    /// 1 when the runner is in dry-run (measure mode: full pipeline, no
+    /// on-chain submission), 0 when live. Lets dashboards show the mode.
+    pub static ref DRY_RUN: Gauge = register_gauge!(
+        "arb_dry_run",
+        "1 = dry-run measure mode, 0 = live submission"
+    ).unwrap();
+
     pub static ref SPONSORSHIP_REJECTS: CounterVec = register_counter_vec!(
         "arb_sponsorship_rejects_total",
         "Sponsored UserOperation rejections by reason (gasless mode)",
@@ -120,9 +246,51 @@ lazy_static::lazy_static! {
         "Pending swaps matched for backrun evaluation"
     ).unwrap();
 
+    /// Backrun bundles that found no ordering-aware venue to carry them
+    /// (e.g. strict_4337 leaves only the UserOp bundler, which cannot order
+    /// after a victim tx).
+    pub static ref BACKRUN_NO_VENUE: Counter = register_counter!(
+        "arb_backrun_no_venue_total",
+        "Backrun bundles dropped: no bundle-capable submit venue configured"
+    ).unwrap();
+
     pub static ref BACKRUN_SUBMITTED: Counter = register_counter!(
         "arb_backrun_submitted_total",
         "Backrun bundles submitted"
+    ).unwrap();
+
+    /// Per-stage drop accounting for the backrun pipeline — the diagnostic
+    /// that answers "which stage killed each opportunity":
+    /// candidates -> gate_accepted -> recheck_dead | bundle_fail |
+    /// bundle_built -> submitted (see SUBMIT_LANDED/SETTLEMENTS downstream).
+    pub static ref BACKRUN_STAGES: CounterVec = register_counter_vec!(
+        "arb_backrun_stage_total",
+        "Backrun candidates per terminal/pipeline stage",
+        &["stage"]
+    ).unwrap();
+
+    /// Settlement feedback: submissions tracked to an on-chain outcome,
+    /// labeled by realized result (settled/revert/dropped).
+    pub static ref SETTLEMENTS: CounterVec = register_counter_vec!(
+        "arb_settlements_total",
+        "Submissions settled on-chain by outcome",
+        &["chain", "outcome"]
+    ).unwrap();
+
+    /// Cumulative realized P&L after gas, USD. A gauge because realized
+    /// losses decrement it — this is the number the whole engine exists for.
+    pub static ref SETTLED_NET_USD: GaugeVec = register_gauge_vec!(
+        "arb_settled_net_usd",
+        "Cumulative realized net P&L after gas, USD",
+        &["chain"]
+    ).unwrap();
+
+    /// Per-lane execution state: 0 = off, 1 = shadow/measure (records,
+    /// never submits), 2 = live submissions. lane ∈ classic, backrun, copy.
+    pub static ref LANE_STATE: GaugeVec = register_gauge_vec!(
+        "arb_lane_state",
+        "Execution state per lane (0=off, 1=shadow, 2=live)",
+        &["lane"]
     ).unwrap();
 }
 
@@ -138,6 +306,9 @@ pub fn start_metrics_server(port: u16) -> JoinHandle<()> {
     // series before the first event — dashboards rely on key presence.
     let _ = GROSS_PROFIT_USD.get();
     let _ = NET_PROFIT_USD.get();
+    let _ = GATE_ACCEPTS.get();
+    let _ = ACCEPTED_PROFIT_USD.get();
+    let _ = DRY_RUN.get();
     tokio::spawn(async move {
         let app = axum::Router::new()
             .route("/metrics", axum::routing::get(metrics_handler))

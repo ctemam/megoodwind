@@ -7,7 +7,9 @@ use arb_paths::PathTemplate;
 use arb_state::PoolStore;
 
 /// Simulate a path at a given flash amount, returning the gross profit (or zero if unprofitable).
-fn simulate_profit(path: &PathTemplate, amount: U256, store: &PoolStore) -> U256 {
+/// Cheap single-point profit eval — used to rank backrun candidates before
+/// spending full ternary optimization on the most promising routes.
+pub fn simulate_profit(path: &PathTemplate, amount: U256, store: &PoolStore) -> U256 {
     let mut current = amount;
 
     for hop in &path.hops {
@@ -61,21 +63,29 @@ pub fn path_max_flash(
                 if hop.token_in == s.base_token { s.base_reserve } else { s.quote_reserve }
             }
             Some(PoolState::V3(s)) => {
+                // V3 depth is a sqrtPrice/liquidity *estimate*, not a
+                // balance — a missing or degenerate value must not zero
+                // out the whole path the way a genuinely empty V2 reserve
+                // would. Skip the cap for that hop instead of truncating.
                 if s.sqrt_price_x96.is_zero() || s.liquidity == 0 {
-                    return U256::ZERO;
+                    continue;
                 }
                 let l = U256::from(s.liquidity);
                 let q96 = U256::from(1u128 << 96);
-                if hop.token_in == s.token0 {
+                let est = if hop.token_in == s.token0 {
                     // reserve0 ≈ L * Q96 / sqrtPrice
                     l.checked_mul(q96)
                         .and_then(|v| v.checked_div(s.sqrt_price_x96))
-                        .unwrap_or(U256::MAX)
                 } else {
                     // reserve1 ≈ L * sqrtPrice / Q96
                     l.checked_mul(s.sqrt_price_x96)
                         .and_then(|v| v.checked_div(q96))
-                        .unwrap_or(U256::MAX)
+                };
+                match est {
+                    Some(r) if !r.is_zero() => r,
+                    // Degenerate estimate (overflow or zero) — uncap this
+                    // hop rather than kill the path's sizing.
+                    _ => continue,
                 }
             }
             Some(PoolState::Curve(_)) | Some(PoolState::Wombat(_)) | None => continue,

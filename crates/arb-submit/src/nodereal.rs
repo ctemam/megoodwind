@@ -34,10 +34,15 @@ impl Submitter for NodeRealSubmitter {
         SubmitTier::AlwaysOn
     }
 
+    fn is_bundle_venue(&self) -> bool {
+        true
+    }
+
     async fn submit(&self, bundle: &Bundle) -> Result<SubmitResult> {
         let txs: Vec<String> = bundle
-            .signed_txs
+            .victim_tx
             .iter()
+            .chain(bundle.signed_txs.iter())
             .map(|tx| format!("0x{}", hex::encode(tx)))
             .collect();
 

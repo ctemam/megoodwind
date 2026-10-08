@@ -2,13 +2,13 @@ import React from 'react'
 import { AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { useApp, fmt } from '../state.jsx'
 
-const LABEL = { bsc: 'BNB Chain', base: 'Base' }
-const COLORS = ['#f0b90b', '#38b6ff']
+const LABEL = { bsc: 'BNB Chain', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
+const COLORS = ['#f0b90b', '#38b6ff', '#627eea', '#8247e5']
 
 export default function Overview() {
   const { all, currency, prices, history, profitPeriod } = useApp()
   const chains = all.chains || {}
-  const names = ['bsc', 'base']
+  const names = ['bsc', 'base', 'ethereum', 'polygon']
 
   const sum = (k) => names.reduce((s, c) => s + (chains[c]?.[k] || 0), 0)
   const totalGross = sum('arb_gross_profit_usd_total')
@@ -28,9 +28,9 @@ export default function Overview() {
       <div className="grid cards" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
         <div className="card"><div className="k">Total profit found</div><div className="v pos">{fmt(profitPeriod === 'day' ? (all.profit?.day ?? totalGross) : totalGross, currency, prices)}</div><div className="d-up">{profitPeriod === 'day' ? 'last 24h effective USD' : 'cumulative effective USD'}</div></div>
         <div className="card"><div className="k">Hit rate</div><div className="v">{successRate.toFixed(2)}%</div><div className="s">{totalFound.toLocaleString()} / {totalEval.toLocaleString()}</div></div>
-        <div className="card"><div className="k">Avg scan latency</div><div className="v">{avgLatMs.toFixed(0)}ms</div><div className="s">per-block state refresh+scan</div></div>
-        <div className="card"><div className="k">Paths evaluated</div><div className="v">{(totalEval / 1e6).toFixed(2)}M</div><div className="s">math kernel evals</div></div>
-        <div className="card"><div className="k">Active runners</div><div className="v">{online}/2</div><div className="s">{all.live ? 'LIVE' : 'dry-run'} fleet</div></div>
+        <div className="card"><div className="k">Avg scan latency</div><div className="v">{avgLatMs.toFixed(0)}ms</div><div className="s">per block</div></div>
+        <div className="card"><div className="k">Paths evaluated</div><div className="v">{(totalEval / 1e6).toFixed(2)}M</div><div className="s">kernel evals</div></div>
+        <div className="card"><div className="k">Active runners</div><div className="v">{online}/{names.length}</div><div className="s">{all.live ? 'LIVE' : 'dry-run'}</div></div>
       </div>
 
       <div className="grid" style={{ gridTemplateColumns: '1.6fr 1fr' }}>

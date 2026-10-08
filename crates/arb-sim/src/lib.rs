@@ -1,4 +1,5 @@
 pub mod evaluate;
+pub mod local_evm;
 pub mod gate;
 pub mod optimize;
 

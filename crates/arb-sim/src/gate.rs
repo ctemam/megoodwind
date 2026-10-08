@@ -19,8 +19,19 @@ pub struct ProfitGate {
     pub min_profit_usd: f64,
     pub safety_margin_bps: u32,
     pub stable_pool_extra_margin_bps: u32,
+    /// Per-protocol extra margins (per-(chain,DEX) calibration point).
+    /// The largest margin across a path's hops is added to safety_margin_bps.
+    /// stable_pool_extra_margin_bps is applied as the PancakeStable entry
+    /// unless the map supplies an explicit PancakeStable value.
+    pub protocol_margins: HashMap<Protocol, u32>,
     pub token_usd_prices: HashMap<Address, f64>,
     pub token_decimals: HashMap<Address, u32>,
+    /// USD cost of one execution tx's gas (gas_price * est_tx_gas *
+    /// native_price), set from the runner each block. The min_profit_usd
+    /// floor applies to profit NET of this cost — gross sim profit
+    /// otherwise ignores the tx's own gas, the dominant cost on cheap
+    /// chains. 0.0 until the first gas-price read.
+    pub tx_gas_cost_usd: f64,
 }
 
 impl ProfitGate {
@@ -32,13 +43,47 @@ impl ProfitGate {
         token_usd_prices: HashMap<Address, f64>,
         token_decimals: HashMap<Address, u32>,
     ) -> Self {
+        Self::with_protocol_margins(
+            min_profit_bps,
+            min_profit_usd,
+            safety_margin_bps,
+            stable_pool_extra_margin_bps,
+            HashMap::new(),
+            token_usd_prices,
+            token_decimals,
+        )
+    }
+
+    pub fn with_protocol_margins(
+        min_profit_bps: u32,
+        min_profit_usd: f64,
+        safety_margin_bps: u32,
+        stable_pool_extra_margin_bps: u32,
+        mut protocol_margins: HashMap<Protocol, u32>,
+        token_usd_prices: HashMap<Address, f64>,
+        token_decimals: HashMap<Address, u32>,
+    ) -> Self {
+        protocol_margins
+            .entry(Protocol::PancakeStable)
+            .or_insert(stable_pool_extra_margin_bps);
         Self {
             min_profit_bps,
             min_profit_usd,
             safety_margin_bps,
             stable_pool_extra_margin_bps,
+            protocol_margins,
             token_usd_prices,
             token_decimals,
+            tx_gas_cost_usd: 0.0,
+        }
+    }
+
+    /// Update the per-execution gas cost used for the net-profit floor.
+    /// Guards non-finite/non-positive input (a bad gas-price read must not
+    /// poison the gate with NaN).
+    pub fn set_gas_cost_usd(&mut self, usd: f64) {
+        if usd.is_finite() && usd > 0.0 {
+            self.tx_gas_cost_usd = usd;
         }
     }
 
@@ -66,17 +111,17 @@ impl ProfitGate {
         // Extra margin for protocols with approximate off-chain math.
         // PancakeStable (Curve-style) has complex Newton iteration that may differ from on-chain.
         // AerodromeV2 volatile pools are wei-exact (validated). Aerodrome stable pools are also
-        // wei-exact after the _f/_d/_get_y fix. We keep extra margin only for PancakeStable.
-        let has_stable = path.hops.iter().any(|h| {
-            matches!(h.protocol, Protocol::PancakeStable)
-        });
+        // wei-exact after the _f/_d/_get_y fix. Per-protocol margins come from
+        // config; the least-exact hop sets the margin (max, not sum).
+        let protocol_extra = path
+            .hops
+            .iter()
+            .filter_map(|h| self.protocol_margins.get(&h.protocol))
+            .copied()
+            .max()
+            .unwrap_or(0);
 
-        let total_margin = self.safety_margin_bps
-            + if has_stable {
-                self.stable_pool_extra_margin_bps
-            } else {
-                0
-            };
+        let total_margin = self.safety_margin_bps + protocol_extra;
 
         if result.profit_bps <= total_margin {
             return Decision {
@@ -113,17 +158,27 @@ impl ProfitGate {
         let effective_profit_usd =
             profit_usd * (effective_bps as f64 / result.profit_bps as f64);
 
-        if effective_profit_usd < self.min_profit_usd {
+        // Net the execution tx's own gas cost out of the floor — a path
+        // that sims +$0.60 gross but pays $0.55 gas loses money live.
+        let net_profit_usd = effective_profit_usd - self.tx_gas_cost_usd;
+
+        if net_profit_usd < self.min_profit_usd {
             return Decision {
                 accept: false,
-                effective_profit_usd,
-                reject_reason: Some("below_min_usd"),
+                effective_profit_usd: net_profit_usd,
+                reject_reason: Some(if self.tx_gas_cost_usd > 0.0
+                    && effective_profit_usd >= self.min_profit_usd
+                {
+                    "below_gas_net"
+                } else {
+                    "below_min_usd"
+                }),
             };
         }
 
         Decision {
             accept: true,
-            effective_profit_usd,
+            effective_profit_usd: net_profit_usd,
             reject_reason: None,
         }
     }

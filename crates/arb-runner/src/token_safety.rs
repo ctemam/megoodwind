@@ -8,9 +8,9 @@ use tracing::{info, warn};
 const GOPLUS_URL: &str = "https://api.gopluslabs.io/api/v1/token_security";
 const BATCH_SIZE: usize = 100;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
-/// Reject transfer taxes above 10% — arb math can't price hidden
-/// transfer-fee drag on the leg.
-const MAX_TAX: f64 = 0.10;
+/// Zero tolerance for transfer tax: standard AMM math cannot price
+/// fee-on-transfer — any nonzero tax makes the quoted leg wrong.
+const MAX_TAX: f64 = 0.00;
 
 /// Returns the set of tokens GoPlus flags as unsafe to route through:
 /// honeypots, sell-blocked contracts, or heavy transfer taxes.

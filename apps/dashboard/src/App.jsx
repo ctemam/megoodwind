@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import React, { useEffect, useState } from 'react'
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { useApp, fmt } from './state.jsx'
 import Overview from './pages/Overview.jsx'
 import PnL from './pages/PnL.jsx'
@@ -9,6 +9,7 @@ import Opportunities from './pages/Opportunities.jsx'
 import Infra from './pages/Infra.jsx'
 import Report from './pages/Report.jsx'
 import ChainConfig from './pages/ChainConfig.jsx'
+import Strategies from './pages/Strategies.jsx'
 import AgentPanel from './AgentPanel.jsx'
 
 const NAV = [
@@ -18,6 +19,7 @@ const NAV = [
   ['/wallet', '◉', 'Wallet'],
   ['/deploy', '▣', 'Deployment'],
   ['/opps', '⚡', 'Opportunities'],
+  ['/strategies', '◈', 'Strategies'],
   ['/infra', '⛓', 'Infrastructure'],
   ['/config', '⚙', 'Chain Config'],
 ]
@@ -26,8 +28,14 @@ export default function App() {
   const { refreshMs, setRefreshMs, currency, setCurrency, profitPeriod, setProfitPeriod, prices, all, history } = useApp()
   const [collapsed, setCollapsed] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
+  const [theme, setTheme] = useState(() => localStorage.getItem('ab-theme') || 'dark')
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('ab-theme', theme)
+  }, [theme])
   const net = (profitPeriod === 'day' ? all.profit?.day : all.profit?.lifetime)
     ?? (history.length ? history[history.length - 1].net : 0)
+  const chainCount = Object.keys(all.chains || {}).length
   const online = Object.values(all.chains || {}).filter(Boolean).length
 
   return (
@@ -54,17 +62,27 @@ export default function App() {
         <header>
           <div className="pulse">
             <div className={`dot ${online ? '' : 'off'}`} />
-            <span className={`val ${net >= 0 ? 'pos' : 'neg'}`}>{fmt(net, currency, prices)}</span>
+            <span className={`val ${net >= 0 ? 'pos' : 'neg'}`} title="Realized P&L — settled executions only">{fmt(net, currency, prices)}</span>
             <select className="period" value={profitPeriod} onChange={e => setProfitPeriod(e.target.value)} title="Profit window">
               <option value="day">24h</option>
               <option value="life">Lifetime</option>
             </select>
+            {all.profit?.est_lifetime != null && (
+              <span className="dim" style={{ fontSize: 11 }}
+                title="Cumulative simulated edge across candidate evaluations — NOT executed P&L">
+                est {fmt(all.profit.est_lifetime, currency, prices)}
+              </span>
+            )}
           </div>
           <div className="status-pill">
-            <div className="sd" style={online < 2 ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
-            <div><b>{online === 2 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/2 runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
+            <div className="sd" style={online < chainCount ? { background: 'var(--warn)', boxShadow: '0 0 8px var(--warn)' } : {}} />
+            <div><b>{online === chainCount && chainCount > 0 ? 'SYSTEM ONLINE' : 'DEGRADED'}</b><br /><span>{online}/{chainCount} runners · {all.live ? 'LIVE' : 'dry-run'}</span></div>
           </div>
           <button className={`agent-btn ${agentOpen ? 'on' : ''}`} onClick={() => setAgentOpen(o => !o)} title="Ops Copilot">◆</button>
+          <button className="theme-btn" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? 'Day mode' : 'Night mode'}>
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
           <div className="ctl">
             <select value={currency} onChange={e => setCurrency(e.target.value)}>
               {['USD', 'ETH', 'USDT'].map(c => <option key={c}>{c}</option>)}
@@ -83,6 +101,8 @@ export default function App() {
           <Route path="/wallet" element={<Wallet />} />
           <Route path="/deploy" element={<Deployment />} />
           <Route path="/opps" element={<Opportunities />} />
+          <Route path="/strategies" element={<Strategies />} />
+          <Route path="/intel" element={<Navigate to="/strategies" replace />} />
           <Route path="/infra" element={<Infra />} />
           <Route path="/config" element={<ChainConfig />} />
         </Routes>

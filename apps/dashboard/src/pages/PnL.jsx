@@ -7,7 +7,9 @@ const ROWS = [
   ['arb_gas_spent_wei_total', 'Gas spent (wei)'],
   ['arb_profitable_found_total', 'Profitable paths found'],
   ['arb_submit_attempts_total', 'Submission attempts'],
-  ['arb_submit_landed_total{status="landed"}', 'Bundles landed'],
+  ['arb_submit_landed_total{status="success"}', 'Bundles landed'],
+  ['arb_submit_landed_total{status="revert"}', 'Bundles reverted'],
+  ['arb_submit_landed_total{status="dropped"}', 'Bundles dropped'],
   ['arb_path_suppressed_total', 'Paths suppressed'],
   ['arb_builder_sim_reject_total', 'Builder sim rejects'],
   ['arb_backrun_candidates_total', 'Backrun candidates'],
@@ -25,7 +27,7 @@ export default function PnL() {
   const [open, setOpen] = useState({})
   const [win, setWin] = useState('all')
   const [winData, setWinData] = useState(null)
-  const names = { bsc: 'BSC', base: 'Base' }
+  const names = { bsc: 'BSC', base: 'Base', ethereum: 'Ethereum', polygon: 'Polygon' }
 
   useEffect(() => {
     if (win === 'all') { setWinData(null); return }
@@ -79,12 +81,7 @@ export default function PnL() {
           <tr className="total"><td>Total</td><td /><td /><td /><td className={total >= 0 ? 'pos' : 'neg'}>{fmt(total, currency, prices)}</td></tr>
         </tbody>
       </table>
-      <div className="dim" style={{ marginTop: 10, fontSize: 12 }}>
-        {win === 'all'
-          ? 'Net = cumulative effective profit of gate-passed paths minus metered spend.'
-          : `Net = profit minus metered spend over the last ${WINDOWS.find(([k]) => k === win)?.[1] || win} (resets excluded).`}
-        {' '}Gas is surfaced in wei (per-chain ETH/BNB); dry-run mode incurs no gas.
-      </div>
+
     </div>
   )
 }

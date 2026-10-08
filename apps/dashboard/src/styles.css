@@ -3,6 +3,26 @@
   --txt: #dce8fb; --dim: #6f89b3; --acc: #38b6ff; --acc2: #7cd4fd;
   --good: #2fe6a8; --bad: #ff5c7a; --warn: #ffc24b; --gold: #ffd166;
 }
+/* Day mode — same variable contract, light palette. */
+:root[data-theme="light"] {
+  --bg: #f2f5fb; --panel: #ffffff; --panel2: #e9eef7; --line: #cfdbec;
+  --txt: #1b2a45; --dim: #5d7090; --acc: #1273d4; --acc2: #0b5fae;
+  --good: #0d9e76; --bad: #d94363; --warn: #b97e0e; --gold: #a07a10;
+}
+:root[data-theme="light"] body {
+  background: radial-gradient(1200px 500px at 70% -10%, #dde9f9 0%, var(--bg) 55%) fixed, var(--bg);
+}
+:root[data-theme="light"] nav { background: linear-gradient(180deg, #ffffff 0%, #f0f4fa 100%); }
+:root[data-theme="light"] nav a.active { background: linear-gradient(90deg, #d8e8fb, #e9f1fc); }
+:root[data-theme="light"] .card { background: linear-gradient(160deg, var(--panel) 0%, #eef3fb 100%); }
+:root[data-theme="light"] .panel { background: linear-gradient(160deg, var(--panel) 0%, #f4f7fc 100%); }
+:root[data-theme="light"] .footer-strip { background: rgba(246,249,253,.94); }
+:root[data-theme="light"] .agent-drawer { background: #ffffff; border-left-color: var(--line); }
+.theme-btn {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--acc2);
+  border-radius: 8px; padding: 6px 11px; font-size: 15px; line-height: 1;
+}
+.theme-btn:hover { border-color: var(--acc); }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: radial-gradient(1200px 500px at 70% -10%, #0b2a55 0%, var(--bg) 55%) fixed, var(--bg);
@@ -63,8 +83,12 @@ button.primary { background: linear-gradient(90deg, #1e6fd9, #38b6ff); border: n
 .panel { background: linear-gradient(160deg, var(--panel) 0%, #0a1530 100%); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-top: 14px; }
 .panel h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--acc2); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; color: var(--dim); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-td { padding: 10px; border-bottom: 1px solid var(--line); }
+th { text-align: left; color: var(--dim); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 9px 10px; border-bottom: 1px solid var(--line); font-weight: 300; }
+/* Professional thin: light weight everywhere, tabular figures on numbers
+   so columns of values align instead of jittering. */
+td.num { font-variant-numeric: tabular-nums; font-weight: 300; }
+td.mono { font-weight: 300; }
 tr.chain { cursor: pointer; } tr.chain:hover { background: var(--panel2); }
 tr.detail td { background: var(--panel2); font-size: 12.5px; color: var(--dim); }
 tr.total td { font-weight: 650; border-top: 2px solid var(--line); }

@@ -1,4 +1,6 @@
 mod config;
+mod copy_lane;
+mod feed_lane;
 mod metrics;
 mod pricing;
 mod runner;
@@ -49,7 +51,7 @@ async fn main() -> Result<()> {
         .unwrap_or(9090);
     let _metrics_handle = metrics::start_metrics_server(metrics_port);
 
-    runner::run(cfg, smoke_test || force_fire).await?;
+    runner::run(cfg, smoke_test || force_fire, config_path).await?;
 
     Ok(())
 }

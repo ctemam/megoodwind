@@ -27,6 +27,8 @@ rpc_wss_pool = [
 ]
 
 trader_rpc = "${BASE_TRADER_NODE}"   # Standard Trader node, $0.15/call — ONLY for tx submission
+# UniV4 PoolManager on Base. Same semantics as BSC (see config/bsc.toml).
+# v4_pool_manager = "0x498581fF718922c3f8e6A244956aF099B2652b2b"
 arb_contract = "${BASE_ARB_CONTRACT}"
 state_reader = "${BASE_STATE_READER}"
 block_time_ms = 2000

@@ -34,6 +34,11 @@ pub struct UserOpCall {
 #[derive(Debug, Clone)]
 pub struct Bundle {
     pub signed_txs: Vec<Vec<u8>>,
+    /// Raw signed bytes of the victim transaction this bundle backruns.
+    /// Bundle-capable venues prepend it so our txs land immediately after
+    /// the victim in the same block; it also tells the router this bundle
+    /// must only go to ordering-aware venues.
+    pub victim_tx: Option<Vec<u8>>,
     pub target_block: u64,
     pub chain_id: u64,
     pub backrun_tx: Option<B256>,
@@ -52,5 +57,10 @@ pub struct SubmitResult {
 pub trait Submitter: Send + Sync {
     fn venue_name(&self) -> &'static str;
     fn tier(&self) -> SubmitTier;
+    /// Whether this venue accepts ordered multi-transaction bundles
+    /// (eth_sendBundle-style `txs` arrays). Victim-bound backruns require it.
+    fn is_bundle_venue(&self) -> bool {
+        false
+    }
     async fn submit(&self, bundle: &Bundle) -> Result<SubmitResult>;
 }

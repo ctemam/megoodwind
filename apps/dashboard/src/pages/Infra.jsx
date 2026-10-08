@@ -18,7 +18,7 @@ export default function Infra() {
         <table>
           <thead><tr><th>Chain</th><th>Block lag</th><th>Pools</th><th>≤100ms</th><th>≤500ms</th><th>≤1s</th><th>Scans</th></tr></thead>
           <tbody>
-            {['bsc', 'base'].map(c => {
+            {['bsc', 'base', 'ethereum', 'polygon'].map(c => {
               const m = chains[c]
               return (
                 <tr key={c}>

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
@@ -12,12 +12,13 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use arb_discovery::store::DiscoveryStore;
-use arb_mempool::MempoolWatcher;
+use arb_mempool::{MempoolWatcher, WssSource};
 use arb_core::types::Protocol;
 use arb_paths::enumerate::{PathEnumerator, PoolInfo};
 use arb_paths::PathTemplate;
 use arb_rpc::Endpoint;
 use arb_sim::evaluate::evaluate_all;
+use arb_sim::local_evm::{LocalFork, ProbeOutcome};
 use arb_sim::gate::ProfitGate;
 use arb_sim::optimize::{find_optimal_amount, path_max_flash};
 use arb_state::pool_store::PoolStore;
@@ -31,7 +32,7 @@ use arb_submit::puissant::PuissantSubmitter;
 use arb_submit::warp::WarpSubmitter;
 use arb_submit::pimlico::{PimlicoConfig, PimlicoSubmitter};
 use arb_submit::presign::PresignPool;
-use arb_submit::{SubmitTier, Submitter};
+use arb_submit::{Bundle, SubmitTier, Submitter, UserOpCall};
 
 use crate::config::{spec, AppConfig};
 use crate::metrics;
@@ -39,6 +40,14 @@ use crate::metrics;
 const CIRCUIT_BREAKER_MAX_REVERTS: u32 = 3;
 const CIRCUIT_BREAKER_SUPPRESS_BLOCKS: u64 = 30;
 const CIRCUIT_BREAKER_DECAY_BLOCKS: u64 = 100;
+/// A pool whose last successful state read is older than this is stale —
+/// candidate paths through it are suppressed before optimization.
+const STALE_STATE_MAX_AGE_MS: u64 = 90_000;
+// Credibility ceiling on simulated edge: real cross-DEX spreads live in
+// basis points (< ~1-2%). A path simulating a larger gap is poisoned pool
+// math (scam fees / fake reserves), not an opportunity — its pools get
+// bait-flagged at the source instead of passing the sim gate.
+const BAIT_GAP_BPS: u32 = 200;
 
 mod quote_uni {
     alloy::sol! {
@@ -56,6 +65,8 @@ alloy::sol! {
     struct ProbeResult3 { bool success; bytes returnData; }
     function aggregate3(ProbeCall3[] calldata calls) external payable returns (ProbeResult3[] memory);
     function tickSpacing() external view returns (int24);
+    function balanceOf(address owner) external view returns (uint256);
+    function emergencyWithdraw(address token, address to, uint256 amount) external;
 }
 
 /// Quoter deployments verified on-chain (quoter.factory() matches the
@@ -63,6 +74,9 @@ alloy::sol! {
 /// Aerodrome Slipstream QuoterV2 on Base.
 const UNI_QUOTER_BSC: Address = alloy_primitives::address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997");
 const UNI_QUOTER_BASE: Address = alloy_primitives::address!("3d4e44Eb1374240CE5F1B871ab261CD16335B76a");
+/// Canonical Uniswap V3 QuoterV2 — deterministic CREATE2 deployment, same
+/// address on Ethereum, Polygon and most UniV3 chains.
+const UNI_QUOTER_UNI: Address = alloy_primitives::address!("61fFE014bA17989E743c5F6cB21bF9697530B21e");
 const SLIP_QUOTER_BASE: Address = alloy_primitives::address!("254cF9E1E6e233aa1AC962CB9B05b2cfeAae15b0");
 
 /// A concentrated-liquidity pool can report `liquidity() > 0` while its
@@ -140,7 +154,8 @@ async fn probe_dead_v3_pools(
                 } else if chain_id == spec::BASE_CHAIN_ID {
                     UNI_QUOTER_BASE
                 } else {
-                    continue;
+                    // Other UniV3 chains share the canonical QuoterV2 deploy.
+                    UNI_QUOTER_UNI
                 };
                 (q, v3.fee)
             }
@@ -284,8 +299,91 @@ fn classify_exec_probe_revert(detail: &str) -> &'static str {
         "safe_erc20_failed"
     } else if s.contains("0x2c5211c6") {
         "invalid_amount"
+    } else if s.contains("0x08c379a0") {
+        // Error(string) bubbling up from the pool itself (e.g.
+        // "Nomiswap: D") — the executor passed its own checks and the
+        // swap leg reverted on-chain: real bait signature.
+        "pool_revert"
     } else {
         "unknown_revert"
+    }
+}
+
+/// Whether an exec-probe revert says anything about POOL honesty.
+/// `insufficient_profit` is edge decay at sim time — the pools priced
+/// correctly, the opportunity just closed. Executor-side checks
+/// (paused/gas/authorization/input) likewise carry zero pool evidence.
+/// Striking pools for those benches canonical deep pools in decay
+/// storms. Only failures from inside the swap legs (or an unclassified
+/// revert, conservatively) count as pool strikes.
+fn revert_blames_pool(reason: &str) -> bool {
+    matches!(
+        reason,
+        "swap_failed" | "unsettled_delta" | "safe_erc20_failed" | "unknown_revert"
+    )
+}
+
+/// Verdict of a pre-submission execution probe — same three states the
+/// old `provider().call` produced: it would land, chain truth reverts,
+/// or transport couldn't answer.
+enum ProbeVerdict {
+    Ok,
+    Reverted(String),
+    Transport,
+}
+
+/// Exec-probe the would-be executor call. Prefers the local revm fork
+/// (foundry-fork-db SharedBackend — chain truth without a per-candidate
+/// RPC round trip, the industry pattern for sim-before-submit); falls
+/// back to `eth_call` only when the local backend can't answer.
+async fn exec_probe(
+    endpoint: &std::sync::Arc<Endpoint>,
+    local_fork: &std::sync::Arc<std::sync::Mutex<Option<LocalFork>>>,
+    from: Address,
+    to: Address,
+    data: alloy::primitives::Bytes,
+) -> ProbeVerdict {
+    // Lazy one-time init — std-guard must never cross an .await.
+    let needs_init = local_fork.lock().unwrap().is_none();
+    if needs_init {
+        if let Ok(Some(block)) = endpoint
+            .provider()
+            .get_block(alloy::eips::BlockId::latest())
+            .await
+        {
+            *local_fork.lock().unwrap() =
+                Some(LocalFork::spawn(endpoint.provider(), &block));
+        }
+    }
+    // Bind before `if let` — scrutinee temporaries live for the
+    // whole body and the MutexGuard is !Send.
+    let fork = local_fork.lock().unwrap().clone();
+    if let Some(fork) = fork {
+        let fork_data = data.clone();
+        match tokio::task::spawn_blocking(move || fork.simulate(from, to, fork_data)).await {
+            Ok(ProbeOutcome::Success) => return ProbeVerdict::Ok,
+            Ok(ProbeOutcome::Reverted(detail)) => return ProbeVerdict::Reverted(detail),
+            Ok(ProbeOutcome::Transport(e)) => {
+                warn!(error = %e, "local fork probe backend error — rpc fallback");
+            }
+            Err(e) => {
+                warn!(error = %e, "local fork probe join error — rpc fallback");
+            }
+        }
+    }
+    let probe = alloy::rpc::types::TransactionRequest::default()
+        .from(from)
+        .to(to)
+        .input(data.into());
+    match endpoint.provider().call(probe).await {
+        Ok(_) => ProbeVerdict::Ok,
+        Err(e) if e.as_error_resp().is_some() => {
+            ProbeVerdict::Reverted(format!("{e:?}"))
+        }
+        Err(e) => {
+            warn!(error = %e, "exec probe transport error");
+            ProbeVerdict::Transport
+        }
     }
 }
 
@@ -351,6 +449,15 @@ impl PathCircuitBreaker {
         s.total_successes += 1;
     }
 
+    /// Historical revert rate for a path (0.0 when never submitted) — used
+    /// as the revert-risk term in route_score ranking.
+    fn revert_rate(&self, path_id: u32) -> f64 {
+        self.stats
+            .get(&path_id)
+            .map(|s| s.total_reverts as f64 / s.total_submits.max(1) as f64)
+            .unwrap_or(0.0)
+    }
+
     fn suppressed_count(&self, current_block: u64) -> usize {
         self.stats.values().filter(|s| current_block < s.suppressed_until_block).count()
     }
@@ -387,6 +494,13 @@ struct TokenCircuitBreaker {
     suppression_blocks: u64,
     blacklist: HashSet<Address>,
     popular_intermediaries: HashSet<Address>,
+    /// Bait telemetry (stealth L4): pools repeatedly present in paths that
+    /// gate-pass then revert on exec-probe/submit are griefing or honeypot
+    /// signatures — flagged pools suppress candidate paths like tokens.
+    pool_stats: HashMap<Address, TokenBreakerStats>,
+    /// Persisted bait list — suppressions survive restarts; leader_scan
+    /// and the hot-reload loop exclude listed pools from re-import.
+    bait_path: Option<std::path::PathBuf>,
 }
 
 struct TokenBreakerStats {
@@ -403,6 +517,68 @@ impl TokenCircuitBreaker {
             suppression_blocks,
             blacklist: HashSet::new(),
             popular_intermediaries: HashSet::new(),
+            pool_stats: HashMap::new(),
+            bait_path: None,
+        }
+    }
+
+    fn set_bait_path(&mut self, path: std::path::PathBuf) {
+        self.bait_path = Some(path);
+    }
+
+    /// Persist suppressed pools so bait flags survive restarts — an
+    /// in-memory flag died with the process and leader_scan re-imported
+    /// the same pools on the next merge.
+    fn persist_bait(&self) {
+        let Some(path) = &self.bait_path else { return };
+        let pools: Vec<serde_json::Value> = self
+            .pool_stats
+            .iter()
+            .filter(|(_, s)| s.suppressed_until_block > 0)
+            .map(|(a, s)| {
+                serde_json::json!({
+                    "pool": format!("{a:#x}"),
+                    "until_block": s.suppressed_until_block,
+                })
+            })
+            .collect();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(
+            path,
+            serde_json::to_string_pretty(&serde_json::json!({ "pools": pools }))
+                .unwrap_or_default(),
+        );
+    }
+
+    /// Restore suppressed pools written by a previous process — expired
+    /// entries die naturally (block numbers only advance).
+    fn load_bait(&mut self) {
+        let Some(path) = &self.bait_path else { return };
+        let Ok(contents) = std::fs::read_to_string(path) else { return };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else { return };
+        let Some(arr) = v.get("pools").and_then(|a| a.as_array()) else { return };
+        let mut restored = 0u32;
+        for e in arr {
+            let (Some(a), Some(until)) = (
+                e.get("pool")
+                    .and_then(|p| p.as_str())
+                    .and_then(|p| p.parse::<Address>().ok()),
+                e.get("until_block").and_then(|u| u.as_u64()),
+            ) else { continue };
+            self.pool_stats.insert(
+                a,
+                TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: until,
+                },
+            );
+            restored += 1;
+        }
+        if restored > 0 {
+            info!(restored, "Bait pool list restored from disk");
         }
     }
 
@@ -438,15 +614,149 @@ impl TokenCircuitBreaker {
         }
     }
 
+    fn is_pool_bait_flagged(&self, pool: Address, current_block: u64) -> bool {
+        self.pool_stats
+            .get(&pool)
+            .map_or(false, |s| current_block < s.suppressed_until_block)
+    }
+
     fn is_path_token_suppressed(&self, path: &PathTemplate, current_block: u64) -> bool {
         path.hops.iter().any(|hop| {
             self.is_token_suppressed(hop.token_in, current_block)
                 || self.is_token_suppressed(hop.token_out, current_block)
+                || self.is_pool_bait_flagged(hop.pool, current_block)
         })
     }
 
-    fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
+    // A simulated gap above the credibility ceiling is itself the bait
+    // signature — suppress the path's pools outright; revert history is
+    // not needed to convict impossible math. Superseded in production by
+    // flag_bait_pools_in (outlier-attributed conviction); kept for the
+    // soft-flag expiry regression test.
+    #[allow(dead_code)]
+    fn flag_bait_pools(&mut self, path: &PathTemplate, block: u64) {
+        self.flag_bait_pools_for(path, block, self.suppression_blocks);
+    }
+
+    /// Deterministic bait (a real on-chain string revert from inside the
+    /// pool swap, e.g. `Nomiswap: D`) earns a permanent conviction —
+    /// the 200-block window is for ambiguous suspects only, and bait
+    /// pools that came back just burned another victim on re-probe.
+    fn flag_bait_pools_hard(&mut self, path: &PathTemplate, block: u64) {
+        // ~a year of blocks on every supported chain; load_bait restores
+        // it, and a legit pool should never produce a swap-time revert.
+        self.flag_bait_pools_for(path, block, 30_000_000);
+    }
+
+    /// Credibility-ceiling breach on the CYCLIC scan: convict only pools
+    /// already quarantined as same-pair outliers. A >2% gap is poisoned
+    /// math only when one pool's implied price diverges from its own pair
+    /// peers; flagging the whole path suppresses honest deep pools sitting
+    /// next to the broken one — and on backrun projections a big gap is
+    /// legitimate victim impact, not bait evidence at all.
+    fn flag_bait_pools_in(&mut self, path: &PathTemplate, block: u64, suspect: &std::collections::HashSet<Address>) {
+        let mut flagged = 0usize;
         for hop in &path.hops {
+            if !suspect.contains(&hop.pool) {
+                continue;
+            }
+            let s = self
+                .pool_stats
+                .entry(hop.pool)
+                .or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+            let until = block + self.suppression_blocks;
+            if until > s.suppressed_until_block {
+                s.suppressed_until_block = until;
+                metrics::BAIT_SUSPECT.inc();
+                flagged += 1;
+                warn!(pool = %hop.pool, until_block = until,
+                    "Bait pool suppressed — outlier pool on >ceiling path");
+            }
+        }
+        if flagged > 0 {
+            self.persist_bait();
+        }
+    }
+
+    fn flag_bait_pools_for(&mut self, path: &PathTemplate, block: u64, span: u64) {
+        for hop in &path.hops {
+            let s = self
+                .pool_stats
+                .entry(hop.pool)
+                .or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+            let until = block + span;
+            if until > s.suppressed_until_block {
+                s.suppressed_until_block = until;
+                metrics::BAIT_SUSPECT.inc();
+                warn!(pool = %hop.pool, until_block = until,
+                    "Bait pool suppressed — simulated gap above credibility ceiling");
+            }
+        }
+        self.persist_bait();
+    }
+
+    /// A landed trade that executed cleanly but retained dust — the edge
+    /// priced in at sim was gone by inclusion. First offense earns the
+    /// normal suppression window; a pool with any prior conviction gets
+    /// the same permanent span a hard bait revert does (verified on-chain:
+    /// pools 0xd8f0… and 0x1a3f… produced dust lands twice each, burning
+    /// $5.4 of real sponsored gas on ETH).
+    fn flag_dust_land_pool(&mut self, pool: Address, block: u64) {
+        let prior = self
+            .pool_stats
+            .get(&pool)
+            .map(|s| s.suppressed_until_block > 0)
+            .unwrap_or(false);
+        let span = if prior { 30_000_000 } else { self.suppression_blocks };
+        let s = self
+            .pool_stats
+            .entry(pool)
+            .or_insert(TokenBreakerStats {
+                consecutive_reverts: 0,
+                last_revert_block: 0,
+                suppressed_until_block: 0,
+            });
+        let until = block + span;
+        if until > s.suppressed_until_block {
+            s.suppressed_until_block = until;
+            metrics::BAIT_SUSPECT.inc();
+            warn!(pool = %pool, until_block = until, permanent = prior,
+                "Dust-land bait conviction — pool suppressed");
+        }
+        self.persist_bait();
+    }
+
+    fn record_revert_for_path(&mut self, path: &PathTemplate, block: u64) {
+        let mut tripped = false;
+        for hop in &path.hops {
+            // Pool-level bait accounting: same decay/threshold as tokens.
+            {
+                let s = self.pool_stats.entry(hop.pool).or_insert(TokenBreakerStats {
+                    consecutive_reverts: 0,
+                    last_revert_block: 0,
+                    suppressed_until_block: 0,
+                });
+                if block > s.last_revert_block + 200 {
+                    s.consecutive_reverts = 0;
+                }
+                s.consecutive_reverts += 1;
+                s.last_revert_block = block;
+                if s.consecutive_reverts >= self.revert_threshold {
+                    s.suppressed_until_block = block + self.suppression_blocks;
+                    metrics::BAIT_SUSPECT.inc();
+                    tripped = true;
+                    warn!(pool = %hop.pool, until_block = s.suppressed_until_block,
+                        "Bait-suspect pool suppressed — repeated gate-pass-then-revert signature");
+                }
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if token == path.flash_token || self.popular_intermediaries.contains(&token) {
                     continue;
@@ -468,10 +778,17 @@ impl TokenCircuitBreaker {
                 }
             }
         }
+        if tripped {
+            self.persist_bait();
+        }
     }
 
     fn record_success_for_path(&mut self, path: &PathTemplate) {
         for hop in &path.hops {
+            if let Some(s) = self.pool_stats.get_mut(&hop.pool) {
+                s.consecutive_reverts = 0;
+                s.suppressed_until_block = 0;
+            }
             for &token in &[hop.token_in, hop.token_out] {
                 if let Some(s) = self.stats.get_mut(&token) {
                     s.consecutive_reverts = 0;
@@ -491,6 +808,7 @@ fn is_nonempty(s: &Option<String>) -> Option<&str> {
     s.as_deref().filter(|v| !v.is_empty())
 }
 
+#[derive(Clone, Copy)]
 enum TxOutcome { Success, Revert, Dropped }
 
 /// Track a submitted tx hash — poll for receipt, update metrics.
@@ -532,7 +850,409 @@ async fn track_tx(endpoint: Arc<Endpoint>, tx_hash: B256, deadline_blocks: u64) 
     TxOutcome::Dropped
 }
 
-/// Write status JSON snapshot for monitoring.
+// ===== Settlement feedback loop =====
+// submit -> receipt -> realized P&L -> opportunity record + strategy health.
+// For Pimlico venues the submit handle is a userOpHash — a plain
+// eth_getTransactionReceipt can never resolve it, so UserOps are tracked via
+// eth_getUserOperationReceipt on the bundler, which returns the nested tx
+// receipt with logs. All other venues are tracked on our own tx hash
+// (keccak256 of the signed envelope), independent of venue bundle ids.
+
+const TRANSFER_SIG: B256 = alloy_primitives::b256!(
+    "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+);
+
+#[derive(Clone)]
+struct SettleCtx {
+    endpoint: Arc<Endpoint>,
+    /// Pimlico bundler URL — required to track UserOps.
+    bundler_url: Option<String>,
+    arb_contract: Address,
+    token_usd_prices: HashMap<Address, f64>,
+    token_decimals: HashMap<Address, u32>,
+    native_usd: f64,
+    chain: String,
+    /// Shared pool breaker — dust lands convict their route pools so the
+    /// same bait can't charge gas twice.
+    token_breaker: Option<Arc<std::sync::Mutex<TokenCircuitBreaker>>>,
+}
+
+#[derive(Clone, Copy)]
+struct SettleResult {
+    outcome: TxOutcome,
+    /// Priced token deltas to the executor contract minus gas, USD.
+    realized_usd: f64,
+    gas_usd: f64,
+    unpriced_tokens: usize,
+}
+
+/// (token, from, to, raw_amount) of each ERC-20 Transfer touching the
+/// executor, from a mined receipt's logs.
+fn flows_from_logs(
+    logs: &[alloy::rpc::types::Log],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = log.topics();
+        if topics.len() != 3 || topics[0] != TRANSFER_SIG {
+            continue;
+        }
+        let from = Address::from_word(topics[1]);
+        let to = Address::from_word(topics[2]);
+        if from != target && to != target {
+            continue;
+        }
+        let raw = U256::from_be_slice(log.data().data.as_ref())
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((log.address(), from, to, raw));
+    }
+    out
+}
+
+fn flows_from_json_logs(
+    logs: &[serde_json::Value],
+    target: Address,
+) -> Vec<(Address, Address, Address, f64)> {
+    let mut out = Vec::new();
+    for log in logs {
+        let topics = match log["topics"].as_array() {
+            Some(t) if t.len() == 3 => t,
+            _ => continue,
+        };
+        let sig: B256 = match topics[0].as_str().and_then(|s| s.parse().ok()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if sig != TRANSFER_SIG {
+            continue;
+        }
+        let from: B256 = match topics[1].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let to: B256 = match topics[2].as_str().and_then(|s| s.parse().ok()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let (from, to) = (Address::from_word(from), Address::from_word(to));
+        if from != target && to != target {
+            continue;
+        }
+        let token: Address = match log["address"].as_str().and_then(|s| s.parse().ok()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let raw = U256::from_str_radix(
+            log["data"].as_str().unwrap_or("0x0").trim_start_matches("0x"), 16)
+            .unwrap_or_default()
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        out.push((token, from, to, raw));
+    }
+    out
+}
+
+/// Price executor token deltas in USD; unpriced tokens are counted, not
+/// guessed — a partially-priced flow is reported as priced-only.
+fn settlement_pnl(
+    flows: &[(Address, Address, Address, f64)],
+    target: Address,
+    prices: &HashMap<Address, f64>,
+    decimals: &HashMap<Address, u32>,
+) -> (f64, usize) {
+    let mut usd = 0.0;
+    let mut unpriced: HashSet<Address> = HashSet::new();
+    for (token, from, to, raw) in flows {
+        let sign = if *to == target {
+            1.0
+        } else if *from == target {
+            -1.0
+        } else {
+            continue;
+        };
+        match prices.get(token) {
+            Some(p) => {
+                let d = decimals.get(token).copied().unwrap_or(18);
+                usd += sign * raw / 10f64.powi(d as i32) * p;
+            }
+            None => {
+                unpriced.insert(*token);
+            }
+        }
+    }
+    (usd, unpriced.len())
+}
+
+/// Poll the bundler for a UserOp receipt, then compute realized P&L from the
+/// nested tx receipt's Transfer logs. gas = actualGasCost — billed to our
+/// Pimlico account under sponsorship, or our account's prefund when not;
+/// either way it is our real cost (verified on-chain: the $1.76 gas of
+/// tx 0xc673890c was charged against the Commander's Pimlico balance).
+async fn track_userop(ctx: &SettleCtx, op_hash: &str, deadline_blocks: u64) -> SettleResult {
+    let dropped = SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    let Some(url) = ctx.bundler_url.clone() else {
+        metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+        return dropped;
+    };
+    let client = arb_submit::pimlico::PimlicoClient::new(&url);
+    let start_block = ctx.endpoint.block_number().await.unwrap_or(0);
+    let max_polls = (deadline_blocks * 4).max(8);
+    for _ in 0..max_polls {
+        match client.user_operation_receipt(op_hash).await {
+            Ok(Some(res)) => {
+                let success = res["success"].as_bool().unwrap_or(false);
+                let gas_native = res["actualGasCost"]
+                    .as_str()
+                    .and_then(|s| U256::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                    .map(|u| u.to_string().parse::<f64>().unwrap_or(0.0) / 1e18)
+                    .unwrap_or(0.0);
+                metrics::GAS_SPENT_WEI.inc_by(gas_native * 1e18);
+                let label = if success { "success" } else { "revert" };
+                metrics::SUBMIT_LANDED.with_label_values(&[label]).inc();
+                let logs = res
+                    .pointer("/receipt/logs")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let gas_usd = gas_native * ctx.native_usd;
+                let (usd, unpriced) = settlement_pnl(
+                    &flows_from_json_logs(&logs, ctx.arb_contract),
+                    ctx.arb_contract,
+                    &ctx.token_usd_prices,
+                    &ctx.token_decimals,
+                );
+                info!(
+                    op = op_hash, tx = %res.pointer("/receipt/transactionHash")
+                        .and_then(|v| v.as_str()).unwrap_or("?"),
+                    status = label, realized_usd = format!("{:.4}", usd - gas_usd),
+                    "UserOp settled"
+                );
+                return SettleResult {
+                    outcome: if success { TxOutcome::Success } else { TxOutcome::Revert },
+                    realized_usd: usd - gas_usd,
+                    gas_usd,
+                    unpriced_tokens: unpriced,
+                };
+            }
+            Ok(None) => {}
+            Err(e) => debug!(op = op_hash, error = %e, "UserOp receipt fetch error"),
+        }
+        if ctx.endpoint.block_number().await.unwrap_or(0) > start_block + deadline_blocks {
+            metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+            return dropped;
+        }
+        tokio::time::sleep(Duration::from_millis(750)).await;
+    }
+    metrics::SUBMIT_LANDED.with_label_values(&["dropped"]).inc();
+    dropped
+}
+
+/// Track a plain tx hash to receipt, then compute realized P&L from logs.
+async fn settle_tx(ctx: &SettleCtx, tx_hash: B256, deadline_blocks: u64) -> SettleResult {
+    let outcome = track_tx(ctx.endpoint.clone(), tx_hash, deadline_blocks).await;
+    if matches!(outcome, TxOutcome::Dropped) {
+        return SettleResult { outcome, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 };
+    }
+    let mut gas_usd = 0.0;
+    let mut usd = 0.0;
+    let mut unpriced = 0usize;
+    if let Ok(Some(receipt)) = ctx.endpoint.get_receipt(tx_hash).await {
+        gas_usd = receipt.gas_used as f64 * receipt.effective_gas_price as f64
+            / 1e18 * ctx.native_usd;
+        let (u, n) = settlement_pnl(
+            &flows_from_logs(receipt.inner.logs(), ctx.arb_contract),
+            ctx.arb_contract,
+            &ctx.token_usd_prices,
+            &ctx.token_decimals,
+        );
+        usd = u;
+        unpriced = n;
+    }
+    SettleResult { outcome, realized_usd: usd - gas_usd, gas_usd, unpriced_tokens: unpriced }
+}
+
+/// "<chain>/<wallet>/<class>/<tx>" -> "<wallet>/<class>".
+fn strategy_id_of(opp_id: &str) -> Option<String> {
+    let rest = opp_id.splitn(2, '/').nth(1)?;
+    rest.rsplitn(2, '/').nth(1).map(String::from)
+}
+
+/// Record a settled submission: metrics, audit log, opportunity records,
+/// strategy health. This is the loop's write-back — realized P&L is the only
+/// feedback that proves the pipeline earns.
+fn record_settlement(
+    ctx: &SettleCtx,
+    venue: &str,
+    submit_id: &str,
+    res: &SettleResult,
+    opp_ids: &[String],
+    block: u64,
+) {
+    let outcome_label = match res.outcome {
+        TxOutcome::Success => "settled",
+        TxOutcome::Revert => "revert",
+        TxOutcome::Dropped => "dropped",
+    };
+    // Dust land: the op executed and repaid but retained ~nothing while
+    // burning real gas — the quoted edge was bait or fully decayed. Convict
+    // every route pool of the settled opportunities; repeat offenders get
+    // a permanent flag.
+    // Retained <20% of the gas bill (or <$0.25) = dust: the edge priced
+    // in at verify was gone by inclusion. Flat-$0.25 missed a $0.74 gross
+    // on a $9 gas op (tx 0x6dd24e6e) — scale the bar with the burn.
+    let dust_land = matches!(res.outcome, TxOutcome::Success)
+        && res.gas_usd > 0.25
+        && res.realized_usd + res.gas_usd < (res.gas_usd * 0.20).max(0.25);
+    metrics::SETTLEMENTS
+        .with_label_values(&[ctx.chain.as_str(), outcome_label])
+        .inc();
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        metrics::SETTLED_NET_USD
+            .with_label_values(&[ctx.chain.as_str()])
+            .add(res.realized_usd);
+    }
+    let dir = format!("data/leaders/{}", ctx.chain);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let audit = serde_json::json!({
+        "chain": ctx.chain, "venue": venue, "submit_id": submit_id,
+        "outcome": outcome_label, "realized_usd": res.realized_usd,
+        "gas_usd": res.gas_usd, "unpriced_tokens": res.unpriced_tokens,
+        "opportunities": opp_ids, "unix_ms": now_ms,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open(format!("{dir}/_settlements.jsonl"))
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{audit}");
+    }
+    if opp_ids.is_empty() {
+        return;
+    }
+    // Opportunity records: submitted -> settled/reverted/dropped.
+    let opps = arb_core::opportunity::load_opportunities(&dir);
+    for id in opp_ids {
+        let Some(o) = opps.iter().find(|o| o.opportunity_id == *id) else {
+            continue;
+        };
+        if dust_land && block > 0 {
+            if let Some(breaker) = &ctx.token_breaker {
+                let mut b = breaker.lock().unwrap();
+                for p in &o.route_pools {
+                    if let Ok(pool) = p.parse::<Address>() {
+                        b.flag_dust_land_pool(pool, block);
+                    }
+                }
+            }
+        }
+        let mut o = o.clone();
+        o.unix_ms = now_ms;
+        o.settled_net_usd = res.realized_usd;
+        o.execution_status = match res.outcome {
+            TxOutcome::Success => arb_core::opportunity::ExecutionStatus::Settled,
+            TxOutcome::Revert => arb_core::opportunity::ExecutionStatus::Reverted,
+            TxOutcome::Dropped => arb_core::opportunity::ExecutionStatus::Dropped,
+        };
+        let _ = o.append_jsonl(&dir);
+    }
+    // Strategy health: realized losses demote a BoundedLive strategy back to
+    // Shadow (re-verification required) — live results outrank sim evidence.
+    if !matches!(res.outcome, TxOutcome::Dropped) {
+        let mut strat = arb_leaders::StrategyRegistry::load(&ctx.chain, 20_000);
+        let mut dirty = false;
+        for id in opp_ids {
+            if let Some(sid) = strategy_id_of(id) {
+                if strat.mark_settled(&sid, res.realized_usd) {
+                    warn!(strategy = sid, realized_usd = res.realized_usd,
+                        "strategy demoted BoundedLive -> Shadow on realized losses");
+                    dirty = true;
+                } else if strat.records.contains_key(&sid) {
+                    dirty = true;
+                }
+            }
+        }
+        if dirty {
+            let _ = strat.save();
+        }
+    }
+}
+
+/// Spawn settlement tracking for one submitted result. Pimlico ops are
+/// resolved via the bundler; every other venue via our own tx hash
+/// (keccak256 of the last signed envelope — venue bundle ids are useless).
+fn spawn_settlement(
+    ctx: SettleCtx,
+    venue: &'static str,
+    submit_hash: Option<String>,
+    our_tx_hash: Option<B256>,
+    opp_ids: Vec<String>,
+    cb: Option<(u32, tokio::sync::mpsc::Sender<(u32, TxOutcome, u64)>, u64)>,
+) {
+    tokio::spawn(async move {
+        let res = if venue == "Pimlico_ERC4337" {
+            match submit_hash.as_deref() {
+                Some(h) => track_userop(&ctx, h, 12).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        } else {
+            match our_tx_hash {
+                Some(h) => settle_tx(&ctx, h, 5).await,
+                None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+            }
+        };
+        if let Some((pid, sender, blk)) = cb {
+            let _ = sender.send((pid, res.outcome, blk)).await;
+        }
+        let block = ctx.endpoint.block_number().await.unwrap_or(0);
+        record_settlement(&ctx, venue, submit_hash.as_deref().unwrap_or("?"), &res, &opp_ids, block);
+    });
+}
+/// Feed one gate-accepted candidate into the opportunities log so the
+/// dashboard's Opportunities page shows engine detects, not only leader
+/// evidence. `kind` distinguishes classic resting-state accepts from
+/// mempool backruns; `ref_tx` is the victim hash or the block tag.
+fn log_accepted_opportunity(
+    chain: &str,
+    kind: &str,
+    source_wallet: &str,
+    ref_tx: &str,
+    path: &PathTemplate,
+    effective_usd: f64,
+    profit_bps: u32,
+    ready: bool,
+) -> arb_core::opportunity::ActionableOpportunity {
+    use arb_core::opportunity::{ActionableOpportunity, ExecutionStatus, SimulationStatus};
+    let tx_short: String = ref_tx.chars().take(18).collect();
+    let mut o = ActionableOpportunity::new(
+        chain,
+        kind,
+        source_wallet,
+        &format!("{}-{}", path.id, tx_short),
+        path.hops.iter().map(|h| format!("{}", h.pool)).collect(),
+    );
+    o.victim_tx = ref_tx.to_string();
+    o.token_in = format!("{}", path.flash_token);
+    o.token_out = o.token_in.clone();
+    o.allbright_net_usd = effective_usd;
+    o.profit_bps = profit_bps as f64;
+    o.simulation_status = SimulationStatus::Pass;
+    if ready {
+        o.execution_status = ExecutionStatus::Ready;
+    }
+    let dir = format!("data/leaders/{chain}");
+    if let Err(e) = o.append_jsonl(&dir) {
+        debug!(error = %e, "opportunity feed append failed");
+    }
+    o
+}
+
 fn write_status_json(
     chain_name: &str,
     started: &chrono::DateTime<chrono::Utc>,
@@ -584,15 +1304,1208 @@ fn write_status_json(
     let _ = std::fs::write(path, serde_json::to_string_pretty(&status).unwrap_or_default());
 }
 
-pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
+/// Hot-reload loop: leader_scan merges newly discovered leader pools into
+/// the config file continuously, but the boot snapshot above would
+/// otherwise stay frozen for the process lifetime — leader routes through
+/// pools we never tracked die silently at projection. Every interval,
+/// re-parse the config, register pools not yet known with the refresher
+/// (they join the next refresh cycle) and the pair/token indexes, then
+/// warm their state immediately. The classic-arb path enumerator is NOT
+/// rebuilt — hot pools serve projection/copy routing only.
+#[allow(clippy::too_many_arguments)]
+fn spawn_pool_hot_reload(
+    refresher: Arc<StateRefresher>,
+    store: Arc<PoolStore>,
+    pair_to_pools: Arc<RwLock<HashMap<(Address, Address), Vec<(Address, u32)>>>>,
+    pool_tokens: Arc<RwLock<HashMap<Address, (Address, Address)>>>,
+    config_path: String,
+    chain: String,
+    known_pools: HashSet<Address>,
+    routing: Arc<tokio::sync::RwLock<RoutingTables>>,
+    pool_infos: Arc<RwLock<Vec<PoolInfo>>>,
+    flash_tokens: Vec<Address>,
+    flash_amounts: HashMap<Address, U256>,
+    chain_id: u64,
+    v4_keys: HashMap<Address, arb_paths::template::V4Key>,
+    quarantined: Arc<RwLock<HashSet<Address>>>,
+    circuit_breaker: Arc<std::sync::Mutex<PathCircuitBreaker>>,
+) {
+    tokio::spawn(async move {
+        let mut known = known_pools;
+        loop {
+            tokio::time::sleep(Duration::from_secs(180)).await;
+            let Ok(re_cfg) = crate::config::load_config(&config_path) else {
+                continue;
+            };
+            let re_tokens: HashMap<String, Address> = re_cfg
+                .tokens
+                .iter()
+                .filter_map(|(name, addr)| {
+                    addr.parse::<Address>().ok().map(|a| (name.clone(), a))
+                })
+                .collect();
+            // Pools convicted by the bait gate stay out of the index —
+            // the persisted list is re-read every cycle so a fresh flag
+            // lands even mid-process.
+            let bait_set: HashSet<Address> = std::fs::read_to_string(format!(
+                "data/leaders/{chain}/_bait_pools.json"
+            ))
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("pools").and_then(|a| a.as_array()).cloned())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|e| {
+                        e.get("pool")
+                            .and_then(|p| p.as_str())
+                            .and_then(|p| p.parse::<Address>().ok())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+            let mut new_cfgs: Vec<PoolConfig> = Vec::new();
+            let mut new_addrs: Vec<Address> = Vec::new();
+            let mut new_pool_infos: Vec<PoolInfo> = Vec::new();
+            for p in &re_cfg.pools {
+                let Ok(addr) = p.pseudo_address() else { continue };
+                if bait_set.contains(&addr) {
+                    continue;
+                }
+                if !known.insert(addr) {
+                    continue;
+                }
+                let (Some(&t0), Some(&t1)) =
+                    (re_tokens.get(&p.token0), re_tokens.get(&p.token1))
+                else {
+                    continue;
+                };
+                let protocol = p.parse_protocol();
+                // Hot-loaded pools have no V4 pool spec (pool_id/manager) —
+                // a merged V4 entry could not be read anyway.
+                if protocol == Protocol::UniswapV4 {
+                    continue;
+                }
+                new_addrs.push(addr);
+                new_cfgs.push(PoolConfig {
+                    address: addr,
+                    protocol,
+                    fee_bps: p.fee_bps,
+                    token0: Some(t0),
+                    token1: Some(t1),
+                });
+                new_pool_infos.push(PoolInfo {
+                    address: addr,
+                    protocol,
+                    token0: t0,
+                    token1: t1,
+                    liquidity_hint: 0.0,
+                });
+                let key = if t0 < t1 { (t0, t1) } else { (t1, t0) };
+                pair_to_pools
+                    .write()
+                    .unwrap()
+                    .entry(key)
+                    .or_default()
+                    .push((addr, p.fee_bps));
+                pool_tokens.write().unwrap().insert(addr, (t0, t1));
+            }
+            if new_addrs.is_empty() {
+                continue;
+            }
+            let added = new_addrs.len();
+            refresher.add_pools(new_cfgs);
+            let warmed = refresher.refresh_pools(&store, &new_addrs).await;
+            metrics::POOLS_HOT.with_label_values(&[&chain]).inc_by(added as f64);
+            info!(added, warmed, tracked = known.len(), "Hot-loaded discovered pools");
+
+            // Rebuild cyclic routing so discovered pools can actually
+            // form paths — startup enumeration was frozen, so merged
+            // pools could feed victim projection but never carry a
+            // cyclic arb themselves. Path ids are positional; the path
+            // breaker is index-keyed, so it resets with the new table.
+            // std-guard work finishes before the routing write await —
+            // holding a std RwLock guard across .await is !Send.
+            let tables = {
+                let mut infos = pool_infos.write().unwrap();
+                infos.extend(new_pool_infos);
+                {
+                    let q = quarantined.read().unwrap();
+                    infos.retain(|pi| !q.contains(&pi.address));
+                }
+                build_routing_tables(
+                    &infos, &flash_tokens, &flash_amounts, chain_id, &v4_keys,
+                )
+            };
+            let n_paths = tables.paths.len();
+            *routing.write().await = tables;
+            *circuit_breaker.lock().unwrap() = PathCircuitBreaker::new();
+            info!(paths = n_paths, "Routing tables rebuilt with hot-loaded pools");
+        }
+    });
+}
+
+
+/// Shared context for the detached backrun lane. Every field the
+/// per-victim pipeline touches lives here so the lane runs as its own
+/// task: a pending victim is evaluated when it ARRIVES on the mempool
+/// socket, not when the next block header lands — the block-gated drain
+/// used to leave victims ~1-2s old at first eval, which is the race
+/// window competitors close in.
+///
+/// Cyclic routing state: paths, the pool->paths index, and the presigned
+/// calldata pool are all keyed by the same enumeration, so they must swap
+/// atomically when hot-loaded pools join — a mismatched presign pool
+/// would sign calldata for a different path's route.
+struct RoutingTables {
+    paths: Vec<PathTemplate>,
+    pool_to_paths: HashMap<Address, Vec<usize>>,
+    presign_pool: PresignPool,
+}
+
+/// Rebuild the full routing set from the pool graph. Path ids are
+/// positional (path_id indexes into `paths`), so every consumer must go
+/// through the same generation — callers holding a read guard see one
+/// consistent snapshot.
+fn build_routing_tables(
+    pool_infos: &[PoolInfo],
+    flash_tokens: &[Address],
+    flash_amounts: &HashMap<Address, U256>,
+    chain_id: u64,
+    v4_keys: &HashMap<Address, arb_paths::template::V4Key>,
+) -> RoutingTables {
+    let paths = PathEnumerator::new(
+        pool_infos.to_vec(),
+        flash_tokens.to_vec(),
+        flash_amounts.clone(),
+    )
+    .with_limits(spec::MAX_PATH_HOPS, 25_000, 200)
+    .enumerate();
+    let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
+    for (idx, path) in paths.iter().enumerate() {
+        for hop in &path.hops {
+            pool_to_paths.entry(hop.pool).or_default().push(idx);
+        }
+    }
+    let presign_pool = PresignPool::new_with_v4(&paths, chain_id, v4_keys);
+    RoutingTables { paths, pool_to_paths, presign_pool }
+}
+
+/// The mutable singletons (breakers, profit gate, smart account) sit
+/// behind std::sync::Mutex shared with the block loop; every use is a
+/// statement-scoped CPU op, never held across .await.
+struct BackrunCtx {
+    store: Arc<PoolStore>,
+    refresher: Arc<StateRefresher>,
+    endpoint: Arc<Endpoint>,
+    cfg: Arc<AppConfig>,
+    routing: Arc<tokio::sync::RwLock<RoutingTables>>,
+    ready_templates: Arc<Vec<(String, std::collections::HashSet<Address>)>>,
+    leader_observer: Option<arb_leaders::LeaderObserver>,
+    copy_lane: Option<crate::copy_lane::CopyLane>,
+    pair_to_pools: Arc<RwLock<HashMap<(Address, Address), Vec<(Address, u32)>>>>,
+    token_usd_prices: Arc<RwLock<HashMap<Address, f64>>>,
+    token_decimals: Arc<RwLock<HashMap<Address, u32>>>,
+    flash_bounds: Arc<HashMap<Address, (U256, U256)>>,
+    quarantined: Arc<RwLock<HashSet<Address>>>,
+    optimization_iterations: usize,
+    dry_run: bool,
+    router: Arc<arb_submit::router::VenueRouter>,
+    signers: Arc<Vec<PrivateKeySigner>>,
+    signer_rot: Arc<std::sync::atomic::AtomicUsize>,
+    pimlico_venue: Option<PimlicoSubmitter>,
+    settle_ctx: SettleCtx,
+    cb_tx: mpsc::Sender<(u32, TxOutcome, u64)>,
+    arb_contract: Address,
+    chain_label: &'static str,
+    profit_gate: Arc<std::sync::Mutex<ProfitGate>>,
+    circuit_breaker: Arc<std::sync::Mutex<PathCircuitBreaker>>,
+    token_breaker: Arc<std::sync::Mutex<TokenCircuitBreaker>>,
+    smart_account: Arc<std::sync::Mutex<Option<Address>>>,
+    local_fork: Arc<std::sync::Mutex<Option<LocalFork>>>,
+    latest_block: Arc<std::sync::atomic::AtomicU64>,
+    /// Victims that were still pending when their pass ran. A standalone
+    /// UserOp on a pending victim can only ever simulate PRE-victim
+    /// state (the bundler sees the victim's pools untouched), so it is
+    /// near-guaranteed to revert — the real shot comes after landing,
+    /// when the refreshed store IS the post-victim state. Deferred
+    /// victims re-enter `prepped` on the next pass for that re-check.
+    deferred: Arc<std::sync::Mutex<Vec<DeferredBackrun>>>,
+}
+
+/// A backrun victim that stayed pending through its pass. `scored` is
+/// keyed by path id (not index) so a routing-table rebuild between
+/// passes cannot bind a stale index.
+struct DeferredBackrun {
+    pending: arb_mempool::watcher::PendingSwap,
+    amount_in: U256,
+    hit_pools: Vec<Address>,
+    matched: Vec<usize>,
+    scored: Vec<(u32, U256, arb_sim::SimResult, f64, f64)>,
+    seen_at: Instant,
+}
+
+/// Max age of a deferred victim — a tx still pending after this long is
+/// either cancelled or priced out of the mempool entirely.
+const BACKRUN_DEFER_MAX_AGE: Duration = Duration::from_secs(6);
+
+async fn backrun_pass(
+    ctx: &BackrunCtx,
+    pending_events: Vec<arb_mempool::watcher::PendingSwap>,
+) {
+    use rayon::prelude::*;
+    let store = &ctx.store;
+    let refresher = &ctx.refresher;
+    let endpoint = &ctx.endpoint;
+    let cfg = &ctx.cfg;
+    // One consistent routing snapshot for the whole pass — the read
+    // guard is a tokio RwLock (Send across awaits); hot-loaded pool
+    // merges wait out this pass before swapping tables.
+    let rt = ctx.routing.read().await;
+    let paths = &rt.paths;
+    let ready_templates = &ctx.ready_templates;
+    let leader_observer = &ctx.leader_observer;
+    let copy_lane = &ctx.copy_lane;
+    let pair_to_pools = &ctx.pair_to_pools;
+    let token_usd_prices = ctx.token_usd_prices.read().unwrap().clone();
+    let token_decimals = ctx.token_decimals.read().unwrap().clone();
+    let flash_bounds = &ctx.flash_bounds;
+    let quarantined = &ctx.quarantined;
+    let pool_to_paths = &rt.pool_to_paths;
+    let optimization_iterations = ctx.optimization_iterations;
+    let dry_run = ctx.dry_run;
+    let router = &ctx.router;
+    let presign_pool = &rt.presign_pool;
+    let signers = &ctx.signers;
+    let signer_rot = &ctx.signer_rot;
+    let pimlico_venue = &ctx.pimlico_venue;
+    let settle_ctx = &ctx.settle_ctx;
+    let cb_tx = &ctx.cb_tx;
+    let arb_contract = ctx.arb_contract;
+    let chain_label = ctx.chain_label;
+    let scan_start = Instant::now();
+    let block_number = ctx.latest_block.load(std::sync::atomic::Ordering::Relaxed);
+            /// Per-victim CPU-eval output carried into the merged
+            /// refresh + submit passes below.
+            struct PreppedBackrun {
+                pending: arb_mempool::watcher::PendingSwap,
+                amount_in: U256,
+                hit_pools: Vec<Address>,
+                /// Indices into ready_templates (leader routes matched).
+                matched: Vec<usize>,
+                scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)>,
+            }
+            let mut prepped: Vec<PreppedBackrun> = Vec::new();
+
+            // Re-admit victims deferred while still pending: Pass B's
+            // receipt batch re-detects their landing and Pass C then
+            // re-verifies against real post-victim state — the first
+            // live shot, since the standalone op submitted on pending
+            // state can only sim pre-victim and is guaranteed to revert.
+            for d in ctx.deferred.lock().unwrap().drain(..) {
+                if d.seen_at.elapsed() >= BACKRUN_DEFER_MAX_AGE {
+                    continue;
+                }
+                let scored: Vec<_> = d
+                    .scored
+                    .iter()
+                    .filter_map(|(pid, amt, sim, usd, score)| {
+                        paths
+                            .iter()
+                            .position(|p| p.id == *pid)
+                            .map(|pidx| (pidx, *amt, sim.clone(), *usd, *score))
+                    })
+                    .collect();
+                if scored.is_empty() {
+                    continue;
+                }
+                metrics::BACKRUN_STAGES
+                    .with_label_values(&["deferred_reentry"])
+                    .inc();
+                prepped.push(PreppedBackrun {
+                    pending: d.pending,
+                    amount_in: d.amount_in,
+                    hit_pools: d.hit_pools,
+                    matched: d.matched,
+                    scored,
+                });
+            }
+
+            // ── Pass A: pure-CPU eval for every pending victim. No RPC
+            // here — the serial per-victim refresh+receipt used to put
+            // ~1.3s on the critical path per victim and the queue tail
+            // arrived a full block late.
+            // Process pending mempool swaps for backrun opportunities
+            for pending in pending_events {
+            if let Some(obs) = &leader_observer {
+                obs.observe(&pending);
+            }
+            if let Some(lane) = &copy_lane {
+                lane.on_swap(&pending);
+            }
+            // Direct pool calls carry no input amount in calldata (it's
+            // recovered inside projection); router decodes need one.
+            let amount_in = match pending.decoded.amount_in {
+                Some(a) => a,
+                None if pending.decoded.direct.is_some() => U256::ZERO,
+                None => continue,
+            };
+
+            // Project every hop of the pending swap's path onto the tracked
+            // pools it touches: the resting state has no spread — the pending
+            // swap creates one. Later hops of a multi-hop victim move our
+            // pools too, not just the first.
+            let Some((projected, hit_pools, victim_usd, max_move)) =
+                arb_mempool::impact::project_pending_path(
+                    &store, &pending.decoded, amount_in, &pair_to_pools.read().unwrap(),
+                    &token_usd_prices, &token_decimals,
+                )
+            else { continue };
+
+            // Dust victims cannot leave an extractable edge — a $1 swap
+            // "projected" to yield $0.30+ is the constant-product model
+            // over-stating impact, and every such candidate dies at the
+            // post-refresh re-check anyway. Skip before the pipeline spend.
+            if let Some(v) = victim_usd {
+                if v < 25.0 {
+                    debug!(victim_usd = v, tx = %pending.tx_hash,
+                        "backrun skipped — victim below dust floor");
+                    continue;
+                }
+            }
+
+            let mut candidate_ids: Vec<usize> = Vec::new();
+            for pool_addr in &hit_pools {
+                if quarantined.read().unwrap().contains(pool_addr) { continue; }
+                if let Some(ids) = pool_to_paths.get(pool_addr) {
+                    candidate_ids.extend_from_slice(ids);
+                }
+            }
+            if candidate_ids.is_empty() { continue; }
+            candidate_ids.sort_unstable();
+            candidate_ids.dedup();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| quarantined.read().unwrap().contains(&h.pool)));
+            // Bait-convicted pools are excluded here exactly as the cyclic
+            // scan does — without this a settled-out bait pool still
+            // reached the backrun submit path (verified: tx 0x6dd24e6e
+            // burned $8.5 through two pools already in _bait_pools.json).
+            candidate_ids.retain(|&i| {
+                !ctx.token_breaker
+                    .lock()
+                    .unwrap()
+                    .is_path_token_suppressed(&paths[i], block_number)
+            });
+            let stale_n = candidate_ids.len();
+            candidate_ids
+                .retain(|&i| !paths[i].hops.iter().any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS)));
+            let dropped_stale = stale_n - candidate_ids.len();
+            if dropped_stale > 0 {
+                metrics::STALE_SUPPRESSED.inc_by(dropped_stale as f64);
+                debug!(skipped = dropped_stale, "backrun candidates skipped — stale pool state");
+            }
+            if candidate_ids.is_empty() { continue; }
+            metrics::BACKRUN_CANDIDATES.inc();
+            // Phase-1 latency budget: how long from seeing the victim to
+            // starting candidate evaluation — this is the race window.
+            metrics::PENDING_TO_EVAL.observe(pending.seen_at.elapsed().as_secs_f64());
+
+            {
+                // Rank candidates by cheap single-point profit so the 20
+                // full optimizations go to the most promising routes,
+                // not the first 20 by path index.
+                // Cheap single-point screen is pure CPU — parallel.
+                let mut screened: Vec<(usize, U256)> = candidate_ids
+                    .par_iter()
+                    .map(|&i| {
+                        let p = &paths[i];
+                        let min_a = flash_bounds
+                            .get(&p.flash_token)
+                            .map(|b| b.0)
+                            .unwrap_or(p.flash_amount);
+                        let hi_probe = (min_a * U256::from(10u32))
+                            .min(flash_bounds.get(&p.flash_token).map(|b| b.1)
+                                .unwrap_or(p.flash_amount * U256::from(10u32)));
+                        let s = arb_sim::optimize::simulate_profit(p, min_a, &projected)
+                            .max(arb_sim::optimize::simulate_profit(p, hi_probe, &projected));
+                        (i, s)
+                    })
+                    .collect();
+                screened.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Opportunity bridge: a pending victim touching a sim-verified
+                // leader route template gets template-overlapping paths
+                // evaluated first — the leader's proven geometry takes the
+                // limited optimization slots over generic enumeration.
+                let matched_idx: Vec<usize> = ready_templates
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, pools))| hit_pools.iter().any(|p| pools.contains(p)))
+                    .map(|(i, _)| i)
+                    .collect();
+                let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                    matched_idx.iter().map(|&i| &ready_templates[i]).collect();
+                if !matched.is_empty() {
+                    arb_leaders::OPPORTUNITY_TOTAL
+                        .with_label_values(&[chain_label, "matched_live"])
+                        .inc();
+                    // Template overlap first, sim-probe score breaks ties.
+                    screened.sort_by(|a, b| {
+                        let ov = |i: usize| paths[i].hops.iter()
+                            .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                            .count();
+                        ov(b.0).cmp(&ov(a.0)).then(b.1.cmp(&a.1))
+                    });
+                    debug!(
+                        victim = %pending.tx_hash,
+                        templates = matched.len(),
+                        "OPPORTUNITY_MATCH victim touches verified leader route"
+                    );
+                }
+                // Evaluate all screened candidates first — gate-passers are
+                // ranked by route_score (leader-template overlap, freshness
+                // decay, breaker revert history) before we spend the
+                // re-verify RPC call and a submission on any of them.
+                let mut scored: Vec<(usize, U256, arb_sim::SimResult, f64, f64)> = Vec::new();
+                // Projected USD counts once per victim event — every accepted
+                // path for one victim extracts the same dislocation, so the
+                // counter takes the best candidate, not the sum.
+                let mut best_accepted_usd = 0.0f64;
+                // Evaluate screened candidates in PARALLEL — the ternary
+                // search is pure CPU against the projected snapshot, and a
+                // serial ~20-candidate sweep burned the victim's race
+                // window. Metrics and the scored queue are applied serially
+                // in candidate order below, so ordering semantics are
+                // unchanged.
+                struct CandEval {
+                    pidx: usize,
+                    opt_amount: U256,
+                    sim: arb_sim::SimResult,
+                    /// decision.accept at gate time — counted in metrics even
+                    /// when the anti-phantom drop below discards the score.
+                    gate_accepted: bool,
+                    effective_usd: f64,
+                    /// Some(score) = passed every gate and the phantom drop.
+                    score: Option<f64>,
+                }
+                let evals: Vec<CandEval> = screened
+                    .par_iter()
+                    .take(20)
+                    .filter_map(|&(pidx, _)| {
+                        let path = &paths[pidx];
+                        if ctx.circuit_breaker.lock().unwrap().is_suppressed(path.id, block_number) {
+                            return None;
+                        }
+
+                        // Evaluate against the projected post-swap state — that is
+                        // the state our tx would see if it lands right after the
+                        // pending swap in the same block.
+                        let (opt_amount, opt_profit) = arb_sim::optimize::find_optimal_amount(
+                            path, &projected,
+                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
+                            {
+                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
+                                    .unwrap_or(path.flash_amount * U256::from(10u32));
+                                let liq_max = arb_sim::optimize::path_max_flash(path, &projected, 0.05, token_max);
+                                token_max.min(liq_max)
+                            },
+                            optimization_iterations,
+                        )?;
+
+                        let profit_bps: u32 = if !opt_amount.is_zero() {
+                            ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
+                        } else { 0 };
+
+                        let sim = arb_sim::SimResult {
+                            path_id: path.id,
+                            flash_token: path.flash_token,
+                            flash_amount: opt_amount,
+                            final_amount: opt_amount + opt_profit,
+                            gross_profit: opt_profit,
+                            profit_bps,
+                        };
+
+                        let decision = ctx.profit_gate.lock().unwrap().should_submit(&sim, path);
+                        // A backrun extracts value from the dislocation the
+                        // victim creates — it cannot exceed the victim's own
+                        // input value. Larger "profits" mean the projection
+                        // model overshot (e.g., a same-tick V3 estimate or an
+                        // ambiguous same-pair match).
+                        let mut dropped = false;
+                        if decision.accept {
+                            if victim_usd.map_or(false, |v| v > 1e8) {
+                                debug!(victim_usd, "Backrun dropped: implausible decoded victim size");
+                                dropped = true;
+                            } else if let Some(vusd) = victim_usd {
+                                if decision.effective_profit_usd > vusd {
+                                    debug!(
+                                        path_id = path.id,
+                                        profit_usd = decision.effective_profit_usd,
+                                        victim_usd = vusd,
+                                        "Backrun candidate dropped: profit exceeds victim size"
+                                    );
+                                    dropped = true;
+                                }
+                            }
+                        }
+                        let mut score = None;
+                        if decision.accept && !dropped && !dry_run {
+                            // reproduction_precision: share of OUR hops that
+                            // sit inside a matched leader route's pool set —
+                            // 1.0 when no template matched (nothing to
+                            // reproduce against).
+                            let overlap = path.hops.iter()
+                                .filter(|h| matched.iter().any(|(_, p)| p.contains(&h.pool)))
+                                .count();
+                            let repro = if matched.is_empty() { 1.0 } else {
+                                overlap as f64 / path.hops.len().max(1) as f64
+                            };
+                            // route_confidence: leader-verified geometry is
+                            // stronger evidence than generic enumeration.
+                            // Scaled down when the same-tick projection
+                            // pushed a pool far — a >25% move crossed real
+                            // ticks the approximation cannot see, so the
+                            // projected edge is less trustworthy.
+                            let approx_penalty = if max_move > 0.25 {
+                                debug!(victim = %pending.tx_hash, max_move,
+                                    "backrun projection moved pool >25% — confidence penalized");
+                                0.5
+                            } else { 1.0 };
+                            let confidence = (if matched.is_empty() { 0.7 }
+                                else if overlap > 0 { 1.0 } else { 0.5 })
+                                * approx_penalty;
+                            // No gas model yet — gas_risk 0 (constant term
+                            // would not change the ordering anyway).
+                            // revert_risk: this path's realized revert rate
+                            // applied to the stake at risk.
+                            score = Some(arb_core::opportunity::route_score(
+                                decision.effective_profit_usd, repro, 1.0,
+                                pending.seen_at.elapsed().as_millis() as u64,
+                                confidence, 0.0,
+                                ctx.circuit_breaker.lock().unwrap().revert_rate(path.id)
+                                    * decision.effective_profit_usd,
+                            ));
+                        }
+                        Some(CandEval {
+                            pidx, opt_amount, sim,
+                            gate_accepted: decision.accept,
+                            effective_usd: decision.effective_profit_usd,
+                            score,
+                        })
+                    })
+                    .collect();
+
+                for e in evals {
+                    // Credibility ceiling on a VICTIM PROJECTION: a >2%
+                    // projected gap is usually model overshoot, but a big
+                    // swap on a thin pool honestly moves price that far —
+                    // neither is pool dishonesty. Convict only pools
+                    // already quarantined as pair outliers; the candidate
+                    // is still rejected (exec probe is the arbiter).
+                    if e.sim.profit_bps > BAIT_GAP_BPS {
+                        metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
+                        let q = ctx.quarantined.read().unwrap().clone();
+                        ctx.token_breaker.lock().unwrap().flag_bait_pools_in(&paths[e.pidx], block_number, &q);
+                        continue;
+                    }
+                    if e.gate_accepted {
+                        metrics::GATE_ACCEPTS.inc();
+                        best_accepted_usd = best_accepted_usd.max(e.effective_usd);
+                        metrics::GATE_EFFECTIVE_USD.observe(e.effective_usd);
+                        info!(
+                            path_id = e.sim.path_id,
+                            effective_usd = e.effective_usd,
+                            victim_usd,
+                            "Backrun candidate passed profit gate"
+                        );
+                    }
+                    if let Some(score) = e.score {
+                        scored.push((e.pidx, e.opt_amount, e.sim, e.effective_usd, score));
+                    }
+                }
+                if best_accepted_usd > 0.0 {
+                    metrics::ACCEPTED_PROFIT_USD.inc_by(best_accepted_usd);
+                }
+                // Highest route_score first; stale-victim and revert-prone
+                // candidates sink automatically.
+                scored.sort_by(|a, b| {
+                    b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                // Scored victims queue for the shared verify pass — the
+                // refresh and receipt RPC work happens ONCE for all
+                // victims below, not serialized per victim.
+                if !scored.is_empty() {
+                    prepped.push(PreppedBackrun {
+                        pending, amount_in, hit_pools,
+                        matched: matched_idx, scored,
+                    });
+                }
+            }
+            }
+
+            // ── Pass B: ONE merged targeted refresh over every victim's
+            // touched pools, then ONE parallel receipt batch. The old
+            // per-victim serial refresh+receipt put ~1 RPC RTT on the
+            // critical path each — 129/156 victims were already >1s old
+            // at first eval and the queue tail arrived a block late.
+            if !prepped.is_empty() {
+                let mut tgt: Vec<Address> = Vec::new();
+                'victims: for pv in &prepped {
+                    for a in &pv.hit_pools {
+                        if !tgt.contains(a) { tgt.push(*a); }
+                    }
+                    for (pidx, _, _, _, _) in &pv.scored {
+                        for h in &paths[*pidx].hops {
+                            if !tgt.contains(&h.pool) { tgt.push(h.pool); }
+                        }
+                        if tgt.len() >= 256 { break 'victims; }
+                    }
+                }
+                tgt.truncate(256);
+                let t_refresh = Instant::now();
+                // Refresh + receipts are independent — overlap them.
+                // Serial used to stack a full RTT (~300-500ms on public
+                // RPC) onto every victim's critical path.
+                let receipts_fut = futures::future::join_all(
+                    prepped.iter().map(|pv| endpoint.get_receipt(pv.pending.tx_hash)),
+                );
+                let (n, landed_raw) = futures::future::join(
+                    refresher.refresh_pools(&store, &tgt),
+                    receipts_fut,
+                )
+                .await;
+                debug!(victims = prepped.len(), pools = tgt.len(), updated = n,
+                    ms = t_refresh.elapsed().as_millis(),
+                    "backrun merged targeted refresh");
+
+                // Parallel receipt batch — victims that already landed
+                // skip re-projection (the refreshed store IS the
+                // post-victim state); serial receipts added ~1 RTT each.
+                let landed: Vec<bool> = landed_raw
+                    .into_iter()
+                    .map(|r| r.ok().flatten().is_some())
+                    .collect();
+
+                // Queue a follow-up pass for victims still pending: the
+                // standalone op submitted below sims PRE-victim state at
+                // the bundler, so it can only win by racing the victim's
+                // landing during transit. The deferred re-entry gets the
+                // real check once the refreshed store contains the
+                // victim's impact — the durable-dislocation capture.
+                for (pv, v_landed) in prepped.iter().zip(landed.iter()) {
+                    if *v_landed || pv.pending.seen_at.elapsed() >= BACKRUN_DEFER_MAX_AGE {
+                        continue;
+                    }
+                    let scored = pv
+                        .scored
+                        .iter()
+                        .map(|(pidx, amt, sim, usd, score)| {
+                            (paths[*pidx].id, *amt, sim.clone(), *usd, *score)
+                        })
+                        .collect();
+                    ctx.deferred.lock().unwrap().push(DeferredBackrun {
+                        pending: pv.pending.clone(),
+                        amount_in: pv.amount_in,
+                        hit_pools: pv.hit_pools.clone(),
+                        matched: pv.matched.clone(),
+                        scored,
+                        seen_at: pv.pending.seen_at,
+                    });
+                    metrics::BACKRUN_STAGES
+                        .with_label_values(&["deferred"])
+                        .inc();
+                }
+
+                // ── Pass C: re-verify + submit each victim in order ──
+                for (pv, mut victim_landed) in prepped.into_iter().zip(landed) {
+                    let pending = &pv.pending;
+                    let matched: Vec<&(String, std::collections::HashSet<Address>)> =
+                        pv.matched.iter().map(|&i| &ready_templates[i]).collect();
+                    // Belt-and-suspenders at the submit boundary: deferred
+                    // re-entries and leader-template paths both bypass the
+                    // Pass-A candidate retains, so bait suppression must
+                    // also gate what reaches verify+submit.
+                    let scored: Vec<_> = pv
+                        .scored
+                        .into_iter()
+                        .filter(|(pidx, _, _, _, _)| {
+                            !ctx.token_breaker
+                                .lock()
+                                .unwrap()
+                                .is_path_token_suppressed(&paths[*pidx], block_number)
+                        })
+                        .collect();
+                    if scored.is_empty() {
+                        continue;
+                    }
+                    // If the victim already landed, the refreshed store IS
+                    // the post-victim state — re-projecting the swap would
+                    // double-count its impact. Re-project only while the
+                    // victim is still pending.
+                    let verify_state = if victim_landed {
+                        None
+                    } else {
+                        arb_mempool::impact::project_pending_path(
+                            &store, &pending.decoded, pv.amount_in, &pair_to_pools.read().unwrap(),
+                            &token_usd_prices, &token_decimals,
+                        ).map(|(s, _, _, _)| s)
+                    };
+
+                    // Re-verify + submit in score order; a stale edge falls
+                    // through to the next-best candidate (same as before).
+                    // The re-check itself is pure CPU against the verify
+                    // snapshot — run it in parallel across candidates so the
+                    // serial tail is build+probe+submit only.
+                    //
+                    // Exception: victim still pending AND its swap can't be
+                    // projected -> verify_state is None and the store lacks
+                    // the victim's price impact, so the edge is guaranteed
+                    // to sim dead here even when real. Don't kill what we
+                    // cannot see — let the exec probe (on-chain truth)
+                    // decide instead.
+                    let projection_missing = !victim_landed && verify_state.is_none();
+                    if projection_missing {
+                        metrics::BACKRUN_STAGES
+                            .with_label_values(&["recheck_skipped_no_projection"])
+                            .inc();
+                    }
+                    // One landing re-check per VICTIM, not per candidate —
+                    // this used to sit inside the per-candidate probe block,
+                    // stacking a serial RTT per path while a victim stayed
+                    // pending. Once landed, always landed.
+                    if !victim_landed {
+                        victim_landed = endpoint
+                            .get_receipt(pending.tx_hash)
+                            .await
+                            .ok()
+                            .flatten()
+                            .is_some();
+                    }
+                    let recheck_alive: Vec<bool> = scored
+                        .par_iter()
+                        .map(|(pidx, _, _, _, _)| {
+                            if projection_missing {
+                                return true;
+                            }
+                            let path = &paths[*pidx];
+                            let vstore = verify_state.as_ref().unwrap_or(&store);
+                            let verified = arb_sim::optimize::find_optimal_amount(
+                                path, vstore,
+                                flash_bounds.get(&path.flash_token).map(|b| b.0)
+                                    .unwrap_or(path.flash_amount),
+                                {
+                                    let token_max = flash_bounds.get(&path.flash_token)
+                                        .map(|b| b.1)
+                                        .unwrap_or(path.flash_amount * U256::from(10u32));
+                                    let liq_max = arb_sim::optimize::path_max_flash(
+                                        path, vstore, 0.05, token_max);
+                                    token_max.min(liq_max)
+                                },
+                                optimization_iterations,
+                            );
+                            matches!(verified, Some((_, reprofit)) if !reprofit.is_zero())
+                        })
+                        .collect();
+                    for ((pidx, opt_amount, sim, _effective_usd, _score), alive) in
+                        scored.into_iter().zip(recheck_alive)
+                    {
+                    let path = &paths[pidx];
+                    {
+                            if !alive {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["recheck_dead"])
+                                    .inc();
+                                // Split the kill by victim state: a landed
+                                // victim means refreshed state already
+                                // includes the victim (and any competitor's
+                                // backrun) — the market ate the edge. A
+                                // still-pending victim means OUR projection
+                                // diverged from refreshed truth — a model
+                                // bug signal, not market loss.
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&[if victim_landed {
+                                        "recheck_dead_landed"
+                                    } else {
+                                        "recheck_dead_pending"
+                                    }])
+                                    .inc();
+                                info!(path_id = path.id,
+                                    victim = %pending.tx_hash,
+                                    victim_landed,
+                                    victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
+                                    "Backrun edge gone on re-check");
+                                continue;
+                            }
+
+                            info!(
+                                path_id = path.id, profit_bps = sim.profit_bps,
+                                route_score = _score,
+                                pending_router = pending.decoded.router,
+                                pending_tx = %pending.tx_hash,
+                                victim_age_ms = pending.seen_at.elapsed().as_millis() as u64,
+                                "Backrun candidate found"
+                            );
+
+
+                            // Build a true [victim, ours] ordered bundle: the
+                            // watcher streams full pending txs, so the victim's
+                            // signed bytes are available — bundle venues prepend
+                            // them and our tx lands immediately after the victim.
+                            // With the generic backrun lane disabled, a victim
+                            // may still submit when its sender is a live leader
+                            // wallet — the flash-funded displacement copy
+                            // (zero-capital wallet copy, after-signal only).
+                            let leader_copy = copy_lane
+                                .as_ref()
+                                .map(|l| l.allows_copy_backrun(&pending.from))
+                                .unwrap_or(false);
+                            if !cfg.lanes.backrun && !leader_copy {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["lane_disabled"])
+                                    .inc();
+                                continue;
+                            }
+                            if leader_copy && !cfg.lanes.backrun {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["leader_copy_gated"])
+                                    .inc();
+                            }
+                            let target_block = block_number + 1;
+                            let submit_signer = &signers[signer_rot
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                % signers.len()];
+                            if let Ok(mut bundle) = rt.presign_pool.build_fast(
+                                path.id, opt_amount, &endpoint, arb_contract, submit_signer, target_block,
+                            ).await {
+                                if cfg.submission.strict_4337 {
+                                    // No bundle-capable venue exists under
+                                    // strict_4337 (the executor's onlyOwner
+                                    // is the Pimlico smart account) and
+                                    // UserOps cannot be ordered after a
+                                    // victim tx anyway. Submit as a
+                                    // standalone sponsored op: it lands
+                                    // next-block on post-victim state —
+                                    // the dislocations this path targets
+                                    // persist >=1 block. backrun_tx stays
+                                    // for settlement linkage only.
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                } else if !pending.raw_tx.is_empty() {
+                                    bundle.victim_tx = Some(pending.raw_tx.clone());
+                                    bundle.backrun_tx = Some(pending.tx_hash);
+                                }
+
+                                // Exec-probe (strict_4337): meaningful
+                                // only once the victim has landed, when
+                                // current state includes its impact. While
+                                // the victim is still pending the
+                                // projected state is the operative one,
+                                // and the bundler drops reverting ops at
+                                // no on-chain cost — skip the probe then.
+                                if cfg.submission.strict_4337 {
+                                    // Landing was re-checked once per victim
+                                    // above — reuse the flag.
+                                    if victim_landed {
+                                        if let Some(venue) = &pimlico_venue {
+                                            if ctx.smart_account.lock().unwrap().is_none() {
+                                                *ctx.smart_account.lock().unwrap() =
+                                                    venue.account().await.ok();
+                                            }
+                                        }
+                                        let acct = *ctx.smart_account.lock().unwrap();
+                                        if let (Some(account), Some(call)) =
+                                            (acct, bundle.call.as_ref())
+                                        {
+                                            match exec_probe(
+                                                endpoint, &ctx.local_fork,
+                                                account, call.to, call.data.clone(),
+                                            ).await {
+                                                ProbeVerdict::Ok => {}
+                                                verdict => {
+                                                    metrics::BACKRUN_STAGES
+                                                        .with_label_values(&["exec_probe_dead"])
+                                                        .inc();
+                                                    if let ProbeVerdict::Reverted(detail) = &verdict {
+                                                        let reason = classify_exec_probe_revert(
+                                                            detail
+                                                        );
+                                                        warn!(
+                                                            path_id = path.id, reason,
+                                                            "exec probe reverted — backrun suppressed"
+                                                        );
+                                                        ctx.circuit_breaker
+                                                            .lock().unwrap()
+                                                            .record_revert(path.id, block_number);
+                                                        // A string revert
+                                                        // bubbling out of the
+                                                        // pool itself
+                                                        // (Nomiswap: D) is
+                                                        // deterministic bait
+                                                        // evidence — convict
+                                                        // instantly, not over
+                                                        // five strikes.
+                                                        if reason == "pool_revert" {
+                                                            ctx.token_breaker
+                                                                .lock().unwrap()
+                                                                .flag_bait_pools_hard(
+                                                                    path, block_number,
+                                                                );
+                                                        } else if revert_blames_pool(reason) {
+                                                            ctx.token_breaker
+                                                                .lock().unwrap()
+                                                                .record_revert_for_path(
+                                                                    path, block_number,
+                                                                );
+                                                        }
+                                                    } else {
+                                                        warn!(
+                                                            path_id = path.id,
+                                                            "exec probe transport error — backrun skipped"
+                                                        );
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Feed only candidates that cleared the
+                                // re-check AND the exec probe — a row marked
+                                // ready means "every gate stands and this is
+                                // being submitted", never "sim-positive once".
+                                let feed_dir = format!("data/leaders/{chain_label}");
+                                let mut logged_opp = log_accepted_opportunity(
+                                    chain_label, "backrun",
+                                    &format!("{}", pending.from),
+                                    &format!("{}", pending.tx_hash),
+                                    path, _effective_usd,
+                                    sim.profit_bps, !dry_run);
+                                metrics::BACKRUN_SUBMITTED.inc();
+                                endpoint.bump_nonce();
+                                let matched_opp_ids: Vec<String> = matched
+                                    .iter()
+                                    .map(|(id, _)| id.clone())
+                                    .collect();
+                                let mut matched_logged = Vec::new();
+                                if !matched.is_empty() {
+                                    // A verified leader route matched this
+                                    // victim and survived gate+probe to a
+                                    // real submission — count the capture
+                                    // and mark the records submitted so the
+                                    // settlement loop has something to close.
+                                    arb_leaders::OPPORTUNITY_TOTAL
+                                        .with_label_values(&[chain_label, "submitted"])
+                                        .inc();
+                                    let dir = format!("data/leaders/{chain_label}");
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    for o in arb_core::opportunity::load_opportunities(&dir) {
+                                        if matched_opp_ids.contains(&o.opportunity_id) {
+                                            let mut o = o;
+                                            o.unix_ms = now_ms;
+                                            o.execution_status =
+                                                arb_core::opportunity::ExecutionStatus::Submitted;
+                                            let _ = o.append_jsonl(&dir);
+                                            matched_logged.push(o);
+                                        }
+                                    }
+                                }
+                                let our_tx_hash = bundle
+                                    .signed_txs
+                                    .last()
+                                    .map(|t| alloy_primitives::keccak256(t));
+                                let sub_results = router
+                                    .submit_all(
+                                        &bundle, false,
+                                        if cfg.submission.strict_4337 {
+                                            Duration::ZERO
+                                        } else {
+                                            scan_start.elapsed()
+                                        },
+                                    )
+                                    .await;
+                                metrics::PENDING_TO_SUBMIT
+                                    .observe(pending.seen_at.elapsed().as_secs_f64());
+                                let no_results = sub_results.is_empty();
+                                if no_results && bundle.victim_tx.is_some() {
+                                    metrics::BACKRUN_NO_VENUE.inc();
+                                    warn!(
+                                        "Backrun bundle dropped: no bundle-capable venue \
+                                         (strict_4337 leaves only the UserOp bundler, which \
+                                         cannot order after a victim tx)"
+                                    );
+                                }
+                                let mut any_accepted = false;
+                                let mut venue_rejected = false;
+                                let mut venue_errored = false;
+                                let mut settle_opp_ids = matched_opp_ids.clone();
+                                settle_opp_ids.push(logged_opp.opportunity_id.clone());
+                                for r in sub_results {
+                                    match r.result {
+                                        Ok(res) if res.success => {
+                                            any_accepted = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_accept"])
+                                                .inc();
+                                            debug!(venue = r.venue, "Backrun submitted");
+                                            // Settlement: realized P&L feeds
+                                            // the opportunity record +
+                                            // strategy health. Backrun txs
+                                            // also feed the circuit breaker.
+                                            spawn_settlement(
+                                                settle_ctx.clone(), r.venue,
+                                                res.bundle_hash.clone(), our_tx_hash,
+                                                settle_opp_ids.clone(),
+                                                Some((path.id, cb_tx.clone(), block_number)),
+                                            );
+                                        }
+                                        Ok(res) => {
+                                            venue_rejected = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_reject"])
+                                                .inc();
+                                            info!(venue = r.venue, error = ?res.error,
+                                                "Backrun rejected");
+                                        }
+                                        Err(e) => {
+                                            venue_errored = true;
+                                            metrics::BACKRUN_STAGES
+                                                .with_label_values(&["venue_error"])
+                                                .inc();
+                                            warn!(venue = r.venue, error = %e,
+                                                "Backrun venue error");
+                                        }
+                                    }
+                                }
+                                if !any_accepted {
+                                    // Never reached a venue — the row must
+                                    // leave the actionable set, with the
+                                    // machine-readable reason it died.
+                                    let reason = if no_results { "no_venue" }
+                                        else if venue_rejected { "builder_reject" }
+                                        else if venue_errored { "venue_error" }
+                                        else { "no_venue" };
+                                    logged_opp.mark_rejected(reason, &feed_dir);
+                                    for mut o in matched_logged {
+                                        o.mark_rejected(reason, &feed_dir);
+                                    }
+                                }
+                            } else {
+                                metrics::BACKRUN_STAGES
+                                    .with_label_values(&["bundle_fail"])
+                                    .inc();
+                                warn!(path_id = path.id,
+                                    "backrun bundle build failed");
+                            }
+                            break;
+                        }
+                }
+            }
+            }
+}
+
+/// Interval between executor profit sweeps to PROFIT_WALLET.
+const PROFIT_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
+
+/// Settle accumulated executor profit to PROFIT_WALLET: for every configured
+/// token whose executor balance exceeds `min_usd`, submit a sponsored UserOp
+/// calling `emergencyWithdraw(token, wallet, balance)` (onlyOwner = the
+/// smart account the op executes as). Sweeping an empty contract is a no-op —
+/// the op is only built when a balance clears the floor.
+async fn sweep_executor_profit(
+    endpoint: &Endpoint,
+    arb_contract: Address,
+    wallet: Address,
+    tokens: &HashMap<String, Address>,
+    token_usd_prices: &HashMap<Address, f64>,
+    token_decimals: &HashMap<Address, u32>,
+    min_usd: f64,
+    chain_id: u64,
+    venue: &PimlicoSubmitter,
+) {
+    let mut swept = 0u32;
+    for (symbol, taddr) in tokens {
+        let cd = balanceOfCall {
+            owner: arb_contract,
+        }
+        .abi_encode();
+        let req = alloy::rpc::types::TransactionRequest::default()
+            .to(*taddr)
+            .input(cd.into());
+        let Ok(ret) = endpoint.provider().call(req).await else {
+            continue;
+        };
+        let bal = U256::try_from_be_slice(&ret).unwrap_or(U256::ZERO);
+        if bal.is_zero() {
+            continue;
+        }
+        let dec = token_decimals.get(taddr).copied().unwrap_or(18) as i32;
+        let price = token_usd_prices.get(taddr).copied().unwrap_or(0.0);
+        let bal_f: f64 = bal.try_into().map(|v: u128| v as f64).unwrap_or(f64::MAX);
+        let usd = bal_f / 10f64.powi(dec) * price;
+        if usd < min_usd {
+            continue;
+        }
+        let data = emergencyWithdrawCall {
+            token: *taddr,
+            to: wallet,
+            amount: bal,
+        }
+        .abi_encode();
+        let bundle = Bundle {
+            signed_txs: vec![],
+            victim_tx: None,
+            target_block: 0,
+            chain_id,
+            backrun_tx: None,
+            call: Some(UserOpCall {
+                to: arb_contract,
+                data: data.into(),
+            }),
+        };
+        match venue.submit(&bundle).await {
+            Ok(r) if r.success => info!(
+                token = %symbol, usd = format!("{:.2}", usd),
+                userop = ?r.bundle_hash,
+                "Profit sweep submitted — executor -> PROFIT_WALLET"
+            ),
+            Ok(r) => warn!(token = %symbol, usd, error = ?r.error, "Profit sweep venue-rejected"),
+            Err(e) => warn!(token = %symbol, usd, error = %e, "Profit sweep venue error"),
+        }
+        swept += 1;
+    }
+    info!(checked = tokens.len(), swept, "Profit sweep cycle complete");
+}
+
+pub async fn run(cfg: AppConfig, smoke_test: bool, config_path: &str) -> Result<()> {
+    use rayon::prelude::*;
     let started = chrono::Utc::now();
     let chain_name = cfg.chain.name.clone();
 
     let pk_env = &cfg.wallet.private_key_env;
     let private_key = std::env::var(pk_env)
         .map_err(|_| anyhow::anyhow!("Missing env var {pk_env}"))?;
-    let signer: PrivateKeySigner = private_key.parse()?;
-    info!(address = %signer.address(), "Wallet loaded");
+    let mut signers: Vec<PrivateKeySigner> = vec![private_key.parse()?];
+    if let Some(extra) = &cfg.wallet.private_key_envs {
+        for env_name in extra {
+            let Ok(pk) = std::env::var(env_name) else {
+                warn!(env = %env_name, "signer rotation: env var unset — skipped");
+                continue;
+            };
+            match pk.parse::<PrivateKeySigner>() {
+                Ok(s) => signers.push(s),
+                Err(e) => warn!(env = %env_name, error = %e, "signer rotation: bad key — skipped"),
+            }
+        }
+    }
+    let signer: PrivateKeySigner = signers[0].clone();
+    let signer_rot = std::sync::atomic::AtomicUsize::new(0);
+    if signers.len() > 1 {
+        info!(n = signers.len(), "Signer rotation pool loaded — submit calls round-robin EOAs");
+    } else {
+        info!(address = %signer.address(), "Wallet loaded");
+    }
 
     let trader_url = cfg.chain.trader_rpc.as_deref();
     let mut read_urls: Vec<&str> = cfg.chain.rpc_https_pool.iter().map(String::as_str).collect();
@@ -621,25 +2534,51 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().expect("Invalid pool address"),
-            protocol: p.parse_protocol(),
-            fee_bps: p.fee_bps,
-            token0: tokens.get(&p.token0).copied(),
-            token1: tokens.get(&p.token1).copied(),
+        .filter_map(|p| match p.pseudo_address() {
+            Ok(address) => Some(PoolConfig {
+                address,
+                protocol: p.parse_protocol(),
+                fee_bps: p.fee_bps,
+                token0: tokens.get(&p.token0).copied(),
+                token1: tokens.get(&p.token1).copied(),
+            }),
+            Err(e) => {
+                warn!(pool = %p.name, error = %e, "pool entry dropped — bad address/poolId");
+                None
+            }
         })
         .collect();
 
     let mut pool_infos: Vec<PoolInfo> = cfg
         .pools
         .iter()
-        .map(|p| PoolInfo {
-            address: p.address.parse().expect("Invalid pool address"),
-            protocol: p.parse_protocol(),
-            token0: tokens[&p.token0],
-            token1: tokens[&p.token1],
+        .filter_map(|p| match p.pseudo_address() {
+            Ok(address) => Some(PoolInfo {
+                address,
+                protocol: p.parse_protocol(),
+                token0: tokens[&p.token0],
+                token1: tokens[&p.token1],
+                liquidity_hint: 0.0,
+            }),
+            Err(_) => None, // warned in the pool_configs pass above
         })
         .collect();
+
+    // V4 pool metadata: a v4 entry's `address` field is the 32-byte poolId.
+    // The pseudo address (its last 20 bytes) keys the store/hops; the
+    // PoolKey is what the executor passes to PoolManager.swap; the spec is
+    // what the refresher reads via getSlot0/getLiquidity. An entry missing
+    // tick_spacing or a chain-level v4_pool_manager is dropped from the
+    // graph entirely — a keyless V4 pool can neither quote nor execute.
+    let (v4_specs, v4_keys, invalid_v4) = crate::config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    if !invalid_v4.is_empty() {
+        pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
+        pool_infos.retain(|pi| !invalid_v4.contains(&pi.address));
+    }
 
     let token_syms: HashMap<Address, String> = tokens
         .iter()
@@ -693,8 +2632,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 token0: dp.token0.clone(),
                 token1: dp.token1.clone(),
                 fee_bps: dp.fee_bps,
+                fee_pips: None,
+                tick_spacing: None,
+                hooks: None,
             }
             .parse_protocol();
+            // Discovery can never produce a V4 PoolKey (no poolId/hooks/
+            // tickSpacing in the universe files) — a merged "v4" entry
+            // would only burn enumeration edges it can't execute.
+            if protocol == Protocol::UniswapV4 {
+                continue;
+            }
 
             pool_configs.push(PoolConfig {
                 address: addr,
@@ -708,6 +2656,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 protocol,
                 token0: t0,
                 token1: t1,
+                liquidity_hint: dp.liquidity_usd,
             });
             merged += 1;
         }
@@ -758,14 +2707,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // GoPlus token-safety gate: drop pools whose tokens are flagged
     // (honeypot, sell-blocked, heavy transfer tax) BEFORE they enter the
     // execution graph. Fail-open on API outage — metadata must never
-    // kill the scanner.
+    // kill the scanner. `blocked` is hoisted — the copy lane reuses the
+    // same denylist when screening leader swaps.
+    let mut blocked: HashSet<Address> = HashSet::new();
     {
         let mut all_tokens: HashSet<Address> = HashSet::new();
         for pc in &pool_configs {
             all_tokens.extend(pc.token0.iter().copied());
             all_tokens.extend(pc.token1.iter().copied());
         }
-        let blocked = crate::token_safety::screen_tokens(cfg.chain.chain_id, &all_tokens).await;
+        blocked = crate::token_safety::screen_tokens(cfg.chain.chain_id, &all_tokens).await;
         if !blocked.is_empty() {
             let before = pool_configs.len();
             pool_configs.retain(|pc| {
@@ -802,9 +2753,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
     }
 
+    let pool_fee_bps: HashMap<Address, u32> =
+        pool_configs.iter().map(|c| (c.address, c.fee_bps)).collect();
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
-    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
+    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id)
+        .with_v4_pools(v4_specs);
+    let refresher = match cfg.chain.call_deadline_ms {
+        Some(ms) => refresher.with_call_deadline(ms),
+        None => refresher,
+    };
+    let refresher = Arc::new(refresher);
 
     let (count, elapsed) = refresher.refresh(&store).await?;
     info!(pools = count, elapsed_ms = elapsed.as_millis(), "Initial state refresh complete");
@@ -844,25 +2803,99 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         .filter_map(|(name, bounds)| tokens.get(name).map(|&addr| (addr, (U256::from(bounds.min), U256::from(bounds.max)))))
         .collect();
 
-    let enumerator = PathEnumerator::new(pool_infos, flash_tokens, flash_amounts)
+    // Index: unordered token pair -> configured pools on that pair (with fee for
+    // V3-tier disambiguation). Locates the pool(s) a pending swap will move.
+    let mut pair_to_pools: HashMap<(Address, Address), Vec<(Address, u32)>> = HashMap::new();
+    for p in &pool_infos {
+        let key = if p.token0 < p.token1 { (p.token0, p.token1) } else { (p.token1, p.token0) };
+        let fee_bps = pool_fee_bps.get(&p.address).copied().unwrap_or(0);
+        pair_to_pools.entry(key).or_default().push((p.address, fee_bps));
+    }
+    let pool_tokens: HashMap<Address, (Address, Address)> = pool_infos
+        .iter()
+        .map(|p| (p.address, (p.token0, p.token1)))
+        .collect();
+    // Shared, mutable views — the hot-reload loop below extends them as
+    // leader_scan merges new pools into the config file.
+    let pair_to_pools = Arc::new(RwLock::new(pair_to_pools));
+    let pool_tokens = Arc::new(RwLock::new(pool_tokens));
+    let known_pools: HashSet<Address> = pool_infos.iter().map(|p| p.address).collect();
+    let mut quarantined: std::collections::HashSet<Address> =
+        std::collections::HashSet::new();
+
+    // Shared pool graph — the hot-reload task appends merged pools here
+    // and rebuilds routing tables from the full list.
+    let pool_infos = Arc::new(RwLock::new(pool_infos));
+    let enumerator = PathEnumerator::new(
+        pool_infos.read().unwrap().clone(),
+        flash_tokens.clone(),
+        flash_amounts.clone(),
+    )
         .with_limits(spec::MAX_PATH_HOPS, 25_000, 200);   // spec: 3-hop depth cap
     let paths = enumerator.enumerate();
     info!(total_paths = paths.len(), max_hops = spec::MAX_PATH_HOPS, "Path enumeration complete");
 
-    let presign_pool = PresignPool::new(&paths, cfg.chain.chain_id);
+    let presign_pool = PresignPool::new_with_v4(&paths, cfg.chain.chain_id, &v4_keys);
 
-    // Build index: (token_in, token_out) -> vec of path indices that touch that pair.
+    // Build index: pool address -> vec of path indices that traverse that pool.
     // Used for fast backrun lookups when a pending swap is detected.
-    let mut token_pair_to_paths: HashMap<(Address, Address), Vec<usize>> = HashMap::new();
+    let mut pool_to_paths: HashMap<Address, Vec<usize>> = HashMap::new();
     for (idx, path) in paths.iter().enumerate() {
         for hop in &path.hops {
-            token_pair_to_paths.entry((hop.token_in, hop.token_out)).or_default().push(idx);
+            pool_to_paths.entry(hop.pool).or_default().push(idx);
         }
     }
 
     // ===== Submitters =====
     let mut submitters: Vec<Box<dyn Submitter>> = Vec::new();
-    let chain_label: &'static str = if cfg.chain.chain_id == spec::BASE_CHAIN_ID { "Base" } else { "BSC" };
+    let chain_label: &'static str = Box::leak(cfg.chain.name.clone().into_boxed_str());
+
+    // Leader Wallet Intelligence (Phase 0/1): observation only — registered
+    // wallets' pending swaps are recorded to data/leaders/<chain>/*.jsonl.
+    // Empty/disabled registry = no-op. Nothing is ever copied or submitted.
+    let leader_observer = {
+        let registry = arb_leaders::LeaderRegistry::new(&cfg.leaders);
+        // Restore previously discovered/promoted wallets — without this the
+        // live copy set resets to empty on every restart.
+        let data_dir = std::path::PathBuf::from("data/leaders");
+        let restored = registry.restore_discovered(&data_dir, &cfg.chain.name, cfg.leaders.copy_usd);
+        if restored > 0 {
+            info!(chain = chain_label, restored, "leader wallets restored from discovery log");
+        }
+        registry.should_observe(&cfg.leaders).then(|| {
+            let obs = arb_leaders::LeaderObserver::new(
+                registry,
+                data_dir,
+                cfg.chain.name.clone(),
+                &cfg.leaders,
+            );
+            info!(chain = chain_label, wallets = obs.wallet_count(), discover = cfg.leaders.discover, "leader wallet intelligence enabled");
+            obs
+        })
+    };
+
+    // Opportunity bridge (Commander directive): sim-verified leader route
+    // templates feed live evaluation. Only route geometry crosses — never
+    // leader calldata/recipients/nonces. A template is READY when our own
+    // simulator reproduced positive net through its route pools.
+    let ready_templates: Vec<(String, std::collections::HashSet<Address>)> = {
+        let dir = format!("data/leaders/{chain_label}");
+        arb_core::opportunity::load_opportunities(&dir)
+            .into_iter()
+            .filter(|o| o.is_actionable()
+                || o.execution_status == arb_core::opportunity::ExecutionStatus::Ready)
+            .map(|o| (
+                o.opportunity_id.clone(),
+                o.route_pools.iter().filter_map(|p| p.parse::<Address>().ok())
+                    .collect::<std::collections::HashSet<Address>>(),
+            ))
+            .filter(|(_, s)| !s.is_empty())
+            .collect()
+    };
+    if !ready_templates.is_empty() {
+        info!(chain = chain_label, templates = ready_templates.len(),
+            "opportunity bridge armed — verified leader routes feed live evaluation");
+    }
 
     if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         if let Some(url) = is_nonempty(&cfg.submission.puissant_url) {
@@ -955,18 +2988,74 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     // venue ordering by measured health, 60s bench on repeated misses.
     let (submit_budget_ms, slot_budget_ms) = if cfg.chain.chain_id == spec::BASE_CHAIN_ID {
         (spec::BASE_SUBMIT_TIMEOUT_MS, spec::BASE_SLOT_BUDGET_MS)
-    } else {
+    } else if cfg.chain.chain_id == spec::BSC_CHAIN_ID {
         (spec::BSC_MEV_SUBMIT_TIMEOUT_MS, spec::BSC_SLOT_BUDGET_MS)
+    } else {
+        // Generic chains: scale budgets off the configured block cadence.
+        let bt = cfg.chain.block_time_ms.max(500);
+        ((bt / 6).clamp(50, 250), bt * 4 / 5)
     };
-    let router = arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms);
+    let router = Arc::new(arb_submit::router::VenueRouter::new(submitters, submit_budget_ms, slot_budget_ms));
     info!(submit_budget_ms, slot_budget_ms, "Venue routing switch armed");
+
+    // Wallet-copy lane (arb-leaders Phase 2): a watchlisted wallet's
+    // pending swap is mirrored through the smart account — backrun
+    // semantics only, never front-running. Off unless [leaders]
+    // copy_mode = "shadow"|"live" and a watchlist exists.
+    let copy_account = match &pimlico_venue {
+        Some(v) => v.account().await.ok(),
+        None => None,
+    };
+    let copy_lane = leader_observer.as_ref().and_then(|obs| {
+        crate::copy_lane::CopyLane::new(
+            &cfg.leaders,
+            chain_label,
+            cfg.chain.chain_id,
+            obs.registry(),
+            Arc::clone(&store),
+            pair_to_pools.clone(),
+            blocked.clone(),
+            token_usd_prices.clone(),
+            token_decimals.clone(),
+            Arc::clone(&router),
+            copy_account,
+            endpoint.clone(),
+        )
+    });
+
+    // Lane state gauges: 0 = off, 1 = shadow/measure, 2 = live submits.
+    let lane_live = if smoke_test { true } else { !cfg.scanner.dry_run };
+    metrics::LANE_STATE.with_label_values(&["classic"])
+        .set(if cfg.lanes.classic_arb && lane_live { 2.0 } else if cfg.lanes.classic_arb { 1.0 } else { 0.0 });
+    metrics::LANE_STATE.with_label_values(&["backrun"])
+        .set(if cfg.lanes.backrun && lane_live { 2.0 } else if cfg.lanes.backrun { 1.0 } else { 0.0 });
+    metrics::LANE_STATE.with_label_values(&["copy"])
+        .set(match copy_lane.as_ref().map(|l| l.mode()) {
+            Some(crate::copy_lane::CopyMode::Live) => 2.0,
+            Some(crate::copy_lane::CopyMode::Shadow) => 1.0,
+            _ => 0.0,
+        });
+
+    // Per-protocol extra margins from [gate.protocol_margins] — the
+    // per-(chain,DEX) calibration slot; defaults preserve prior behavior.
+    let protocol_margins: HashMap<arb_core::types::Protocol, u32> = cfg
+        .gate
+        .protocol_margins
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .map(|(k, &v)| (crate::config::parse_protocol_name(k), v))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut profit_gate = if smoke_test {
         ProfitGate::new(0, 0.0, 0, 0, token_usd_prices.clone(), token_decimals.clone())
     } else {
-        ProfitGate::new(
+        ProfitGate::with_protocol_margins(
             cfg.scanner.min_profit_bps, crate::config::min_profit_usd_floor(cfg.gate.min_profit_usd),
             cfg.gate.safety_margin_bps, cfg.gate.stable_pool_extra_margin_bps,
+            protocol_margins,
             token_usd_prices.clone(), token_decimals.clone(),
         )
     };
@@ -999,10 +3088,22 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     if wss_urls.is_empty() {
         wss_urls.push(cfg.chain.rpc_wss.clone());
     }
+    // Public endpoints + private orderflow feeds share one rotating source
+    // list — same newPendingTransactions protocol, different headers.
+    let mut wss_sources: Vec<WssSource> = wss_urls
+        .into_iter()
+        .map(WssSource::public)
+        .collect();
+    for url in &cfg.chain.private_mempool_wss {
+        wss_sources.push(WssSource {
+            url: url.clone(),
+            auth: cfg.chain.private_mempool_auth.clone(),
+        });
+    }
     let mempool_chain_id = cfg.chain.chain_id;
-    info!(providers = wss_urls.len(), "Mempool WSS provider pool");
+    info!(providers = wss_sources.len(), private = cfg.chain.private_mempool_wss.len(), "Mempool WSS provider pool");
     tokio::spawn(async move {
-        let watcher = MempoolWatcher::new(&wss_urls, mempool_chain_id);
+        let watcher = MempoolWatcher::with_sources(wss_sources, mempool_chain_id);
         if let Err(e) = watcher.start(mempool_tx).await {
             error!(error = %e, "Mempool watcher failed");
         }
@@ -1014,11 +3115,105 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let sub = ws_provider.subscribe_blocks().await?;
     let mut block_stream = sub.into_stream();
 
-    let arb_contract: Address = cfg.chain.arb_contract.parse()?;
+    let arb_contract: Address = cfg.chain.arb_contract.parse().unwrap_or_else(|_| {
+        warn!(chain = %cfg.chain.name, "arb_contract unset/invalid — executor calls will revert; scan-only mode");
+        Address::ZERO
+    });
+
+    // Profit settlement: realized profit accumulates inside the executor
+    // contract (onlyOwner = the Pimlico smart account). A periodic sponsored
+    // UserOp calls emergencyWithdraw(token, PROFIT_WALLET, balance) to settle
+    // it to the Commander's wallet — sponsored, so the sweep is gas-free.
+    let profit_wallet: Option<Address> = std::env::var("PROFIT_WALLET")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|a: &Address| !a.is_zero());
+    let profit_sweep_min_usd: f64 = std::env::var("PROFIT_TRANSFER_MIN_USD")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(5.0);
+    let mut last_profit_sweep = Instant::now() - PROFIT_SWEEP_INTERVAL;
+    if profit_wallet.is_none() {
+        info!("PROFIT_WALLET unset — profit stays in the executor until configured");
+    }
     let dry_run = dry_run_override;
+    metrics::DRY_RUN.set(if dry_run { 1.0 } else { 0.0 });
+
+    // Settlement context — realized-P&L tracking needs the executor address,
+    // token prices/decimals, native price for gas, and the bundler URL for
+    // UserOp receipts.
+    let native_usd = tokens
+        .get(spec::native_symbol(cfg.chain.chain_id))
+        .and_then(|a| token_usd_prices.get(a).copied())
+        .unwrap_or(0.0);
+    let mut settle_ctx = SettleCtx {
+        endpoint: endpoint.clone(),
+        bundler_url: cfg.submission.pimlico_bundler_url.clone(),
+        arb_contract,
+        token_usd_prices: token_usd_prices.clone(),
+        token_decimals: token_decimals.clone(),
+        native_usd,
+        chain: chain_name.clone(),
+        token_breaker: None,
+    };
 
     info!(chain = %cfg.chain.name, contract = %arb_contract, pools = store.pool_count(),
         paths = paths.len(), dry_run, "Scanner loop starting");
+
+    // Pre-built feed lane (ToR): aggregated DEXScreener spreads → rigid
+    // filters → fresh on-chain verify → flash execute via the venue router.
+    // Runs only when [feed] enabled; submits gated by [lanes].feed + dry_run.
+    let feed_submit = cfg.feed.enabled && cfg.lanes.feed && lane_live;
+    metrics::LANE_STATE
+        .with_label_values(&["feed"])
+        .set(if feed_submit {
+            2.0
+        } else if cfg.feed.enabled {
+            1.0
+        } else {
+            0.0
+        });
+    if cfg.feed.enabled {
+        let flash_quotes: HashMap<Address, (f64, u8)> = cfg
+            .feed
+            .flash_quotes
+            .iter()
+            .filter_map(|n| tokens.get(n).copied())
+            .filter_map(|a| {
+                let price = token_usd_prices.get(&a).copied()?;
+                let dec = token_decimals.get(&a).copied()?;
+                Some((a, (price, dec.min(30) as u8)))
+            })
+            .collect();
+        if flash_quotes.is_empty() {
+            warn!(chain = %chain_label,
+                "feed enabled but flash-quote set is empty — lane off");
+        } else {
+            crate::feed_lane::spawn(crate::feed_lane::FeedArgs {
+                cfg: cfg.feed.clone(),
+                chain: chain_label.to_string(),
+                chain_id: cfg.chain.chain_id,
+                endpoint: endpoint.clone(),
+                refresher: refresher.clone(),
+                store: Arc::clone(&store),
+                router: Arc::clone(&router),
+                arb_contract,
+                account: copy_account,
+                flash_quotes,
+                feed_tokens: cfg
+                    .feed
+                    .tokens
+                    .iter()
+                    .filter_map(|n| tokens.get(n).copied())
+                    .collect(),
+                token_usd_prices: token_usd_prices.clone(),
+                native_usd,
+                blocked: blocked.clone(),
+                data_dir: format!("data/leaders/{chain_label}"),
+                submit_enabled: feed_submit,
+            });
+        }
+    }
 
     let mut circuit_breaker = PathCircuitBreaker::new();
     let mut token_breaker = TokenCircuitBreaker::new(5, 200);
@@ -1026,7 +3221,106 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     let blacklist_path = std::path::Path::new("discovery")
         .join(format!("blacklist.{}.json", chain_name.to_lowercase()));
     token_breaker.load_blacklist(&blacklist_path);
+    token_breaker.set_bait_path(std::path::PathBuf::from(format!(
+        "data/leaders/{chain_label}/_bait_pools.json"
+    )));
+    token_breaker.load_bait();
+
     let (cb_tx, mut cb_rx) = mpsc::channel::<(u32, TxOutcome, u64)>(256);
+
+    // ── Detached backrun lane (event-driven, not block-gated) ──
+    // Everything the per-victim pipeline needs is shared into a task that
+    // consumes the mempool channel directly: a pending victim is evaluated
+    // when it ARRIVES instead of waiting out a full refresh+scan cycle on
+    // the next block tick (~1-2s of dead latency removed from the race
+    // window). Mutexes are std::sync (CPU-scoped holds, never over .await).
+    let cfg = Arc::new(cfg);
+    let routing = Arc::new(tokio::sync::RwLock::new(RoutingTables {
+        paths,
+        pool_to_paths,
+        presign_pool,
+    }));
+    let ready_templates = Arc::new(ready_templates);
+    let quarantined = Arc::new(RwLock::new(quarantined));
+    let flash_bounds = Arc::new(flash_bounds);
+    let signers = Arc::new(signers);
+    let signer_rot = Arc::new(signer_rot);
+    let circuit_breaker = Arc::new(std::sync::Mutex::new(circuit_breaker));
+    let token_breaker = Arc::new(std::sync::Mutex::new(token_breaker));
+    settle_ctx.token_breaker = Some(token_breaker.clone());
+    let smart_account = Arc::new(std::sync::Mutex::new(smart_account));
+    let local_fork = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let profit_gate = Arc::new(std::sync::Mutex::new(profit_gate));
+    let token_usd_prices = Arc::new(RwLock::new(token_usd_prices));
+    let token_decimals = Arc::new(RwLock::new(token_decimals));
+
+    let backrun_ctx = Arc::new(BackrunCtx {
+        store: store.clone(),
+        refresher: refresher.clone(),
+        endpoint: endpoint.clone(),
+        cfg: cfg.clone(),
+        routing: routing.clone(),
+        ready_templates,
+        leader_observer,
+        copy_lane,
+        pair_to_pools: pair_to_pools.clone(),
+        token_usd_prices: token_usd_prices.clone(),
+        token_decimals: token_decimals.clone(),
+        flash_bounds: flash_bounds.clone(),
+        quarantined: quarantined.clone(),
+        optimization_iterations,
+        dry_run,
+        router: router.clone(),
+        signers: signers.clone(),
+        signer_rot: signer_rot.clone(),
+        pimlico_venue: pimlico_venue.clone(),
+        settle_ctx: settle_ctx.clone(),
+        cb_tx: cb_tx.clone(),
+        arb_contract,
+        chain_label,
+        profit_gate: profit_gate.clone(),
+        circuit_breaker: circuit_breaker.clone(),
+        token_breaker: token_breaker.clone(),
+        smart_account: smart_account.clone(),
+        local_fork: local_fork.clone(),
+        latest_block: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        deferred: Arc::new(std::sync::Mutex::new(Vec::new())),
+    });
+
+    spawn_pool_hot_reload(
+        Arc::clone(&refresher),
+        Arc::clone(&store),
+        Arc::clone(&pair_to_pools),
+        Arc::clone(&pool_tokens),
+        config_path.to_string(),
+        chain_name.clone(),
+        known_pools,
+        routing.clone(),
+        pool_infos.clone(),
+        flash_tokens.clone(),
+        flash_amounts.clone(),
+        cfg.chain.chain_id,
+        v4_keys.clone(),
+        quarantined.clone(),
+        circuit_breaker.clone(),
+    );
+    {
+        let ctx = backrun_ctx.clone();
+        tokio::spawn(async move {
+            while let Some(first) = mempool_rx.recv().await {
+                let mut events = vec![first];
+                while let Ok(p) = mempool_rx.try_recv() {
+                    events.push(p);
+                }
+                if ctx.latest_block.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                    if let Ok(b) = ctx.endpoint.provider().get_block_number().await {
+                        ctx.latest_block.store(b, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                backrun_pass(&ctx, events).await;
+            }
+        });
+    }
 
     // Per-minute summary tracking
     let mut last_summary = Instant::now();
@@ -1052,21 +3346,38 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
     while let Some(block) = block_stream.next().await {
         let block_number = block.inner.number;
         let scan_start = Instant::now();
+        backrun_ctx.latest_block.store(block_number, std::sync::atomic::Ordering::Relaxed);
         metrics::CURRENT_BLOCK.set(block_number as f64);
 
         // Drain async tx outcome feedback into circuit breaker
         while let Ok((path_id, outcome, blk)) = cb_rx.try_recv() {
             match outcome {
-                TxOutcome::Success => circuit_breaker.record_success(path_id),
-                TxOutcome::Revert => circuit_breaker.record_revert(path_id, blk),
+                TxOutcome::Success => circuit_breaker.lock().unwrap().record_success(path_id),
+                TxOutcome::Revert => circuit_breaker.lock().unwrap().record_revert(path_id, blk),
                 TxOutcome::Dropped => {}
             }
         }
 
-        match refresher.refresh(&store).await {
+        // Backrun lane runs CONCURRENTLY with the full-pool refresh: a
+        // victim's race window is milliseconds, so queuing its
+        // evaluation behind ~200ms of pool reads plus the classic
+        // pipeline spends the edge. The lane projects onto last-block
+        // state and re-reads the pools the victim touches itself
+        // (targeted refresh inside, before any submission).
+        // Backrun lane is detached (spawned above): pending victims are
+        // evaluated on mempool arrival, not block cadence. The block
+        // loop's only shared job is the full-pool refresh.
+        let refresh_res = refresher.refresh(&store).await;
+
+        match refresh_res {
             Ok((count, elapsed)) => {
                 metrics::STATE_REFRESH_LATENCY.observe(elapsed.as_secs_f64());
                 debug!(block = block_number, pools = count, refresh_ms = elapsed.as_millis(), "State refreshed");
+                // Quarantine pools whose implied price diverges >3x from
+                // same-pair peers — broken/exhausted state fabricates
+                // phantom arb legs on otherwise-real pending swaps.
+                *quarantined.write().unwrap() = arb_mempool::impact::quarantine_outlier_pools(
+                    &store, &pair_to_pools.read().unwrap(), &pool_tokens.read().unwrap(), 3.0);
             }
             Err(e) => {
                 warn!(block = block_number, error = %e, "State refresh failed");
@@ -1074,30 +3385,59 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
         }
 
         if block_number >= last_pricing_block + pricing_refresh_blocks {
-            let derived = crate::pricing::derive_prices(&store, &mut token_usd_prices, &token_decimals);
+            let derived = crate::pricing::derive_prices(&store, &mut *token_usd_prices.write().unwrap(), &token_decimals.read().unwrap());
             if derived > 0 {
-                profit_gate.token_usd_prices = token_usd_prices.clone();
+                profit_gate.lock().unwrap().token_usd_prices = token_usd_prices.read().unwrap().clone();
                 debug!(derived, block = block_number, "Periodic price derivation");
+            }
+            // Net-of-gas feed: live gas price × est executor gas × native
+            // USD, so the gate enforces NET profit per the handoff invariant.
+            if let Ok(gp) = endpoint.provider().get_gas_price().await {
+                let native_px = tokens
+                    .get(spec::native_symbol(cfg.chain.chain_id))
+                    .and_then(|a| token_usd_prices.read().unwrap().get(a).copied())
+                    .unwrap_or(native_usd);
+                let gas_usd = gp as f64 * cfg.gate.est_tx_gas as f64 / 1e18 * native_px;
+                profit_gate.lock().unwrap().set_gas_cost_usd(gas_usd);
             }
             last_pricing_block = block_number;
         }
 
         // === Two-pass evaluate-then-optimize ===
-        let initial_results = evaluate_all(&paths, &store);
+        // One routing snapshot per block: paths / pool_to_paths /
+        // presign_pool swap atomically when hot-loaded pools rebuild.
+        let rt = routing.read().await;
+        let initial_results = evaluate_all(&rt.paths, &store);
         let pass1_count = initial_results.len();
-        metrics::PATHS_EVALUATED.inc_by(paths.len() as f64);
+        metrics::PATHS_EVALUATED.inc_by(rt.paths.len() as f64);
 
-        let candidates: Vec<_> = initial_results.into_iter()
+        // Stale-state filter: pools whose refresh keeps failing (timeouts,
+        // RPC blacklists) hold old ticks that fabricate spreads — paths
+        // through them are phantom candidates that the exec probe then has
+        // to reject on-chain. Skip them before optimization.
+        let stale_filtered = initial_results.into_iter()
             .filter(|r| r.profit_bps >= min_initial_bps)
-            .filter(|r| !circuit_breaker.is_suppressed(r.path_id, block_number))
-            .filter(|r| !token_breaker.is_path_token_suppressed(&paths[r.path_id as usize], block_number))
-            .collect();
+            .filter(|r| !circuit_breaker.lock().unwrap().is_suppressed(r.path_id, block_number))
+            .filter(|r| !token_breaker.lock().unwrap().is_path_token_suppressed(&rt.paths[r.path_id as usize], block_number))
+            .collect::<Vec<_>>();
+        let (stale_hit, candidates): (Vec<_>, Vec<_>) = stale_filtered
+            .into_iter()
+            .partition(|r| {
+                rt.paths[r.path_id as usize]
+                    .hops
+                    .iter()
+                    .any(|h| store.is_stale(&h.pool, STALE_STATE_MAX_AGE_MS))
+            });
+        if !stale_hit.is_empty() {
+            metrics::STALE_SUPPRESSED.inc_by(stale_hit.len() as f64);
+            debug!(skipped = stale_hit.len(), "candidate paths skipped — stale pool state");
+        }
 
         if !candidates.is_empty() {
             metrics::PROFITABLE_FOUND.inc_by(candidates.len() as f64);
             for c in &candidates {
                 let sym = token_syms
-                    .get(&paths[c.path_id as usize].flash_token)
+                    .get(&rt.paths[c.path_id as usize].flash_token)
                     .map(String::as_str)
                     .unwrap_or("?");
                 metrics::PROFITABLE_BY_TOKEN.with_label_values(&[sym]).inc();
@@ -1107,45 +3447,72 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             let mut best_path_idx = 0usize;
             let mut optimized_count = 0u32;
 
-            for candidate in &candidates {
-                let path = &paths[candidate.path_id as usize];
-                let (min_amt, token_max) = flash_bounds.get(&path.flash_token).copied()
-                    .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
-                let liquidity_max = path_max_flash(path, &store, 0.05, token_max);
-                let max_amt = token_max.min(liquidity_max);
+            // Candidate optimization is CPU-bound (ternary search over U256
+            // quotes against the shared store) — run it in parallel and
+            // apply metrics / best-pick serially in candidate order so
+            // rejection labels and winner selection are unchanged.
+            let evaluated: Vec<(Option<(arb_sim::SimResult, arb_sim::gate::Decision)>, Option<&'static str>)> =
+                candidates
+                    .par_iter()
+                    .map(|candidate| {
+                        let path = &rt.paths[candidate.path_id as usize];
+                        let (min_amt, token_max) = flash_bounds.get(&path.flash_token).copied()
+                            .unwrap_or((path.flash_amount, path.flash_amount * U256::from(10u32)));
+                        let liquidity_max = path_max_flash(path, &store, 0.05, token_max);
+                        let max_amt = token_max.min(liquidity_max);
 
-                // Try ternary optimization; fall back to the default amount if optimization fails
-                let (final_amount, final_profit) =
-                    if let Some((opt_amount, opt_profit)) =
-                        find_optimal_amount(path, &store, min_amt, max_amt, optimization_iterations)
-                    {
-                        (opt_amount, opt_profit)
-                    } else if candidate.gross_profit > U256::ZERO {
-                        // Optimization found nothing, but cheap-pass DID find profit at default amount
-                        metrics::GATE_REJECTS.with_label_values(&["optimizer_none"]).inc();
-                        (candidate.flash_amount, candidate.gross_profit)
-                    } else {
-                        metrics::GATE_REJECTS.with_label_values(&["no_profit_default"]).inc();
-                        continue;
-                    };
+                        // Try ternary optimization; fall back to the default amount if optimization fails
+                        let (final_amount, final_profit, extra) =
+                            if let Some((opt_amount, opt_profit)) =
+                                find_optimal_amount(path, &store, min_amt, max_amt, optimization_iterations)
+                            {
+                                (opt_amount, opt_profit, None)
+                            } else if candidate.gross_profit > U256::ZERO {
+                                // Optimization found nothing, but cheap-pass DID find profit at default amount
+                                (candidate.flash_amount, candidate.gross_profit, Some("optimizer_none"))
+                            } else {
+                                return (None, Some("no_profit_default"));
+                            };
 
+                        let profit_bps: u32 = if !final_amount.is_zero() {
+                            ((final_profit * U256::from(10000u32)) / final_amount).try_into().unwrap_or(u32::MAX)
+                        } else { 0 };
+
+                        let opt_result = arb_sim::SimResult {
+                            path_id: candidate.path_id, flash_token: path.flash_token,
+                            flash_amount: final_amount, final_amount: final_amount + final_profit,
+                            gross_profit: final_profit, profit_bps,
+                        };
+
+                        let decision = profit_gate.lock().unwrap().should_submit(&opt_result, path);
+                        (Some((opt_result, decision)), extra)
+                    })
+                    .collect();
+
+            for (candidate, (res, extra)) in candidates.iter().zip(evaluated) {
+                if let Some(label) = extra {
+                    metrics::GATE_REJECTS.with_label_values(&[label]).inc();
+                }
+                let Some((opt_result, decision)) = res else { continue };
+                let path = &rt.paths[candidate.path_id as usize];
                 optimized_count += 1;
-                let profit_bps: u32 = if !final_amount.is_zero() {
-                    ((final_profit * U256::from(10000u32)) / final_amount).try_into().unwrap_or(u32::MAX)
-                } else { 0 };
-
-                let opt_result = arb_sim::SimResult {
-                    path_id: candidate.path_id, flash_token: path.flash_token,
-                    flash_amount: final_amount, final_amount: final_amount + final_profit,
-                    gross_profit: final_profit, profit_bps,
-                };
-
-                let decision = profit_gate.should_submit(&opt_result, path);
                 metrics::GATE_EFFECTIVE_USD.observe(decision.effective_profit_usd);
                 if let Some(reason) = decision.reject_reason {
                     metrics::GATE_REJECTS.with_label_values(&[reason]).inc();
                 }
+                // Credibility gate: a simulated gap past BAIT_GAP_BPS is
+                // rejected, but only pools already quarantined as pair
+                // outliers earn a conviction — flagging every hop benches
+                // honest deep pools beside the broken one.
+                if opt_result.profit_bps > BAIT_GAP_BPS {
+                    metrics::GATE_REJECTS.with_label_values(&["bait_gap"]).inc();
+                    let q = quarantined.read().unwrap().clone();
+                    token_breaker.lock().unwrap().flag_bait_pools_in(path, block_number, &q);
+                    continue;
+                }
                 if decision.accept {
+                    metrics::GATE_ACCEPTS.inc();
+                    metrics::ACCEPTED_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::GROSS_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     metrics::NET_PROFIT_USD.inc_by(decision.effective_profit_usd);
                     let sym = token_syms
@@ -1161,19 +3528,38 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             }
 
             if let Some((best, effective_usd)) = best_result {
+                let hop_pools: Vec<String> = rt.paths[best_path_idx]
+                    .hops
+                    .iter()
+                    .map(|h| format!("{}", h.pool))
+                    .collect();
+                // Gate-accepts are logged as sim-verified (evaluated only).
+                // execution_status=ready is appended only at the moment a
+                // live submission is attempted; candidates that die at the
+                // probe/bundle/venue stages get a rejection_reason instead —
+                // "actionable" must always mean "ready to execute".
+                let mut logged_opp = log_accepted_opportunity(
+                    chain_label, "classic", "classic_engine",
+                    &format!("blk{block_number}"), &rt.paths[best_path_idx],
+                    effective_usd, best.profit_bps, false);
+                let feed_dir = format!("data/leaders/{chain_label}");
                 info!(block = block_number, path_id = best.path_id, profit_bps = best.profit_bps,
                     gross_profit = %best.gross_profit, flash_amount = %best.flash_amount,
                     effective_usd = format!("{:.4}", effective_usd), pass1 = pass1_count,
-                    candidates = candidates.len(), optimized = optimized_count, "Optimized path");
+                    candidates = candidates.len(), optimized = optimized_count,
+                    hops = ?hop_pools, "Optimized path");
 
                 if !dry_run && executor_broken {
                     // Skip — the executor reverts in simulation; nothing lands.
-                } else if !dry_run {
-                    let optimized_path = &paths[best_path_idx];
+                } else if !dry_run && cfg.lanes.classic_arb {
+                    let optimized_path = &rt.paths[best_path_idx];
 
                     let target_block = block_number + 3;
-                    match presign_pool.build_fast(
-                        best.path_id, best.flash_amount, &endpoint, arb_contract, &signer, target_block,
+                    let submit_signer = &signers[signer_rot
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        % signers.len()];
+                    match rt.presign_pool.build_fast(
+                        best.path_id, best.flash_amount, &endpoint, arb_contract, submit_signer, target_block,
                     ).await {
                         Ok(bundle) => {
                             // On-chain exec probe: simulate the exact
@@ -1184,48 +3570,75 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             // here instead of at the bundler — count it as
                             // a revert so the breaker suppresses the path.
                             if let Some(venue) = &pimlico_venue {
-                                if smart_account.is_none() {
-                                    smart_account = venue.account().await.ok();
-                                    if let Some(a) = smart_account {
+                                if smart_account.lock().unwrap().is_none() {
+                                    *smart_account.lock().unwrap() = venue.account().await.ok();
+                                    if let Some(a) = *smart_account.lock().unwrap() {
                                         info!(account = %a, "Smart account resolved for exec probes");
                                     }
                                 }
+                                let acct = *smart_account.lock().unwrap();
                                 if let (Some(account), Some(call)) =
-                                    (smart_account, bundle.call.as_ref())
+                                    (acct, bundle.call.as_ref())
                                 {
-                                    let probe = alloy::rpc::types::TransactionRequest::default()
-                                        .from(account)
-                                        .to(call.to)
-                                        .input(call.data.clone().into());
-                                    match endpoint.provider().call(probe).await {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            // ErrorPayload = the chain
-                                            // executed the call and it
-                                            // reverted — deterministic for
-                                            // this state, count as a revert.
-                                            // Transport failures (429,
-                                            // timeout) prove nothing — skip
+                                    // The tx sender depends on venue mix:
+                                    // EOA-signed builder bundles are sent
+                                    // FROM submit_signer (onlyOwner on the
+                                    // executor contract), UserOps execute
+                                    // as the smart account. Probe the
+                                    // identity that will actually send —
+                                    // probing the wrong sender always
+                                    // reverts onlyOwner and suppresses
+                                    // every candidate.
+                                    let probe_from = if cfg.submission.strict_4337 {
+                                        account
+                                    } else {
+                                        submit_signer.address()
+                                    };
+                                    match exec_probe(
+                                        &endpoint, &local_fork,
+                                        probe_from, call.to, call.data.clone(),
+                                    ).await {
+                                        ProbeVerdict::Ok => {}
+                                        verdict => {
+                                            // Reverted = chain truth for
+                                            // this state — deterministic,
+                                            // count as a revert. Transport
+                                            // failures prove nothing — skip
                                             // the submission but don't
                                             // penalize the path.
-                                            if e.as_error_resp().is_some() {
+                                            if let ProbeVerdict::Reverted(detail) = &verdict {
                                                 let reason = classify_exec_probe_revert(
-                                                    &format!("{e:?}")
+                                                    detail
                                                 );
                                                 warn!(
                                                     path_id = best.path_id,
                                                     reason,
-                                                    error = %e,
                                                     "exec probe reverted — path suppressed, no submission"
                                                 );
-                                                circuit_breaker.record_revert(
-                                                    best.path_id,
-                                                    block_number,
-                                                );
+                                                circuit_breaker.lock().unwrap()
+                                                    .record_revert(best.path_id, block_number);
+                                                // Same conviction as the
+                                                // backrun lane — a pool that
+                                                // reverts on-chain is bait,
+                                                // not a bad path.
+                                                if reason == "pool_revert" {
+                                                    token_breaker.lock().unwrap()
+                                                        .flag_bait_pools_hard(
+                                                            &rt.paths[best_path_idx],
+                                                            block_number,
+                                                        );
+                                                } else if revert_blames_pool(reason) {
+                                                    token_breaker.lock().unwrap()
+                                                        .record_revert_for_path(
+                                                            &rt.paths[best_path_idx],
+                                                            block_number,
+                                                        );
+                                                }
+                                                logged_opp.mark_rejected(
+                                                    "simulation_revert", &feed_dir);
                                             } else {
                                                 warn!(
                                                     path_id = best.path_id,
-                                                    error = %e,
                                                     "exec probe transport error — submission skipped"
                                                 );
                                             }
@@ -1235,7 +3648,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                             }
                             endpoint.bump_nonce();
-                            circuit_breaker.record_submit(best.path_id);
+                            circuit_breaker.lock().unwrap().record_submit(best.path_id);
+                            // Passed gate + exec probe — mark ready at the
+                            // moment of submission, per ExecutionStatus::Ready.
+                            logged_opp.execution_status =
+                                arb_core::opportunity::ExecutionStatus::Ready;
+                            let _ = logged_opp.append_jsonl(&feed_dir);
                             let budget_ok = warp_spent_this_session < warp_budget_usd;
                             let use_high_ev = budget_ok && effective_usd >= warp_threshold_usd;
                             if !budget_ok {
@@ -1251,7 +3669,17 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 ));
                             }
                             let sub_results = router
-                                .submit_all(&bundle, use_high_ev, scan_start.elapsed())
+                                .submit_all(
+                                    &bundle, use_high_ev,
+                                    // Under strict_4337 the bundler controls
+                                    // inclusion — the builder slot deadline
+                                    // does not apply and must not gate.
+                                    if cfg.submission.strict_4337 {
+                                        Duration::ZERO
+                                    } else {
+                                        scan_start.elapsed()
+                                    },
+                                )
                                 .await;
                             for r in &sub_results {
                                 metrics::SUBMIT_ATTEMPTS.inc();
@@ -1262,19 +3690,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     metrics::WARP_SPEND_USD.inc_by(0.15);
                                 }
                             }
-                            let mut any_hash = None;
+                            let our_tx_hash = bundle
+                                .signed_txs
+                                .last()
+                                .map(|t| alloy_primitives::keccak256(t));
+                            let no_results = sub_results.is_empty();
+                            let mut any_hash: Option<(String, &'static str)> = None;
                             let mut builder_sim_rejected = false;
+                            let mut venue_rejected = false;
+                            let mut venue_errored = false;
                             for arb_submit::router::RoutedSubmit { venue, tier, result, .. } in sub_results {
                                 match result {
                                     Ok(r) if r.success => {
                                         info!(venue, tier = ?tier, hash = ?r.bundle_hash, "Submitted");
                                         if any_hash.is_none() {
-                                            if let Some(h) = &r.bundle_hash {
-                                                any_hash = h.parse::<B256>().ok();
-                                            }
+                                            any_hash = r.bundle_hash.clone().map(|h| (h, venue));
                                         }
                                     }
                                     Ok(r) => {
+                                        venue_rejected = true;
                                         let err_str = r.error.as_deref().unwrap_or("");
                                         let is_sim_reject = err_str.contains("non-reverting tx in bundle failed")
                                             || err_str.contains("bundle execution failed")
@@ -1286,6 +3720,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                         debug!(venue, error = ?r.error, "Rejected");
                                     }
                                     Err(e) => {
+                                        venue_errored = true;
                                         if let Some(reason) =
                                             arb_submit::pimlico::sponsorship_reject_reason(&e)
                                         {
@@ -1295,7 +3730,16 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                             warn!(venue, reason, error = %e,
                                                 "Sponsorship blocked — op rejected, no funded-wallet fallback");
                                             if reason == "exec_revert" {
-                                                exec_revert_streak += 1;
+                                                // Decay reverts
+                                                // (insufficient_profit) are
+                                                // market losses, not an
+                                                // executor fault — do not
+                                                // count them toward
+                                                // executor_broken or the
+                                                // engine mutes itself.
+                                                if classify_exec_probe_revert(&e.to_string()) != "insufficient_profit" {
+                                                    exec_revert_streak += 1;
+                                                }
                                                 if exec_revert_streak == 1 {
                                                     let hops: Vec<String> = optimized_path
                                                         .hops
@@ -1330,7 +3774,20 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                             }
 
                             if builder_sim_rejected {
-                                circuit_breaker.record_revert(best.path_id, block_number);
+                                circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
+                            }
+
+                            // No venue accepted — the opportunity was never
+                            // executable in practice; record why so the row
+                            // leaves the actionable set.
+                            if any_hash.is_none() {
+                                logged_opp.mark_rejected(
+                                    if no_results { "no_venue" }
+                                    else if venue_rejected { "builder_reject" }
+                                    else if venue_errored { "venue_error" }
+                                    else { "no_venue" },
+                                    &feed_dir,
+                                );
                             }
 
                             // Keep the session Warp spend in sync with the metric
@@ -1345,16 +3802,27 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                 }
                             }
 
-                            // Track receipt — sync in smoke test, async otherwise
-                            if let Some(hash) = any_hash {
+                            // Track receipt + settle — sync in smoke test,
+                            // async otherwise. UserOps resolve through the
+                            // bundler; plain venues via our own tx hash.
+                            if let Some((hash, hash_venue)) = any_hash {
                                 if smoke_test {
                                     info!("Waiting for receipt...");
-                                    let outcome = track_tx(endpoint.clone(), hash, 10).await;
-                                    match outcome {
-                                        TxOutcome::Success => circuit_breaker.record_success(best.path_id),
-                                        TxOutcome::Revert => circuit_breaker.record_revert(best.path_id, block_number),
+                                    let res = if hash_venue == "Pimlico_ERC4337" {
+                                        track_userop(&settle_ctx, &hash, 10).await
+                                    } else {
+                                        match our_tx_hash {
+                                            Some(h) => settle_tx(&settle_ctx, h, 10).await,
+                                            None => SettleResult { outcome: TxOutcome::Dropped, realized_usd: 0.0, gas_usd: 0.0, unpriced_tokens: 0 },
+                                        }
+                                    };
+                                    match res.outcome {
+                                        TxOutcome::Success => circuit_breaker.lock().unwrap().record_success(best.path_id),
+                                        TxOutcome::Revert => circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number),
                                         TxOutcome::Dropped => {}
                                     }
+                                    record_settlement(&settle_ctx, hash_venue, &hash, &res,
+                                        &[logged_opp.opportunity_id.clone()], block_number);
                                     let landed_ok = metrics::SUBMIT_LANDED.with_label_values(&["success"]).get() as u64;
                                     let landed_revert = metrics::SUBMIT_LANDED.with_label_values(&["revert"]).get() as u64;
                                     let status = if landed_ok > 0 { "SUCCESS" } else if landed_revert > 0 { "REVERT" } else { "DROPPED" };
@@ -1372,22 +3840,23 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     println!("effective_usd:    ${:.4}", effective_usd);
                                     println!("tx_hash:          {hash}");
                                     println!("on_chain_status:  {status}");
+                                    println!("realized_usd:     ${:.4}", res.realized_usd);
                                     println!("gas_spent_wei:    {:.0}", metrics::GAS_SPENT_WEI.get());
                                     println!("=================================\n");
                                     return Ok(());
                                 } else {
-                                    let ep = endpoint.clone();
-                                    let cb_sender = cb_tx.clone();
-                                    let pid = best.path_id;
-                                    let blk = block_number;
-                                    tokio::spawn(async move {
-                                        let outcome = track_tx(ep, hash, 5).await;
-                                        let _ = cb_sender.send((pid, outcome, blk)).await;
-                                    });
+                                    spawn_settlement(
+                                        settle_ctx.clone(), hash_venue, Some(hash),
+                                        our_tx_hash, vec![logged_opp.opportunity_id.clone()],
+                                        Some((best.path_id, cb_tx.clone(), block_number)),
+                                    );
                                 }
                             }
                         }
-                        Err(e) => error!(error = %e, "Failed to build bundle"),
+                        Err(e) => {
+                            error!(error = %e, "Failed to build bundle");
+                            logged_opp.mark_rejected("bundle_build_failed", &feed_dir);
+                        }
                     }
                 } else {
                     info!(path_id = best.path_id, effective_usd = format!("{:.4}", effective_usd),
@@ -1398,9 +3867,12 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                     // if a policy is set, sign it, and log the wire JSON.
                     if let Some(pimlico) = &pimlico_venue {
                         let target_block = block_number + 3;
-                        match presign_pool
+                        let submit_signer = &signers[signer_rot
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                            % signers.len()];
+                        match rt.presign_pool
                             .build_fast(best.path_id, best.flash_amount, &endpoint,
-                                arb_contract, &signer, target_block)
+                                arb_contract, submit_signer, target_block)
                             .await
                         {
                             Ok(bundle) => match pimlico.preview(&bundle).await {
@@ -1408,7 +3880,25 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                                     userop = %serde_json::to_string(&op_json).unwrap_or_default(),
                                     "DRY RUN: ERC-4337 UserOperation assembled (not broadcast)"
                                 ),
-                                Err(e) => warn!(error = %e, "DRY RUN: 4337 assembly failed"),
+                                Err(e) => {
+                                    warn!(error = %e, "DRY RUN: 4337 assembly failed");
+                                    // A preview exec_revert is an on-chain sim rejection —
+                                    // the same signal as a real revert, but no tx is ever
+                                    // sent so no receipt feeds the breakers. Without this,
+                                    // a phantom-edge path re-tests every block forever
+                                    // (each preview is a bundler call + seconds of budget).
+                                    if e.to_string().contains("exec_revert") {
+                                        circuit_breaker.lock().unwrap().record_revert(best.path_id, block_number);
+                                        // Strike pools only for pool-attributable
+                                        // reverts — exec_revert on decayed edge
+                                        // (insufficient_profit) is not bait evidence.
+                                        if revert_blames_pool(classify_exec_probe_revert(&e.to_string())) {
+                                            if let Some(p) = rt.paths.iter().find(|p| p.id == best.path_id) {
+                                                token_breaker.lock().unwrap().record_revert_for_path(p, block_number);
+                                            }
+                                        }
+                                    }
+                                }
                             },
                             Err(e) => warn!(error = %e, "DRY RUN: bundle build failed"),
                         }
@@ -1417,86 +3907,6 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             }
         }
 
-        // Process pending mempool swaps for backrun opportunities
-        while let Ok(pending) = mempool_rx.try_recv() {
-            if let (Some(token_in), Some(token_out), Some(_amount_in)) =
-                (pending.decoded.token_in, pending.decoded.token_out, pending.decoded.amount_in)
-            {
-                let affected_paths = token_pair_to_paths.get(&(token_in, token_out));
-                if let Some(path_ids) = affected_paths {
-                    if path_ids.is_empty() { continue; }
-                    metrics::BACKRUN_CANDIDATES.inc();
-
-                    // Project post-swap state for affected pools
-                    for &pidx in path_ids.iter().take(20) {
-                        let path = &paths[pidx];
-                        if circuit_breaker.is_suppressed(path.id, block_number) { continue; }
-
-                        // Evaluate the path with current state (the pending swap hasn't
-                        // landed yet — its impact creates a bigger spread for us).
-                        // The actual backrun bundle would include the pending tx first.
-                        let profit = arb_sim::optimize::find_optimal_amount(
-                            path, &store, 
-                            flash_bounds.get(&path.flash_token).map(|b| b.0).unwrap_or(path.flash_amount),
-                            {
-                                let token_max = flash_bounds.get(&path.flash_token).map(|b| b.1)
-                                    .unwrap_or(path.flash_amount * U256::from(10u32));
-                                let liq_max = arb_sim::optimize::path_max_flash(path, &store, 0.05, token_max);
-                                token_max.min(liq_max)
-                            },
-                            optimization_iterations,
-                        );
-
-                        if let Some((opt_amount, opt_profit)) = profit {
-                            let profit_bps: u32 = if !opt_amount.is_zero() {
-                                ((opt_profit * U256::from(10000u32)) / opt_amount).try_into().unwrap_or(u32::MAX)
-                            } else { 0 };
-
-                            let sim = arb_sim::SimResult {
-                                path_id: path.id,
-                                flash_token: path.flash_token,
-                                flash_amount: opt_amount,
-                                final_amount: opt_amount + opt_profit,
-                                gross_profit: opt_profit,
-                                profit_bps,
-                            };
-
-                            let decision = profit_gate.should_submit(&sim, path);
-                            if decision.accept && !dry_run {
-                                info!(
-                                    path_id = path.id, profit_bps,
-                                    pending_router = pending.decoded.router,
-                                    pending_tx = %pending.tx_hash,
-                                    "Backrun candidate found"
-                                );
-                                metrics::BACKRUN_SUBMITTED.inc();
-
-                                // Build and submit as regular (non-bundle) for now.
-                                // True 2-tx backrun bundles require target tx raw bytes
-                                // which we don't always have from the watcher.
-                                let target_block = block_number + 1;
-                                if let Ok(bundle) = presign_pool.build_fast(
-                                    path.id, opt_amount, &endpoint, arb_contract, &signer, target_block,
-                                ).await {
-                                    endpoint.bump_nonce();
-                                    let sub_results = router
-                                        .submit_all(&bundle, false, scan_start.elapsed())
-                                        .await;
-                                    for r in sub_results {
-                                        match r.result {
-                                            Ok(res) if res.success => debug!(venue = r.venue, "Backrun submitted"),
-                                            Ok(res) => debug!(venue = r.venue, error = ?res.error, "Backrun rejected"),
-                                            Err(e) => debug!(venue = r.venue, error = %e, "Backrun error"),
-                                        }
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         let scan_elapsed = scan_start.elapsed();
         metrics::SCAN_LATENCY.observe(scan_elapsed.as_secs_f64());
@@ -1518,7 +3928,7 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
                 scans_delta = (scans_now - last_scans) as u64,
                 submitted_delta = (submitted_now - last_submitted) as u64,
                 landed_ok, landed_revert, dropped,
-                paths_suppressed = circuit_breaker.suppressed_count(block_number),
+                paths_suppressed = circuit_breaker.lock().unwrap().suppressed_count(block_number),
                 builder_sim_rejects = metrics::BUILDER_SIM_REJECT.get() as u64,
                 warp_usd = format!("{:.2}", metrics::WARP_SPEND_USD.get()),
                 "[minute summary]"
@@ -1527,12 +3937,35 @@ pub async fn run(cfg: AppConfig, smoke_test: bool) -> Result<()> {
             last_scans = scans_now;
             last_submitted = submitted_now;
             last_summary = Instant::now();
+
+            // Profit settlement sweep — every PROFIT_SWEEP_INTERVAL, move
+            // each configured token the executor holds above the USD floor
+            // to PROFIT_WALLET via a sponsored emergencyWithdraw UserOp.
+            if !dry_run && !smoke_test && last_profit_sweep.elapsed() >= PROFIT_SWEEP_INTERVAL {
+                last_profit_sweep = Instant::now();
+                if let (Some(venue), Some(wallet)) = (pimlico_venue.as_ref(), profit_wallet) {
+                    let prices_snap = token_usd_prices.read().unwrap().clone();
+                    let dec_snap = token_decimals.read().unwrap().clone();
+                    sweep_executor_profit(
+                        &endpoint,
+                        arb_contract,
+                        wallet,
+                        &tokens,
+                        &prices_snap,
+                        &dec_snap,
+                        profit_sweep_min_usd,
+                        cfg.chain.chain_id,
+                        venue,
+                    )
+                    .await;
+                }
+            }
         }
 
         // Status JSON every 5 seconds
         if last_status_write.elapsed() >= Duration::from_secs(5) {
             let balance_str = balance_rx.borrow().clone();
-            write_status_json(&chain_name, &started, block_number, &balance_str, &circuit_breaker);
+            write_status_json(&chain_name, &started, block_number, &balance_str, &circuit_breaker.lock().unwrap());
             last_status_write = Instant::now();
         }
     }
@@ -1603,6 +4036,86 @@ mod tests {
             "popular intermediary should not be suppressed");
         assert!(breaker.is_token_suppressed(target, 5),
             "non-popular target token should be suppressed");
+    }
+
+    // --- Locked invariants: probe classification + bait conviction ---
+    // Regression locks for the module-complete behaviors; a change that
+    // relaxes any of these must fail CI, not ship.
+
+    #[test]
+    fn test_probe_revert_classification() {
+        // A pool-internal string revert (Error(string), selector
+        // 0x08c379a0 — e.g. "Nomiswap: D") is the bait signature and must
+        // classify as pool_revert so the pools get hard-convicted. The
+        // executor's own InsufficientProfit is a separate bucket.
+        assert_eq!(
+            classify_exec_probe_revert("reverted: 0x08c379a0 Nomiswap: D"),
+            "pool_revert"
+        );
+        assert_eq!(
+            classify_exec_probe_revert("reverted: 0x4e88422a"),
+            "insufficient_profit"
+        );
+        assert_eq!(classify_exec_probe_revert("unparsable detail"), "unknown_revert");
+    }
+
+    #[test]
+    fn test_bait_pool_hard_flag_is_effectively_permanent() {
+        let pool = addr(10);
+        let path = make_path(0, addr(1), vec![(pool, addr(1), addr(2))]);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools_hard(&path, 100);
+        // 30M-block span: still convicted a million blocks later, and the
+        // whole path is suppressed through the pool check.
+        assert!(breaker.is_pool_bait_flagged(pool, 1_000_100));
+        assert!(breaker.is_path_token_suppressed(&path, 1_000_100));
+    }
+
+    #[test]
+    fn test_bait_pool_outlier_attribution_spares_collateral_pools() {
+        // A >ceiling path through an outlier pool plus an honest deep pool
+        // convicts only the outlier — collateral pools keep serving paths.
+        let honest = addr(10);
+        let outlier = addr(11);
+        let path = make_path(0, addr(1), vec![
+            (honest, addr(1), addr(2)),
+            (outlier, addr(2), addr(1)),
+        ]);
+        let mut suspect = std::collections::HashSet::new();
+        suspect.insert(outlier);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools_in(&path, 100, &suspect);
+        assert!(breaker.is_pool_bait_flagged(outlier, 100));
+        assert!(!breaker.is_pool_bait_flagged(honest, 100));
+        // Nothing flagged when the suspect set is empty — unattributable
+        // gaps reject the candidate without convicting anyone.
+        let mut breaker2 = TokenCircuitBreaker::new(5, 200);
+        breaker2.flag_bait_pools_in(&path, 100, &std::collections::HashSet::new());
+        assert!(!breaker2.is_pool_bait_flagged(outlier, 100));
+        assert!(!breaker2.is_pool_bait_flagged(honest, 100));
+    }
+
+    #[test]
+    fn test_revert_blames_pool_attribution() {
+        // Decay/executor-side reverts must never strike pools.
+        for r in ["insufficient_profit", "unauthorized", "contract_paused",
+                  "gas_price_too_high", "invalid_amount", "invalid_protocol",
+                  "unsupported_token", "pool_revert"] {
+            assert!(!revert_blames_pool(r), "{r} must not strike pools");
+        }
+        for r in ["swap_failed", "unsettled_delta", "safe_erc20_failed", "unknown_revert"] {
+            assert!(revert_blames_pool(r), "{r} is pool-attributable");
+        }
+    }
+
+    #[test]
+    fn test_bait_pool_soft_flag_expires_on_schedule() {
+        let pool = addr(10);
+        let path = make_path(0, addr(1), vec![(pool, addr(1), addr(2))]);
+        let mut breaker = TokenCircuitBreaker::new(5, 200);
+        breaker.flag_bait_pools(&path, 100);
+        assert!(breaker.is_pool_bait_flagged(pool, 100));
+        assert!(!breaker.is_pool_bait_flagged(pool, 100 + 200));
     }
 
     #[test]
@@ -1683,4 +4196,5 @@ mod tests {
         assert!(!cb.is_suppressed(1, 301),
             "reverts separated by >DECAY_BLOCKS should reset counter");
     }
+
 }

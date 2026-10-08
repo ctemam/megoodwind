@@ -1,4 +1,5 @@
 use alloy::consensus::Transaction as TxTrait;
+use alloy::eips::Encodable2718;
 use alloy::network::TransactionResponse;
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
 use alloy_primitives::Address;
@@ -17,6 +18,61 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 /// Rolling telemetry sample window (fixed buffer, no per-event alloc).
 const WINDOW: usize = 4096;
 
+/// One pending-transaction WSS source: a public node endpoint or a private
+/// orderflow feed (bloXroute BDN, Eden, proprietary relays). `auth` is the
+/// raw Authorization header value for feeds that take a key rather than a
+/// URL-embedded user:pass.
+#[derive(Debug, Clone)]
+pub struct WssSource {
+    pub url: String,
+    pub auth: Option<String>,
+}
+
+impl WssSource {
+    pub fn public(url: String) -> Self {
+        Self { url, auth: None }
+    }
+
+    /// Log-safe form of the URL — `wss://user:pass@host` prints credentials
+    /// raw, so userinfo is redacted before the string reaches any log line.
+    pub fn label(&self) -> String {
+        sanitize_url(&self.url)
+    }
+}
+
+/// Strip URL userinfo (`scheme://user:pass@host/path` → `scheme://host/path`)
+/// for log output; anything unparseable falls back to a fixed redaction.
+fn sanitize_url(url: &str) -> String {
+    let Some(rest) = url.split_once("://").map(|(s, r)| (s, r)) else {
+        return "<redacted>".to_string();
+    };
+    let (scheme, rest) = rest;
+    let host_start = match rest.find('@') {
+        Some(at) if rest[..at].find('/').is_none() => at + 1,
+        _ => 0,
+    };
+    format!("{}://{}", scheme, &rest[host_start..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_url;
+
+    #[test]
+    fn sanitize_redacts_userinfo() {
+        assert_eq!(
+            sanitize_url("wss://user:secret@example.com/ws"),
+            "wss://example.com/ws"
+        );
+        assert_eq!(
+            sanitize_url("wss://example.com/ws"),
+            "wss://example.com/ws"
+        );
+        assert_eq!(sanitize_url("wss://u:p@a.b/x@y"), "wss://a.b/x@y");
+        assert_eq!(sanitize_url("garbage"), "<redacted>");
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingSwap {
     pub tx_hash: alloy_primitives::B256,
@@ -25,19 +81,35 @@ pub struct PendingSwap {
     pub value: alloy_primitives::U256,
     pub decoded: DecodedSwap,
     pub raw_input: Vec<u8>,
+    /// Full signed EIP-2718 bytes of the victim transaction — builders need
+    /// this to order our backrun immediately after it in the same block.
+    pub raw_tx: Vec<u8>,
+    /// WSS arrival timestamp — measures end-to-end detection→submit latency.
+    pub seen_at: Instant,
 }
 
 pub struct MempoolWatcher {
-    /// Candidate WSS providers, cycled on failure or sustained backpressure.
-    wss_urls: Vec<String>,
+    /// Candidate WSS sources (public + private feeds), cycled on failure
+    /// or sustained backpressure.
+    sources: Vec<WssSource>,
     chain_id: u64,
     decoder: TxDecoder,
 }
 
 impl MempoolWatcher {
     pub fn new(wss_urls: &[String], chain_id: u64) -> Self {
+        Self::with_sources(
+            wss_urls.iter().cloned().map(WssSource::public).collect(),
+            chain_id,
+        )
+    }
+
+    /// Mixed-source watcher: public endpoints plus private-orderflow feeds
+    /// carrying their own auth headers ([chain] private_mempool_wss /
+    /// private_mempool_auth).
+    pub fn with_sources(sources: Vec<WssSource>, chain_id: u64) -> Self {
         Self {
-            wss_urls: wss_urls.to_vec(),
+            sources,
             chain_id,
             decoder: TxDecoder::new(),
         }
@@ -53,12 +125,13 @@ impl MempoolWatcher {
         let mut provider_idx = 0usize;
 
         loop {
-            let url = &self.wss_urls[provider_idx % self.wss_urls.len()];
+            let src = &self.sources[provider_idx % self.sources.len()];
             provider_idx = provider_idx.wrapping_add(1);
+            let url = src.label();
             info!(url = %url, chain_id = self.chain_id, "Connecting to mempool WSS");
 
             let (_provider, stream) =
-                match tokio::time::timeout(CONNECT_TIMEOUT, Self::connect(url)).await {
+                match tokio::time::timeout(CONNECT_TIMEOUT, Self::connect(src)).await {
                     Ok(Ok(pair)) => pair,
                     Ok(Err(e)) => {
                         warn!(url = %url, error = %e, "WSS subscribe failed — cycling provider");
@@ -84,7 +157,7 @@ impl MempoolWatcher {
                 if input.len() < 4 {
                     continue;
                 }
-                let Some(decoded) = self.decoder.decode(to_addr, input) else {
+                let Some(decoded) = self.decoder.decode(to_addr, pending_tx.value(), input) else {
                     continue;
                 };
                 let swap = PendingSwap {
@@ -94,6 +167,8 @@ impl MempoolWatcher {
                     value: pending_tx.value(),
                     decoded,
                     raw_input: input.to_vec(),
+                    raw_tx: pending_tx.inner.encoded_2718(),
+                    seen_at: arrival,
                 };
 
                 // Bounded send: queue pressure >5ms = backpressure → cycle provider.
@@ -153,12 +228,14 @@ impl MempoolWatcher {
     /// Connect + subscribe; returns the provider as a keep-alive guard —
     /// dropping it tears down the pubsub frontend and ends the stream.
     async fn connect(
-        url: &str,
+        src: &WssSource,
     ) -> Result<(
         impl Provider + 'static,
         impl futures::Stream<Item = alloy::rpc::types::Transaction>,
     )> {
-        let provider = ProviderBuilder::new().connect_ws(WsConnect::new(url)).await?;
+        let ws = WsConnect::new(src.url.clone())
+            .with_auth_opt(src.auth.clone().map(alloy::transports::Authorization::Raw));
+        let provider = ProviderBuilder::new().connect_ws(ws).await?;
         let sub = provider.subscribe_full_pending_transactions().await?;
         Ok((provider, sub.into_stream()))
     }

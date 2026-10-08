@@ -1,0 +1,134 @@
+<section class="a-section">
+  <h2 class="a-section__title">Cycle summary — route coverage closed, sim verified = 0</h2>
+  <p class="a-section__note">Deployment-gate report. Two gaps fixed this cycle: (1) decoded leader-route pools were probe-confirmed but never reached config — a take(80)/hit-count cut dropped them; they now export with first-class priority. (2) Hub-and-spoke fleet decode was non-deterministic — worker selection had no tie-break; it is now deterministic (count desc, address asc) with widened coverage (16 workers / 384 txs). Both fixes verified on chain: Polygon route pool 0xb6e57ed85c4c9dbfef2a68711e9d6f36c56e0fcb merged and now live-quotes.</p>
+  <div class="a-grid a-grid--4">
+    <div class="a-stat"><div class="a-stat__label">Pools imported this cycle</div><div class="a-stat__value">+55</div><div class="a-stat__delta">ETH 42→79 · Polygon 69→103 · BSC 187→195</div></div>
+    <div class="a-stat"><div class="a-stat__label">Opportunity records</div><div class="a-stat__value">141</div><div class="a-stat__delta">ETH 78 · Polygon 30 · BSC 33</div></div>
+    <div class="a-stat"><div class="a-stat__label">Literal-route sims</div><div class="a-stat__value">35 / 0</div><div class="a-stat__delta">evaluated / verified (ETH 19 · Polygon 3 · BSC 13)</div></div>
+    <div class="a-stat"><div class="a-stat__label">Submits to date</div><div class="a-stat__value">0</div><div class="a-stat__delta">engine spends nothing — every candidate correctly gated</div></div>
+  </div>
+  <div class="a-callout a-callout--warn">
+    <strong>Honest verdict:</strong> coverage is no longer the blocker. After importing 55 leader-route pools, every strategy evaluated through literal-route sim on live state returns non-positive net (35 evaluated, 0 verified; best literal-route sim $0.004 on a partial route). The leaders' measured edge (up to $1.6M single-tx net on ETH) lives in <em>mempool timing</em>, not resting-state dislocations — replaying their routes against post-block state cannot reproduce it. The remaining gap is execution latency/ordering (Pipeline B builder bundles), not pool coverage or detection.
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">Opportunity records — top by leader net</h2>
+  <p class="a-section__note">Each record: leader tx → victim tx (same block, position-1) → decoded route → our sim outcome. Nothing reaches execution without literal-route sim reproduction.</p>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">Top opportunity records</caption>
+      <thead><tr><th scope="col">Chain</th><th scope="col">Source wallet</th><th scope="col">Class</th><th scope="col">Source tx</th><th scope="col" data-numeric>Leader net</th><th scope="col" data-numeric>Route pools</th><th scope="col" data-numeric>Our net</th><th scope="col">Sim</th><th scope="col">Rejection</th></tr></thead>
+      <tbody>
+        <tr><td>Ethereum</td><td>0xf70da978</td><td>—</td><td>0x0bb5e7e5</td><td data-numeric>$1,601,415</td><td data-numeric>0</td><td data-numeric>—</td><td>pending</td><td>—</td></tr>
+        <tr><td>Ethereum</td><td>0xf70da978</td><td>—</td><td>0x0bb5e7e5</td><td data-numeric>$1,601,415</td><td data-numeric>3</td><td data-numeric>—</td><td>fail</td><td>route_untracked</td></tr>
+        <tr><td>Ethereum</td><td>0xf70da978</td><td>—</td><td>0xfa7b392f</td><td data-numeric>$422,086</td><td data-numeric>0</td><td data-numeric>—</td><td>pending</td><td>—</td></tr>
+        <tr><td>Ethereum</td><td>0x795facaa</td><td>—</td><td>0xe9d84aea</td><td data-numeric>$299,993</td><td data-numeric>0</td><td data-numeric>—</td><td>pending</td><td>—</td></tr>
+        <tr><td>Ethereum</td><td>0xef1ec136</td><td>—</td><td>0x13a3a8ff</td><td data-numeric>$260,706</td><td data-numeric>9</td><td data-numeric>—</td><td>pending</td><td>route_untracked</td></tr>
+        <tr><td>Ethereum</td><td>0xef1ec136</td><td>—</td><td>0x13a3a8ff</td><td data-numeric>$260,706</td><td data-numeric>9</td><td data-numeric>—</td><td>fail</td><td>route_untracked</td></tr>
+        <tr><td>Ethereum</td><td>0x2156f29d</td><td>—</td><td>0x597beb02</td><td data-numeric>$200,000</td><td data-numeric>4</td><td data-numeric>—</td><td>pending</td><td>route_untracked</td></tr>
+        <tr><td>Ethereum</td><td>0x2156f29d</td><td>—</td><td>0x597beb02</td><td data-numeric>$200,000</td><td data-numeric>4</td><td data-numeric>—</td><td>fail</td><td>route_untracked</td></tr>
+        <tr><td>Ethereum</td><td>0x2156f29d</td><td>—</td><td>0x69e29f33</td><td data-numeric>$140,000</td><td data-numeric>0</td><td data-numeric>—</td><td>pending</td><td>—</td></tr>
+        <tr><td>Polygon</td><td>0xf70da978</td><td>—</td><td>0xd9ddf515</td><td data-numeric>$89,440</td><td data-numeric>0</td><td data-numeric>—</td><td>pending</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="a-section__note">Pending = decoded since the last verify pass; records marked <em>pass</em> exist (4 ETH records) but reproduce only $0.004 net on a partially-covered route — correctly below every gate.</p>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">Master wallet-intelligence table</h2>
+  <p class="a-section__note">Lifecycle: observe → replay → shadow → bounded_live. Leader net P&amp;L measured from on-chain receipts inside the scan window, after gas.</p>
+  <div class="a-table-scroll">
+    <table class="a-table" data-a-sticky-columns="1">
+      <caption class="a-visually-hidden">Wallet intelligence status per chain</caption>
+      <thead><tr>
+        <th scope="col">Chain</th><th scope="col" data-numeric>Pools</th><th scope="col" data-numeric>Wallets scanned</th>
+        <th scope="col" data-numeric>Opportunity records</th><th scope="col" data-numeric>Strategies</th>
+        <th scope="col" data-numeric>Sim evaluated</th><th scope="col" data-numeric>Sim verified</th><th scope="col" data-numeric>Scan receipts</th>
+      </tr></thead>
+      <tbody>
+        <tr><th scope="row">BSC</th><td data-numeric>195</td><td data-numeric>224</td><td data-numeric>33</td><td data-numeric>486</td><td data-numeric>13</td><td data-numeric>0</td><td data-numeric>—</td></tr>
+        <tr><th scope="row">Ethereum</th><td data-numeric>79</td><td data-numeric>33</td><td data-numeric>78</td><td data-numeric>798</td><td data-numeric>19</td><td data-numeric>0</td><td data-numeric>24,267 (400 blk)</td></tr>
+        <tr><th scope="row">Polygon</th><td data-numeric>103</td><td data-numeric>1</td><td data-numeric>30</td><td data-numeric>4</td><td data-numeric>3</td><td data-numeric>0</td><td data-numeric>47,900 (500 blk)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-callout a-callout--info">
+    <strong>Fleet decode fix verified:</strong> the 0xf70da978 harvest/payout pattern revealed a hub-and-spoke fleet (executor 0x4cd00e38, ~12+ worker contracts). Decoding txs <em>to</em> workers — not just from the leader wallet — recovered the arb legs. Deterministic ordering + widened worker/tx caps now reproduce route pools across runs (Polygon route_pools=1 stable; pool 0xb6e57ed8 merged).
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">Profit projection vs measured reality</h2>
+  <p class="a-section__note">Leader ceiling = aggregate measured leader net extrapolated to 24h [projected — linear scale of the scan window; outlier wallets dominate]. Engine realizable = measured sim outcome on literal routes [measured].</p>
+  <div class="a-table-scroll">
+    <table class="a-table" data-a-sticky-columns="1">
+      <caption class="a-visually-hidden">Profit projection per chain</caption>
+      <thead><tr>
+        <th scope="col">Chain</th><th scope="col" data-numeric>Leader ceiling /day [projected]</th>
+        <th scope="col" data-numeric>Engine literal-route sim [measured]</th><th scope="col">Dominant gap now</th>
+      </tr></thead>
+      <tbody>
+        <tr><th scope="row">BSC</th><td data-numeric>~$9.3 M</td><td data-numeric>0/13 verified — all non-positive</td><td>Leader edge is timing-contingent; statecheck's ~270bps paths funnel through one suspect pool (0x62Cf0052) — possible phantom, not yet excluded</td></tr>
+        <tr><th scope="row">Ethereum</th><td data-numeric>~$32 M (0xf70da978 ≈75%)</td><td data-numeric>0/19 verified; best $0.004</td><td>Coverage fixed (79 pools, +37 from leader routes) — edge unrepeatable on resting state; needs victim-tx bundle ordering</td></tr>
+        <tr><th scope="row">Polygon</th><td data-numeric>~$11.3 M (same wallet ≈98%)</td><td data-numeric>0/3 verified</td><td>Route pool 0xb6e57ed8 merged + live-quoting; single-pool literal route cannot cycle — backrun needs the victim flow itself</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="a-callout a-callout--risk">
+    <strong>Structural conclusion:</strong> the leader wallets profit by inserting a tx <em>after a specific victim tx</em> inside the same block. Resting-state replay removes the victim's price impact, so verified=0 is the correct answer — not a sim bug. Capturing this edge requires Pipeline B ([victim, backrun] ordered builder bundles via BlockRazor/Blink/Puissant paths in arb-submit, with live mempool victim detection), not more pool coverage.
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">Live engine funnel</h2>
+  <p class="a-section__note">Live counters from last full run (runners currently down pending PRIVATE_KEY + PIMLICO_API_KEY repo-scoped secrets — prompts outstanding). Engine spends nothing: every candidate is correctly gated before submission.</p>
+  <div class="a-table-scroll">
+    <table class="a-table" data-a-sticky-columns="1">
+      <caption class="a-visually-hidden">Live funnel per chain</caption>
+      <thead><tr>
+        <th scope="col">Chain</th><th scope="col" data-numeric>Paths evaluated (live)</th>
+        <th scope="col" data-numeric>Gross EV sum (live)</th><th scope="col" data-numeric>Submits</th>
+        <th scope="col" data-numeric>Net P&amp;L</th>
+      </tr></thead>
+      <tbody>
+        <tr><th scope="row">BSC</th><td data-numeric>65.3 M</td><td data-numeric>$23.51</td><td data-numeric>0</td><td data-numeric>$0</td></tr>
+        <tr><th scope="row">Ethereum</th><td data-numeric>961,632</td><td data-numeric>$0</td><td data-numeric>0</td><td data-numeric>$0</td></tr>
+        <tr><th scope="row">Polygon</th><td data-numeric>10.96 M</td><td data-numeric>$0</td><td data-numeric>0</td><td data-numeric>$0</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">Deployment governance — this report is a gate</h2>
+  <p class="a-section__note">Codified in docs/SKILLS_SPEC.md. Applies to conventional deployment and wallet-intelligence strategies.</p>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <caption class="a-visually-hidden">Deployment governance gates</caption>
+      <thead><tr><th scope="col">Gate</th><th scope="col">Requirement before live</th><th scope="col">Status this cycle</th></tr></thead>
+      <tbody>
+        <tr><td>Sim-mandatory</td><td>Positive sim through the production simulator on live state, on the leader's literal route</td><td>0/35 verified — no strategy qualifies; nothing submitted</td></tr>
+        <tr><td>Route coverage</td><td>100% of route counterparties in the provenance-gated pool registry</td><td>Improved: route pools now export with priority (was dropped by top-80/hit cut); SHADOW_COVERAGE ETH 11%</td></tr>
+        <tr><td>Bounded exposure</td><td>bounded_live auto-approval only under ≤$25 cap; expiry ~20k blocks stale</td><td>Unchanged; no bounded_live candidates exist</td></tr>
+        <tr><td>Sim vs live</td><td>This report regenerated each deployment review</td><td>Sim projection (0 verified) consistent with realized P&amp;L ($0)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="a-section">
+  <h2 class="a-section__title">What must happen next (ordered)</h2>
+  <div class="a-table-scroll">
+    <table class="a-table">
+      <thead><tr><th scope="col">#</th><th scope="col">Gap</th><th scope="col">Concrete step</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Runner relaunch blocked on secrets</td><td>PRIVATE_KEY + PIMLICO_API_KEY via repo-scoped prompts (outstanding); then 3 runners + dashboard + /api/opportunities verification</td></tr>
+        <tr><td>2</td><td>Resting-state cannot reproduce leader edge</td><td>Pipeline B: live mempool victim-swap detection → ordered [victim, backrun] builder bundles (BlockRazor/Blink/Puissant), exec-probe gate intact</td></tr>
+        <tr><td>3</td><td>Settlement loop untested end-to-end</td><td>Wired code path needs one live settlement to validate; pending runner relaunch</td></tr>
+        <tr><td>4</td><td>BSC suspect pool 0x62Cf0052 generates ~270bps phantom paths</td><td>Confirm staleness (compare quoted reserves vs Transfer-flow history); if stale, provenance gate should expire it</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>

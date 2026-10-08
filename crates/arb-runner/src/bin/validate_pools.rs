@@ -50,21 +50,29 @@ async fn main() -> Result<()> {
         })
         .collect();
 
-    let pool_configs: Vec<PoolConfig> = cfg
+    let mut pool_configs: Vec<PoolConfig> = cfg
         .pools
         .iter()
-        .map(|p| PoolConfig {
-            address: p.address.parse().expect("Invalid pool address"),
+        .filter_map(|p| p.pseudo_address().ok().map(|address| PoolConfig {
+            address,
             protocol: p.parse_protocol(),
             fee_bps: p.fee_bps,
             token0: tokens.get(&p.token0).copied(),
             token1: tokens.get(&p.token1).copied(),
-        })
+        }))
         .collect();
+
+    let (v4_specs, _, invalid_v4) = config::resolve_v4(
+        &cfg.pools,
+        &tokens,
+        cfg.chain.v4_pool_manager.as_deref().and_then(|s| s.parse().ok()),
+    );
+    pool_configs.retain(|pc| !invalid_v4.contains(&pc.address));
 
     let store = Arc::new(PoolStore::new());
     let state_reader: Address = cfg.chain.state_reader.parse()?;
-    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id);
+    let refresher = StateRefresher::new(endpoint.clone(), state_reader, pool_configs, cfg.chain.chain_id)
+        .with_v4_pools(v4_specs);
 
     let (count, _) = refresher.refresh(&store).await?;
     info!(pools = count, "State loaded");
@@ -78,7 +86,7 @@ async fn main() -> Result<()> {
     println!("{}", "-".repeat(130));
 
     for pool_entry in &cfg.pools {
-        let pool_addr: Address = pool_entry.address.parse()?;
+        let pool_addr: Address = pool_entry.pseudo_address()?;
         let protocol = pool_entry.parse_protocol();
         let token0 = tokens[&pool_entry.token0];
         let token1 = tokens[&pool_entry.token1];

@@ -5,6 +5,7 @@ use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::SolCall;
 use anyhow::Result;
 
+use arb_paths::template::V4Key;
 use arb_paths::PathTemplate;
 use arb_rpc::Endpoint;
 
@@ -36,6 +37,9 @@ alloy::sol! {
     ) external;
 }
 
+/// `v4_keys` maps each V4 hop's pseudo pool address to its PoolKey —
+/// required for every UniswapV4 hop in the path (hop.pool is only a
+/// bookkeeping key).
 pub async fn build_bundle(
     path: &PathTemplate,
     endpoint: &Endpoint,
@@ -43,34 +47,40 @@ pub async fn build_bundle(
     signer: &PrivateKeySigner,
     target_block: u64,
     chain_id: u64,
+    v4_keys: &std::collections::HashMap<Address, V4Key>,
 ) -> Result<Bundle> {
-    // V4 is only used as the flash loan source (unlock/take), never as a swap hop.
-    // The PoolKey fields (currency0/1, fee, tickSpacing, hooks) are not populated,
-    // so any V4 swap hop would revert on-chain.
+    let mut swap_instructions = Vec::with_capacity(path.hops.len());
     for hop in &path.hops {
-        if hop.protocol == Protocol::UniswapV4 {
-            anyhow::bail!("V4 swap hops are not supported — V4 is only used as flash loan source");
-        }
-    }
-
-    let swap_instructions: Vec<SwapInstruction> = path
-        .hops
-        .iter()
-        .map(|hop| SwapInstruction {
-            protocol: hop.protocol.to_contract_enum(chain_id),
-            pool: hop.pool,
-            poolKey: PoolKey {
+        let pool_key = if hop.protocol == Protocol::UniswapV4 {
+            let Some(k) = v4_keys.get(&hop.pool) else {
+                anyhow::bail!("V4 hop {:?} has no PoolKey configured", hop.pool);
+            };
+            PoolKey {
+                currency0: k.currency0,
+                currency1: k.currency1,
+                fee: alloy_primitives::Uint::from(k.fee),
+                tickSpacing: alloy_primitives::Signed::<24, 1>::try_from(k.tick_spacing)
+                    .unwrap_or_default(),
+                hooks: k.hooks,
+            }
+        } else {
+            PoolKey {
                 currency0: Address::ZERO,
                 currency1: Address::ZERO,
                 fee: alloy_primitives::Uint::from(0u32),
                 tickSpacing: alloy_primitives::Signed::ZERO,
                 hooks: Address::ZERO,
-            },
+            }
+        };
+        swap_instructions.push(SwapInstruction {
+            protocol: hop.protocol.to_contract_enum(chain_id),
+            pool: hop.pool,
+            poolKey: pool_key,
             tokenIn: hop.token_in,
             tokenOut: hop.token_out,
             minOut: U256::ZERO,
-        })
-        .collect();
+        });
+    }
 
     let deadline = U256::from(
         std::time::SystemTime::now()
@@ -137,6 +147,7 @@ pub async fn build_bundle(
 
     Ok(Bundle {
         signed_txs: vec![buf],
+        victim_tx: None,
         target_block,
         chain_id,
         backrun_tx: None,

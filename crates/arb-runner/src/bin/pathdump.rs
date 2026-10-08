@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
             protocol: p.parse_protocol(),
             token0: tokens[&p.token0],
             token1: tokens[&p.token1],
+                liquidity_hint: 0.0,
         })
         .collect();
 
@@ -75,6 +76,9 @@ async fn main() -> Result<()> {
                 token0: dp.token0.clone(),
                 token1: dp.token1.clone(),
                 fee_bps: dp.fee_bps,
+                fee_pips: None,
+                tick_spacing: None,
+                hooks: None,
             }
             .parse_protocol();
             pool_infos.push(PoolInfo {
@@ -82,6 +86,7 @@ async fn main() -> Result<()> {
                 protocol,
                 token0: t0,
                 token1: t1,
+                liquidity_hint: dp.liquidity_usd,
             });
         }
     }

@@ -10,6 +10,7 @@ members = [
     "crates/arb-rpc",
     "crates/arb-runner",
     "crates/arb-discovery",
+    "crates/arb-leaders",
 ]
 
 [workspace.dependencies]
@@ -50,6 +51,7 @@ arb-paths = { path = "crates/arb-paths" }
 arb-sim = { path = "crates/arb-sim" }
 arb-submit = { path = "crates/arb-submit" }
 arb-mempool = { path = "crates/arb-mempool" }
+arb-leaders = { path = "crates/arb-leaders" }
 arb-rpc = { path = "crates/arb-rpc" }
 arb-discovery = { path = "crates/arb-discovery" }
 

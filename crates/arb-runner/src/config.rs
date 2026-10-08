@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use alloy_primitives::{Address, B256};
 use anyhow::Result;
 use serde::Deserialize;
 
 use arb_core::types::Protocol;
+use arb_paths::template::V4Key;
 use arb_rpc::ChainConfig;
 
 /// Compile-time spec primitives (docs/AGENTS_SPEC.md §2 + scoring matrix).
@@ -29,6 +31,17 @@ pub mod spec {
     pub const RPC_BLACKLIST_SECS: u64 = 60;
     /// Mempool ingestion polling resolution.
     pub const MEMPOOL_POLL_INTERVAL_MS: u64 = 5;
+    /// Wrapped-native symbol by chain id — gas-cost lookups MUST use this
+    /// rather than a multi-symbol preference list: bridged WETH exists in
+    /// Polygon's token map and would shadow WPOL, pricing gas ~6000x high
+    /// and silently rejecting every edge as below_min_usd.
+    pub fn native_symbol(chain_id: u64) -> &'static str {
+        match chain_id {
+            56 => "WBNB",
+            137 => "WPOL",
+            _ => "WETH",
+        }
+    }
     pub const BASE_CHAIN_ID: u64 = 8453;
     pub const BSC_CHAIN_ID: u64 = 56;
     /// Submission-routing deadlines (VenueRouter): private-builder RTT
@@ -56,11 +69,121 @@ pub struct AppConfig {
     pub pools: Vec<PoolEntry>,
     pub tokens: HashMap<String, String>,
     pub token_usd_prices: HashMap<String, f64>,
+    /// `[leaders]` — optional leader-wallet observation registry
+    /// (arb-leaders Phase 0/1; absent or empty = feature off).
+    #[serde(default)]
+    pub leaders: arb_leaders::LeadersConfig,
+    /// `[lanes]` — per-lane execution kill switches. Discovery,
+    /// evaluation and metrics keep running either way; a disabled lane
+    /// never builds or submits a bundle.
+    #[serde(default)]
+    pub lanes: LanesConfig,
+    /// `[feed]` — pre-built opportunity feed lane (DEXScreener REST →
+    /// on-chain verify → flash execute). Absent = off.
+    #[serde(default)]
+    pub feed: FeedConfig,
+}
+
+/// `[feed]` — aggregated-opportunity ingestion lane (ToR: pre-built feeds
+/// replace raw mempool scanning for candidate discovery).
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct FeedConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Token symbols to poll, resolved via [tokens] name→address.
+    #[serde(default)]
+    pub tokens: Vec<String>,
+    /// Symbols allowed as the flash/quote asset (e.g. ["WBNB","USDT","USDC"]).
+    #[serde(default)]
+    pub flash_quotes: Vec<String>,
+    /// Poll period across the whole watch list (seconds; floor 5s).
+    #[serde(default = "default_feed_interval")]
+    pub interval_secs: u64,
+    /// Min cross-pool price discrepancy to verify on-chain, bps.
+    #[serde(default = "default_feed_min_spread")]
+    pub min_spread_bps: f64,
+    /// Above this bps the spread is treated as honeypot/stale-data noise.
+    #[serde(default = "default_feed_max_spread")]
+    pub max_spread_bps: f64,
+    /// Per-leg liquidity floor, USD (ToR: ≥ $10k or ≥ 5× flash notional).
+    #[serde(default = "default_feed_min_liquidity")]
+    pub min_liquidity_usd: f64,
+    /// Min h1 transaction count on each leg's pool.
+    #[serde(default = "default_feed_min_txns")]
+    pub min_h1_txns: u64,
+    /// Flash notional cap per execution, USD.
+    #[serde(default = "default_feed_max_notional")]
+    pub max_notional_usd: f64,
+    /// Max share of the shallower pool's liquidity the flash takes, bps.
+    #[serde(default = "default_feed_share_bps")]
+    pub pool_share_bps: f64,
+    /// Reject candidates whose fresh-state net is under this, USD.
+    #[serde(default = "default_feed_min_net")]
+    pub min_net_usd: f64,
+}
+
+fn default_feed_interval() -> u64 {
+    20
+}
+fn default_feed_min_spread() -> f64 {
+    60.0
+}
+fn default_feed_max_spread() -> f64 {
+    2000.0
+}
+fn default_feed_min_liquidity() -> f64 {
+    50_000.0
+}
+fn default_feed_min_txns() -> u64 {
+    3
+}
+fn default_feed_max_notional() -> f64 {
+    2_000.0
+}
+fn default_feed_share_bps() -> f64 {
+    1_500.0
+}
+fn default_feed_min_net() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LanesConfig {
+    /// Classic resting-state imbalance arb submissions.
+    #[serde(default = "default_lane_on")]
+    pub classic_arb: bool,
+    /// Victim-triggered backrun bundle submissions.
+    #[serde(default = "default_lane_on")]
+    pub backrun: bool,
+    /// Feed-lane flash executions (discovery polls run regardless).
+    #[serde(default = "default_lane_on")]
+    pub feed: bool,
+}
+
+fn default_lane_on() -> bool {
+    true
+}
+
+impl Default for LanesConfig {
+    fn default() -> Self {
+        Self {
+            classic_arb: true,
+            backrun: true,
+            feed: true,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct WalletConfig {
     pub private_key_env: String,
+    /// Optional signer rotation pool (stealth L1): env var names holding
+    /// additional EOA keys. When set, submit calls round-robin across all
+    /// signers so no single address fingerprints the operation. Each EOA
+    /// must be funded independently — shared funding sources defeat the
+    /// rotation (see docs/research/STEALTH_OPSEC.md L0).
+    #[serde(default)]
+    pub private_key_envs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,8 +202,30 @@ pub struct ScannerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FlashBounds {
-    pub min: u64,
-    pub max: u64,
+    #[serde(deserialize_with = "de_u128_int_or_str")]
+    pub min: u128,
+    #[serde(deserialize_with = "de_u128_int_or_str")]
+    pub max: u128,
+}
+
+/// Flash bounds are raw token units — big caps (e.g. 500k of an
+/// 18-decimal token) overflow TOML's i64 integer range, so the field
+/// accepts either a TOML integer or a quoted decimal string.
+fn de_u128_int_or_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    // toml only ever produces i64 for integer literals — keep the int
+    // variant i64 so untagged matching actually engages.
+    enum V {
+        I(i64),
+        S(String),
+    }
+    match V::deserialize(d)? {
+        V::I(i) if i >= 0 => Ok(i as u128),
+        V::I(_) => Err(D::Error::custom("flash bound must be non-negative")),
+        V::S(s) => s.parse::<u128>().map_err(D::Error::custom),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +236,18 @@ pub struct GateConfig {
     pub safety_margin_bps: u32,
     #[serde(default = "default_stable_extra_margin")]
     pub stable_pool_extra_margin_bps: u32,
+    /// Per-protocol extra safety margins (ported pattern: per-(chain,DEX)
+    /// calibrated gates). Keys are PoolEntry protocol strings (e.g.
+    /// "pcs_stable", "v3", "dodo"). The largest margin across a path's hops
+    /// is added to safety_margin_bps. Values stay conservative until realized
+    /// fills provide sim-vs-live divergence data to calibrate against.
+    pub protocol_margins: Option<std::collections::HashMap<String, u32>>,
+    /// Estimated gas used by one arb execution (flash-loan + swaps). Used
+    /// with live `eth_gasPrice` to net execution cost out of the profit
+    /// floor — gross sim profit ignores the tx's own gas, the dominant
+    /// cost on cheap-fee chains. Conservative default 350k.
+    #[serde(default = "default_est_tx_gas")]
+    pub est_tx_gas: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +304,9 @@ pub fn min_profit_usd_floor(cfg_value: f64) -> f64 {
 fn default_warp_threshold() -> f64 { 50.0 }
 fn default_warp_budget() -> f64 { 5.0 }
 fn default_false() -> bool { false }
+// Measured actualGasUsed on the first landed sponsored UserOp = 1,276,435
+// (EntryPoint + verification + 3-hop exec). 350k undercharged real gas ~3.6x.
+fn default_est_tx_gas() -> u64 { 1_300_000 }
 fn default_min_profit_usd() -> f64 { 0.50 }
 fn default_safety_margin_bps() -> u32 { 30 }
 fn default_stable_extra_margin() -> u32 { 50 }
@@ -157,16 +317,142 @@ fn default_optimization_iterations() -> usize { 30 }
 pub struct PoolEntry {
     #[allow(dead_code)]
     pub name: String,
+    /// Pool contract address. For `v4` pools this is the 32-byte poolId
+    /// (`0x` + 64 hex chars) — the pool is state inside the PoolManager
+    /// singleton, not a contract. A 20-byte value here means the entry
+    /// cannot be read or executed and is skipped.
     pub address: String,
     pub protocol: String,
     pub token0: String,
     pub token1: String,
+    /// LP fee in bps for known pools — V4 uses the same field
+    /// (converted to pips in the PoolKey) unless `fee_pips` overrides it.
     pub fee_bps: u32,
+    /// V4 only: LP fee in pips (1 pip = 0.01 bps). Needed for sub-bps
+    /// fees — e.g. the BSC USDT/USDC pool at fee=1 pip.
+    pub fee_pips: Option<u32>,
+    /// V4 only: tickSpacing of the PoolKey (required for v4 entries).
+    pub tick_spacing: Option<i32>,
+    /// V4 only: hook contract address (defaults to zero address).
+    pub hooks: Option<String>,
 }
 
 impl PoolEntry {
     pub fn parse_protocol(&self) -> Protocol {
-        match self.protocol.as_str() {
+        parse_protocol_name(&self.protocol)
+    }
+
+    /// Pseudo address used as the bookkeeping key everywhere a pool
+    /// `Address` is expected (PoolStore key, hop.pool, PoolConfig.address).
+    /// For V4 this is the last 20 bytes of the poolId; for everything else
+    /// it is the pool contract address.
+    pub fn pseudo_address(&self) -> Result<Address> {
+        if self.parse_protocol() == Protocol::UniswapV4 {
+            let id: B256 = self.address.parse()
+                .map_err(|e| anyhow::anyhow!("v4 pool `{}`: address must be the 32-byte poolId, got `{}`: {}", self.name, self.address, e))?;
+            Ok(Address::from_slice(&id[12..32]))
+        } else {
+            self.address.parse().map_err(Into::into)
+        }
+    }
+
+    /// V4 PoolKey for this entry, or None for non-V4 protocols. `tokens`
+    /// maps config token symbols to contract addresses (same map used for
+    /// token0/token1 resolution). currency0/currency1 are sorted as the
+    /// PoolKey requires.
+    pub fn v4_key(
+        &self,
+        token0: Address,
+        token1: Address,
+    ) -> Result<Option<V4Key>> {
+        if self.parse_protocol() != Protocol::UniswapV4 {
+            return Ok(None);
+        }
+        let tick_spacing = self.tick_spacing.ok_or_else(|| {
+            anyhow::anyhow!("v4 pool `{}` needs tick_spacing", self.name)
+        })?;
+        let hooks: Address = match &self.hooks {
+            Some(h) => h.parse().map_err(|e| anyhow::anyhow!("v4 pool `{}` hooks: {}", self.name, e))?,
+            None => Address::ZERO,
+        };
+        let (currency0, currency1) = if token0 < token1 { (token0, token1) } else { (token1, token0) };
+        Ok(Some(V4Key {
+            currency0,
+            currency1,
+            fee: self.fee_pips.unwrap_or_else(|| self.fee_bps.saturating_mul(100)),
+            tick_spacing,
+            hooks,
+        }))
+    }
+
+    /// V4 poolId (the full 32-byte `address` field). Errors when the entry
+    /// is V4 and the field isn't a 32-byte value.
+    pub fn v4_pool_id(&self) -> Result<Option<B256>> {
+        if self.parse_protocol() != Protocol::UniswapV4 {
+            return Ok(None);
+        }
+        self.address.parse::<B256>().map(Some).map_err(|e| {
+            anyhow::anyhow!("v4 pool `{}`: address must be the 32-byte poolId, got `{}`: {}", self.name, self.address, e)
+        })
+    }
+}
+
+/// Resolve all `v4` pool entries into the three artifacts the pipeline
+/// needs: PoolManager specs for state reads (refresher), PoolKeys by
+/// pseudo address for execution (presign), and the pseudo addrs of entries
+/// that failed validation so the caller can drop them from the graph.
+/// An entry missing tick_spacing, declared tokens, a 32-byte poolId, or a
+/// chain-level `v4_pool_manager` lands in the invalid set — a keyless V4
+/// pool can neither quote nor execute.
+pub fn resolve_v4(
+    pools: &[PoolEntry],
+    tokens: &HashMap<String, Address>,
+    v4_pool_manager: Option<Address>,
+) -> (
+    Vec<arb_state::refresher::V4PoolSpec>,
+    HashMap<Address, V4Key>,
+    HashSet<Address>,
+) {
+    let mut keys = HashMap::new();
+    let mut specs = Vec::new();
+    let mut invalid = HashSet::new();
+    for p in pools {
+        if p.parse_protocol() != Protocol::UniswapV4 {
+            continue;
+        }
+        let Some(pool_id) = p.v4_pool_id().ok().flatten() else {
+            tracing::warn!(pool = %p.name, "v4 entry dropped — address must be the 32-byte poolId");
+            continue;
+        };
+        let pseudo = Address::from_slice(&pool_id[12..32]);
+        let (Some(t0), Some(t1)) = (tokens.get(&p.token0), tokens.get(&p.token1)) else {
+            tracing::warn!(pool = %p.name, "v4 entry dropped — token0/token1 must be declared tokens");
+            invalid.insert(pseudo);
+            continue;
+        };
+        match (p.v4_key(*t0, *t1), v4_pool_manager) {
+            (Ok(Some(key)), Some(manager)) => {
+                keys.insert(pseudo, key);
+                specs.push(arb_state::refresher::V4PoolSpec { address: pseudo, pool_id, manager });
+            }
+            _ => {
+                tracing::warn!(
+                    pool = %p.name,
+                    has_manager = v4_pool_manager.is_some(),
+                    has_tick_spacing = p.tick_spacing.is_some(),
+                    "v4 entry dropped — needs tick_spacing + [chain] v4_pool_manager"
+                );
+                invalid.insert(pseudo);
+            }
+        }
+    }
+    (specs, keys, invalid)
+}
+
+/// Protocol-name string -> Protocol (config key space, e.g. "v3", "pcs_stable").
+/// Shared by PoolEntry::parse_protocol and gate protocol-margin parsing.
+pub fn parse_protocol_name(s: &str) -> Protocol {
+    match s {
             "v2" | "uniswap_v2" | "pancake_v2" | "biswap" => Protocol::UniswapV2,
             "v3" | "uniswap_v3" | "pancake_v3" => Protocol::UniswapV3,
             "v4" | "uniswap_v4" => Protocol::UniswapV4,
@@ -177,7 +463,6 @@ impl PoolEntry {
             "aero_v2" | "aerodrome" | "velodrome" => Protocol::AerodromeV2,
             "aero_slipstream" | "slipstream" => Protocol::AerodromeSlipstream,
             _ => Protocol::UniswapV2,
-        }
     }
 }
 
@@ -194,5 +479,50 @@ fn expand_env_vars(input: &str) -> String {
         result = result.replace(&format!("${{{key}}}"), &value);
         result = result.replace(&format!("${key}"), &value);
     }
-    result
+    // Strip placeholders whose env vars are unset — a literal "${VAR}" string
+    // must not survive into parsed fields (e.g. trader_rpc would fail URL
+    // parsing with "relative URL without a base").
+    let bytes = result.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                if let Some(rel) = result[i + 2..].find('}') {
+                    i += rel + 3;
+                    continue;
+                }
+            } else if i + 1 < bytes.len()
+                && (bytes[i + 1].is_ascii_alphabetic() || bytes[i + 1] == b'_')
+            {
+                let mut j = i + 1;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+                {
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spec::native_symbol;
+
+    // Regression lock: the gas-price lookup must resolve the chain's own
+    // wrapped native, never a bridged WETH that shadows it on Polygon
+    // (was pricing gas ~6000x high and rejecting every edge).
+    #[test]
+    fn native_symbol_resolves_per_chain() {
+        assert_eq!(native_symbol(56), "WBNB");
+        assert_eq!(native_symbol(137), "WPOL");
+        assert_eq!(native_symbol(1), "WETH");
+        assert_eq!(native_symbol(8453), "WETH");
+    }
 }
