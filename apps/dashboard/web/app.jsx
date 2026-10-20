@@ -39,8 +39,14 @@ function App() {
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <header className="mb-6 flex items-baseline justify-between">
-        <h1 className="text-xl font-bold">AllBright · Banbot Cockpit</h1>
+      <header className="mb-6 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <img src="./logo.svg" alt="AllBright" className="h-9" />
+          <div className="border-l border-zinc-700 pl-4">
+            <div className="text-sm font-semibold">Banbot Cockpit</div>
+            <div className="text-[10px] tracking-widest text-zinc-500">Autonomous Wealth Engine. 24/7. Like No One.</div>
+          </div>
+        </div>
         <span className="text-xs text-zinc-500">
           {m.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'} · min profit ${m.config?.minProfitUsd}
         </span>
@@ -114,6 +120,10 @@ function App() {
           </tbody>
         </table>
       </section>
+
+      <footer className="mt-8 border-t border-zinc-800 pt-4 text-center text-xs text-zinc-600">
+        AllBright DeFi Software Engineering Ltd. © 2026
+      </footer>
     </div>
   );
 }

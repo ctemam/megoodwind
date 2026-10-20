@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 56" role="img" aria-label="AllBright">
+  <!-- Minimalist wordmark: light-weight letterforms, two-tone blue,
+       a single small aperture diamond as the only accent.
+       Transparent background — inherits header/footer surface. -->
+  <defs>
+    <linearGradient id="ab-blue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1e4fd8"/>
+      <stop offset="1" stop-color="#4f8ff7"/>
+    </linearGradient>
+  </defs>
+  <!-- aperture accent: one small open diamond, left of the wordmark -->
+  <path d="M14 12 L26 28 L14 44 L2 28 Z" fill="none" stroke="url(#ab-blue)" stroke-width="2.4"/>
+  <circle cx="14" cy="28" r="3.2" fill="url(#ab-blue)"/>
+  <text x="38" y="38"
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="30" font-weight="300" letter-spacing="1.5"
+        fill="url(#ab-blue)">All<tspan font-weight="500">Bright</tspan></text>
+</svg>
