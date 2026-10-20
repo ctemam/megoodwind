@@ -24,6 +24,7 @@ interface Member {
   ewmaMs: number;
   failures: number;
   cooldownUntil: number;
+  dead?: boolean;     // auth/config-fatal (401/403/not-enabled) — never retry
 }
 
 /** Token bucket shared by every URL on one provider account. */
@@ -91,9 +92,12 @@ export class RpcPool {
   private pick(): Member {
     const now = Date.now();
     // peek budget (waitMs refills without consuming) — take() runs only
-    // on the member actually chosen, or every candidate would drain it
-    const live = this.members.filter((m) => m.cooldownUntil <= now && this.bucket(m).waitMs() === 0);
-    const set = live.length ? live : this.members;
+    // on the member actually chosen, or every candidate would drain it.
+    // Dead members (auth/config-fatal) are never eligible again.
+    const live = this.members.filter(
+      (m) => !m.dead && m.cooldownUntil <= now && this.bucket(m).waitMs() === 0,
+    );
+    const set = live.length ? live : this.members.filter((m) => !m.dead);
     const best = set.reduce((a, b) => (a.ewmaMs <= b.ewmaMs ? a : b));
     this.cursor = (this.cursor + 1) % set.length;
     const chosen = set[this.cursor] === best ? set[(this.cursor + 1) % set.length] : best;
@@ -104,8 +108,10 @@ export class RpcPool {
   /** Ms until any endpoint is usable (live member with bucket budget). */
   private budgetWaitMs(): number {
     const now = Date.now();
-    if (this.members.some((m) => m.cooldownUntil <= now && this.bucket(m).waitMs() === 0)) return 0;
-    const waits = this.members.map((m) => Math.max(
+    const eligible = this.members.filter((m) => !m.dead);
+    if (!eligible.length) return Infinity;
+    if (eligible.some((m) => m.cooldownUntil <= now && this.bucket(m).waitMs() === 0)) return 0;
+    const waits = eligible.map((m) => Math.max(
       m.cooldownUntil - now > 0 ? m.cooldownUntil - now : 0,
       this.bucket(m).waitMs(),
     ));
@@ -115,10 +121,22 @@ export class RpcPool {
   /** Ms until the earliest member exits cooldown (0 when one is live). */
   private cooldownWaitMs(): number {
     const now = Date.now();
-    if (this.members.some((m) => m.cooldownUntil <= now)) return 0;
-    return Math.min(...this.members.map((m) => m.cooldownUntil)) - now;
+    const eligible = this.members.filter((m) => !m.dead);
+    if (!eligible.length) return Infinity;
+    if (eligible.some((m) => m.cooldownUntil <= now)) return 0;
+    return Math.min(...eligible.map((m) => m.cooldownUntil)) - now;
   }
 
+
+  /** Mark a member permanently dead — auth/config-fatal errors never
+   *  heal by retrying (Alchemy "not enabled", bad key, 401/403/404). */
+  private kill(m: Member, reason: string) {
+    if (m.dead) return;
+    m.dead = true;
+    this.log.warn(`${this.chain.key} endpoint DEAD — ${reason}`, { url: hostOf(m.url) });
+  }
+
+  private aliveCount(): number { return this.members.filter((m) => !m.dead).length; }
 
   private penalize(m: Member, is429: boolean) {
     m.failures++;
@@ -134,6 +152,8 @@ export class RpcPool {
   async call<T = unknown>(method: string, params: unknown[]): Promise<T> {
     let lastErr: unknown;
     for (let round = 0; round < 2; round++) {
+      // fail fast when every endpoint is auth-dead — nothing to wait for
+      if (!this.aliveCount()) throw lastErr ?? new Error(`${this.chain.key}: all RPC endpoints dead`);
       // wait for the earliest usable member — cooldown OR budget refill,
       // whichever the constraint is; never hot-loop a drained quota pool
       const wait = Math.max(this.cooldownWaitMs(), this.budgetWaitMs());
@@ -151,6 +171,8 @@ export class RpcPool {
           return res as T;
         } catch (e) {
           lastErr = e;
+          const fatal = isDeadEndpoint(e);
+          if (fatal) { this.kill(m, fatal); continue; }
           if (isTransportError(e)) this.penalize(m, isRateLimit(e));
           else throw e; // deterministic payload errors are not transport faults
         }
@@ -199,6 +221,23 @@ const isRateLimit = (e: unknown): boolean => {
   try { s = JSON.stringify(e) + String((e as { message?: string })?.message ?? ''); }
   catch { s = String(e); }
   return /429|rate limit|paid plan|code.{0,3}15|quota/i.test(s);
+};
+
+/** Auth/config-fatal detection — these NEVER heal by retrying:
+ *  Alchemy "<NET> is not enabled for this app", invalid/rejected keys,
+ *  plain 401/403/404 auth walls. Scans the whole nested error tree. */
+const isDeadEndpoint = (e: unknown): string | null => {
+  let s = '';
+  try { s = JSON.stringify(e) + ' ' + String((e as { message?: string })?.message ?? ''); }
+  catch { s = String(e); }
+  if (/not enabled for this app/i.test(s)) return 'network not enabled on account';
+  if (/must be authenticated|unauthorized|invalid api key|invalid project|\b401\b/i.test(s)) return 'auth rejected';
+  if (/\b403\b|forbidden/i.test(s)) return 'access forbidden';
+  // method-level failures are NOT endpoint death — a node that doesn't
+  // serve a method still serves everything else
+  if (/method not found|unsupported method|not implemented/i.test(s)) return null;
+  if (/\b404\b/i.test(s)) return 'endpoint not found';
+  return null;
 };
 
 const hostOf = (url: string) => {

@@ -118,6 +118,7 @@ export interface ChainConfig {
   rpcUrls: string[];   // pool (rotated on 429/timeout)
   fallbackRpcUrl?: string; // single-endpoint fallback pool member
   wssUrl?: string;
+  wssUrls?: string[];  // full WSS candidate pool — rotated on dead-lane
   executor?: string;
   role: 'predictive' | 'backrun' | 'inactive';
 }
@@ -154,6 +155,7 @@ export function chainConfig(chain: ChainKey): ChainConfig {
     rpcUrls: pool.length ? pool : fallback,
     fallbackRpcUrl: fallback[0],
     wssUrl: wssPool[0],
+    wssUrls: wssPool,
     executor: process.env[`ALLBRIGHT_EXECUTOR_${envPrefixFor(chain)}`],
     role,
   };

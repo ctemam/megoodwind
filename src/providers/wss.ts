@@ -17,6 +17,7 @@ export class WssLane {
   private destroyed = false;
   private reconnectMs = 1_000;
   private consecutiveFails = 0;
+  private urlIdx = 0;
   private log = logger('wss');
   private static MAX_FAILS = 6;
 
@@ -26,14 +27,29 @@ export class WssLane {
     private onPending?: PendingHandler,
   ) {}
 
+  /** Current WSS candidate — pool rotates on dead-lane/auth failures. */
+  private get url(): string | undefined {
+    const pool = this.chain.wssUrls?.length ? this.chain.wssUrls : [this.chain.wssUrl].filter(Boolean) as string[];
+    return pool[this.urlIdx % pool.length];
+  }
+
+  private rotate(reason: string): boolean {
+    const pool = this.chain.wssUrls ?? [];
+    if (pool.length < 2) return false;
+    this.urlIdx = (this.urlIdx + 1) % pool.length;
+    this.consecutiveFails = 0;
+    this.log.warn(`${this.chain.key} WSS rotate (${reason}) -> ${this.hostOf(this.url)}`);
+    return true;
+  }
+
   async start(): Promise<void> {
-    if (!this.chain.wssUrl) {
+    if (!this.url) {
       this.log.warn(`${this.chain.key}: no WSS_URL — polling head via RPC pool`);
       return;
     }
     if (this.destroyed) return;
     try {
-      const ws = new ethers.WebSocketProvider(this.chain.wssUrl, this.chain.chainId, {
+      const ws = new ethers.WebSocketProvider(this.url, this.chain.chainId, {
         staticNetwork: true,
       });
       this.provider = ws;
@@ -70,16 +86,25 @@ export class WssLane {
     if (this.destroyed) return;
     const msg = String((err as { message?: string })?.message ?? err ?? '');
     const hardQuota = msg.includes('rate limit') || msg.includes('paid plan') || msg.includes('"code":15');
+    const authDead = /not enabled|unauthorized|forbidden|403|401|invalid api/i.test(msg);
+    // auth-fatal: this endpoint can never serve us — rotate, don't retry
+    if (authDead && this.rotate('auth')) { setTimeout(() => void this.start(), 250); return; }
     // dead-lane circuit: persistent hard-quota failures mean the endpoint
-    // can't serve this account — stop hammering, runner polls instead.
+    // can't serve this account — rotate to the next keyed WSS candidate;
+    // only fall back to RPC polling once the whole pool is exhausted.
     if (this.consecutiveFails >= WssLane.MAX_FAILS && hardQuota) {
-      this.log.warn(`${this.chain.key} WSS dead-lane: quota-blocked, falling back to RPC poll`);
+      if (this.rotate('quota')) { setTimeout(() => void this.start(), 500); return; }
+      this.log.warn(`${this.chain.key} WSS dead-lane: all candidates quota-blocked, falling back to RPC poll`);
       this.destroyed = true;
       return;
     }
     const wait = this.reconnectMs;
     this.reconnectMs = Math.min(this.reconnectMs * 2, 30_000);
     setTimeout(() => void this.start(), wait);
+  }
+
+  private hostOf(u?: string): string {
+    try { return u ? new URL(u).hostname : '?'; } catch { return '?'; }
   }
 
   async stop() {
