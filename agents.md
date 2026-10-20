@@ -32,9 +32,13 @@ logs, or token-list streams + on-chain metadata.
 | All EVM chains | generic chain keys — `CHAIN_ID_<KEY>` + keyed `<KEY>_RPC_URLS` joins a chain with zero code edits; Chainlist-class metadata for IDs only (its public RPCs are forbidden) | `src/config/index.ts` |
 | Cross-chain telemetry | metrics API + Banbot cockpit (subgraph feeds reserved) | `src/telemetry/*` |
 | Multicall3 batching | `aggregate3` on canonical `0xcA11bde05977b3631167028862bE2a173976CA11` — N view calls collapse into ONE eth_call (~200× request-rate reduction on discovery + sim refresh). Contract-level aggregation — immune to JSON-RPC envelope batch caps (dRPC's 3-item limit does not apply). `MULTICALL3_ADDR` env override; auto-fallback to per-call if the aggregate errors | `src/providers/multicall.ts` |
-| Private provider universe | keyed expansion per chain from `*_API_KEY` — dRPC, Alchemy, Ankr, NodeFlare templates verified against provider docs (2026-10-19); each account key is a distinct quota pool; explicit `<CHAIN>_RPC_URLS` keep precedence, deduped | `src/providers/providerCatalog.ts` + `src/config/index.ts` |
+| Private provider universe | keyed expansion per chain from `*_API_KEY` — dRPC, Alchemy, Ankr, NodeFlare, Chainstack (`mt_` multichain token = one key every chain) templates verified against provider docs (2026-10-20); each account key is a distinct quota pool; explicit `<CHAIN>_RPC_URLS` keep precedence, deduped | `src/providers/providerCatalog.ts` + `src/config/index.ts` |
 | Account budget scheduler | quota binds per ACCOUNT KEY not per URL — one token bucket per provider account sized `doc_rps × 0.9` (10% reserve never ordinary workload); pick = lowest EWMA among cooled-in + budget-live members; when all drained, wait earliest refill — never hot-loop | `src/providers/rpcPool.ts` |
 | RPC inventory probe | bounded census (`test/rpc_inventory.ts`): chainId verify, p50 latency ×5, tiny burst — ~14 req/endpoint; prints per-account pool + documented budget table; never a load test | `test/rpc_inventory.ts` |
+| Alchemy state & forking tier | Supernode-keyed endpoints drive Anvil mainnet forks — archive-depth live state, `--fork-block-number` pinning for repeatable simulations, node-level request caching (aggregate3 + registry EWMA). `anvil --compute-units-per-second` throttles the fork's upstream calls so a sim loop can't burn the free tier; `--fork-headers` passes provider-required headers where a plan demands them | `test/anvil/forkSim.ts` (`fork_live_chain_state`) |
+| Rate-limit protection & resiliency | Request queue = per-account token buckets (the queueing layer — a request only flows when its account has a token); automated exponential backoff = member cooldowns `×3` on 429, `×5`-capped failure multiplier + adaptive discovery delay `×4`; rotational multi-app keys = `<P>_API_KEY` plus `<P>_API_KEY_2.._5`, each a distinct quota pool | `src/providers/rpcPool.ts`, `src/providers/providerCatalog.ts` |
+| Persistent endpoint registry | `data/rpc_registry.json` — dead marks (60-min TTL, then auto re-qualify), verified chainIds, EWMA latency seeds; dead endpoints get ZERO boot handshakes; provider-side fixes self-heal on next boot | `src/discovery/rpcRegistry.ts` |
+| WSS mempool union | one pinned lane per provider ACCOUNT per chain (same-account dupes subscribe the same view — no gain); rolling two-set tx-hash dedupe (200k cap, 120 s rotation); lanes retire on dead-lane instead of churning | `src/scout/scoutListener.ts`, `src/providers/wss.ts` |
 
 ### Measured provider inventory (probe 2026-10-20 — re-run before any capacity claim)
 
@@ -44,8 +48,10 @@ logs, or token-list streams + on-chain metadata.
 | Alchemy key | 201ms | **not-enabled** | **not-enabled** | 14 | 30M CU/mo | key verified valid on all 10 slugs — same key every chain; app has only `eth-mainnet` enabled (`403 <NET> is not enabled for this app` = operator toggle in Alchemy dashboard, not a defect) |
 | Ankr key | 175ms | 192ms | 204ms | 27 | 200M credits/mo | HTTPS-only on Freemium — no WSS derived |
 | NodeFlare key | 212ms | 252ms | 226ms | 9 | ~2M CU/mo | docs disagree 2M vs 3M — conservative bound used |
+| Chainstack `mt_` token | **no-nodes** | **no-nodes** | **no-nodes** | 22 (25×0.9) | 3M RU/mo | multichain auth token verified — `401 Access token missing or invalid` on all 10 DNS-verified slugs = **zero Global Nodes attached**, NOT a bad key. Console task: deploy Global Node per chain (instant, free) → attach to the multichain endpoint. Auto-onboards via 60-min dead-lane TTL. MCP platform server: `mcp.chainstack.com/mcp` (keyless docs/pricing; console API key unlocks `create_node`) |
 
-Aggregate safe capacity: eth **~86 rps** / bsc,poly **~77 rps** across 4 accounts —
+Aggregate safe capacity: eth **~86 rps** / bsc,poly **~77 rps** across 4 live accounts
+(+22 rps/chain on Chainstack once nodes attach) —
 vs the single-account ~36 rps that saturated at shadow boot. Combined with
 Multicall3 (~200× request reduction on bulk paths), boot discovery drops
 from ~2,900 requests to ~15 aggregate3 calls.
@@ -61,7 +67,8 @@ figures — a request to ANY chain burns the same account pool.
 | Alchemy | 14 | ~38,000 | ~1.15M | 30M CU/mo ÷ 26 CU; eth-only until app toggles |
 | Ankr | 27 | ~6,670,000 | ~200M | 1 credit/req — largest raw pool |
 | NodeFlare | 9 | ~67,000 | ~2M | conservative 2M CU bound |
-| **TOTAL** | **~86 rps** | **~7.1M req/day** | **~214M req/mo** | across 4 distinct quota pools |
+| Chainstack | 22 | ~100,000 | ~3M | 1 RU/req (archive 2) — reserved until Global Nodes attached |
+| **TOTAL** | **~86 rps** | **~7.1M req/day** | **~214M req/mo** | across 4 live quota pools (+22 rps/~3M/mo pending Chainstack attach) |
 
 Effective view-call capacity is ~200× higher on multicall paths
 (aggregate3 = 1 request per ≤200 subcalls): discovery+refresh burn

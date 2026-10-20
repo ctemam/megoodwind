@@ -72,4 +72,5 @@ async function main() {
   }
 }
 
-main().catch((e) => { log.error('diagnostics failed', e); process.exit(1); });
+const isMain = process.argv[1]?.endsWith('forkDiagnostics.ts') || process.argv[1]?.endsWith('forkDiagnostics.js');
+if (isMain) main().catch((e) => { log.error('diagnostics failed', e); process.exit(1); });

@@ -10,6 +10,12 @@ import { ChainKey } from '../config/index.js';
  *              min 50.4k CU/min under load), JSON-RPC batch capped at 3
  *   NodeFlare: ~2–3M CU/mo free (docs disagree — conservative bound used),
  *              10 req/s keyed; WSS only on eth/base/bnb/arb/op/avax
+ *   Chainstack: Developer free 3M RU/mo, 25 RPS, 1 RU/req (archive 2 RU);
+ *              `mt_` MULTICHAIN token = one auth token across every attached
+ *              Global Node (one node per protocol+network). 401 "Access token
+ *              missing or invalid" = node not deployed/not attached — fix is
+ *              console: deploy Global Node + attach to multichain endpoint.
+ *              Verified 2026-10-20 via mcp.chainstack.com + DNS.
  *
  * Doctrine: rate limits bind per ACCOUNT KEY, not per URL. Two same-key
  * URLs = zero extra headroom. Multi-PROVIDER pooling is the real capacity
@@ -100,17 +106,40 @@ export const PRIVATE_PROVIDERS: ProviderSpec[] = [
     wssChains: ['eth', 'base', 'bsc', 'arb', 'op', 'avax'], // poly 404 measured on this tier
     notes: 'keyed requests exempt from UA policy; send a named UA anyway',
   },
+  {
+    id: 'chainstack',
+    envKey: 'CHAINSTACK_API_KEY',
+    slugs: {
+      eth: 'ethereum-mainnet', bsc: 'bsc-mainnet', poly: 'polygon-mainnet',
+      arb: 'arbitrum-mainnet', op: 'optimism-mainnet', avax: 'avalanche-mainnet',
+      base: 'base-mainnet', linea: 'linea-mainnet', scroll: 'scroll-mainnet',
+      blast: 'blast-mainnet',
+    },
+    http: (slug, key) => `https://${slug}.core.chainstack.com/${key}`,
+    wss: (slug, key) => `wss://${slug}.core.chainstack.com/${key}`,
+    rps: 25,
+    cuPerMonth: 3_000_000,      // Developer free: 3M RU/mo; overage $20/1M (kept as budget, not spending)
+    cuCost: { eth_call: 1, eth_getLogs: 1, eth_blockNumber: 1, eth_chainId: 0, default: 1 },
+    wssChains: ['eth', 'bsc', 'poly', 'arb', 'op', 'avax', 'base', 'linea', 'scroll', 'blast'],
+    notes: 'key = `mt_` multichain token (one token, all attached Global Nodes) OR per-node auth token — same URL slot. `401 Access token missing or invalid` = no Global Node attached, NOT a bad key. Slugs DNS-verified 2026-10-20.',
+  },
 ];
+
+/** Multi-app key schema — <P>_API_KEY plus <P>_API_KEY_2.._5. Every key is
+ *  a SEPARATE provider account = a separate quota pool (the rotational
+ *  schema: when app-1's bucket drains, app-2's is still full). */
+const keysFor = (envKey: string): string[] =>
+  [process.env[envKey], ...[2, 3, 4, 5].map((n) => process.env[`${envKey}_${n}`])]
+    .filter((k): k is string => !!k);
 
 /** All keyed HTTP endpoints a chain gets from configured provider keys.
  *  Returns {url, providerId} — the caller dedupes against explicit env URLs. */
 export function keyedEndpointsFor(chain: ChainKey): { url: string; provider: string }[] {
   const out: { url: string; provider: string }[] = [];
   for (const p of PRIVATE_PROVIDERS) {
-    const key = process.env[p.envKey];
     const slug = p.slugs[chain];
-    if (!key || !slug) continue;
-    out.push({ url: p.http(slug, key), provider: p.id });
+    if (!slug) continue;
+    for (const key of keysFor(p.envKey)) out.push({ url: p.http(slug, key), provider: p.id });
   }
   return out;
 }
@@ -118,11 +147,10 @@ export function keyedEndpointsFor(chain: ChainKey): { url: string; provider: str
 export function keyedWssFor(chain: ChainKey): { url: string; provider: string }[] {
   const out: { url: string; provider: string }[] = [];
   for (const p of PRIVATE_PROVIDERS) {
-    const key = process.env[p.envKey];
     const slug = p.slugs[chain];
-    if (!key || !slug || !p.wss) continue;
+    if (!slug || !p.wss) continue;
     if (p.wssChains && !p.wssChains.includes(chain)) continue;
-    out.push({ url: p.wss(slug, key), provider: p.id });
+    for (const key of keysFor(p.envKey)) out.push({ url: p.wss(slug, key), provider: p.id });
   }
   return out;
 }
@@ -138,6 +166,7 @@ export function providerOf(url: string): { id: string; account: string } {
     else if (h.endsWith('g.alchemy.com') || h.endsWith('alchemyapi.io')) id = 'alchemy';
     else if (h === 'rpc.ankr.com') id = 'ankr';
     else if (h === 'rpc.nodeflare.app') id = 'nodeflare';
+    else if (h.endsWith('core.chainstack.com')) id = 'chainstack';
     else if (h.endsWith('infura.io')) id = 'infura';
     const spec = PRIVATE_PROVIDERS.find((p) => p.id === id);
     // account token: dkey query / last path segment / v2 token

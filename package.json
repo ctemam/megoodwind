@@ -11,7 +11,10 @@
     "scout": "tsx src/scout/scoutListener.ts",
     "dashboard": "node apps/dashboard/server/index.js",
     "metrics": "tsx src/telemetry/metricsServer.ts",
-    "test:anvil": "tsx test/anvil/forkDiagnostics.ts"
+    "test:anvil": "tsx test/anvil/forkDiagnostics.ts",
+    "test:fork": "tsx test/anvil/forkSim.ts",
+    "test:multicall": "tsx test/multicall_test.ts",
+    "test:inventory": "tsx test/rpc_inventory.ts"
   },
   "dependencies": {
     "@flashbots/ethers-provider-bundle": "^1.0.0",

@@ -71,6 +71,7 @@ URL-slug transform, never a per-chain key. Expansion = `key + slug -> endpoint`.
 | Alchemy | `https://<slug>.g.alchemy.com/v2/<key>` | wss same path | 30M CU/mo, 300 CU/s (~15 rps), 10s token bucket, account-wide | `403 "<NET> is not enabled for this app"` = per-app network toggle OFF in the Alchemy dashboard — operator fix, NOT a key/template defect. Same key serves all chains once enabled |
 | Ankr | `https://rpc.ankr.com/<slug>/<key>` | none on Freemium | 30 req/s, 200M credits/mo | do NOT derive wss URLs — HTTPS-only on free |
 | NodeFlare | `https://rpc.nodeflare.app/<slug>/v1/<key>` | `/ws/v1/` on eth/base/bnb/arb/op/avax only | ~2–3M CU/mo (docs disagree — use min), 10 req/s | poly WSS 404s at this tier; slug `bnb` not `bsc` |
+| Chainstack | `https://<chain>-mainnet.core.chainstack.com/<key>` | `wss://` same host+path | Developer free: 3M RU/mo, 25 RPS, 1 RU/req (archive 2 RU) | `mt_` = **multichain token** — one token across every attached Global Node; `401 "Access token missing or invalid"` = node not deployed/not attached to the multichain endpoint, NOT a bad key. Slugs DNS-verified (`bsc-mainnet`, not `bnb-*`). Nodes must exist AND be attached — console deploys Global Nodes instantly on free plan |
 
 Slug tables live in `PRIVATE_PROVIDERS[].slugs` — the catalog, not memory.
 A chain absent from the map = provider does not serve it at this tier —
@@ -90,8 +91,9 @@ excluded, never guessed.
 4. Daily budget (uniform draw): `cuPerMonth / 30 / cuCost[method]` — e.g.
    Alchemy free ≈ 38k eth_call/day, dRPC ≈ 350k, Ankr ≈ 6.6M, NodeFlare ≈ 66k.
    `eth_getLogs` and trace/debug cost 3–8× simple calls — reserve them.
-5. Fleet totals (measured 2026-10-20): **~86 req/s safe across 4 accounts,
-   ~7.1M req/day, ~214M req/month** — request-level. On multicall paths the
+5. Fleet totals (measured 2026-10-20): **~86 req/s safe across 4 live
+   accounts, ~7.1M req/day, ~214M req/month** — request-level (+22 rps and
+   ~3M RU/mo reserved on Chainstack once Global Nodes attach). On multicall paths the
    view-call effective capacity is ~200× (aggregate3 = 1 request per ≤200
    subcalls ≈ ~1.4B subcall-equivalents/day). Quota arithmetic is per
    REQUEST to the provider — subcalls inside one aggregate3 don't hit the
@@ -117,3 +119,51 @@ RPC-request cost: ceil(N / MULTICALL3_batch) requests vs N
 - Node-side gas: each subcall pays its own gas inside one call context —
   total ≤ the node's eth_call gas cap (~50–100M typical). 200 cheap views
   ≈ 10M — safe headroom.
+
+## Live-fork simulation skills (`test/anvil/`)
+
+Simulation runs against REAL forked state — Alchemy/keyed upstream, never
+hardcoded mocks. Verified live 2026-10-20 (eth pinned @26,235,817,
+impersonated send PASS, 34,194 gas, 0% variance).
+
+### `fork_live_chain_state` (`test/anvil/forkSim.ts`)
+
+Start a local Anvil fork bound to a keyed endpoint with optional block pin:
+
+```
+FORK_CHAIN=<key> [PIN_BLOCK=<n>] npx tsx test/anvil/forkSim.ts
+anvil --fork-url <keyed-rpc> --fork-block-number <pin> \
+     --compute-units-per-second <cap> --port <port> --silent
+```
+
+- `--compute-units-per-second` is the upstream throttle — the fork's own
+  RPC pool, so a sim loop can never burn the provider free tier.
+- Readiness loop on `eth_chainId` — never fixed sleeps; the provider must
+  answer before the fork declares state ready.
+- `--fork-headers` exists for providers demanding custom headers.
+- Pinned blocks make runs repeatable: same state root → same sim outcome.
+
+### `execute_fork_dry_run` (`test/anvil/forkSim.ts`)
+
+Push payloads to the pinned fork; assert zero reverts / zero OOG:
+
+1. `anvil_impersonateAccount` grants execution permission to any target
+   address — fork-local only, zero risk to live funds.
+2. Send real tx payloads (e.g. ERC20 `transfer` from a whale) → receipt
+   `status == 1` required; revert = FAIL with reason class.
+3. Assert post-state delta (balance/allowance moved as computed).
+4. Report `gasUsed` + variance vs provider `estimateGas` — quantifies
+   fork-vs-remote gas drift for the executor's real-size checks.
+5. Failure taxonomy: TRANSPORT / ERRORPAYLOAD / GAS / STATE — a 429 is
+   upstream quota, an ErrorPayload revert is deterministic, keep them
+   distinct or the risk ledger lies.
+
+### Chainstack MCP platform server
+
+`https://mcp.chainstack.com/mcp` — plain JSON-RPC over Streamable HTTP,
+session via `initialize` + `Mcp-Session-Id` header. Keyless tools:
+`search_docs`, `get_doc_page`, `get_platform_status`, `get_chainstack_pricing`.
+Node/project ops (`list_nodes`, `create_node`, `get_deployment_options`)
+need a console API key (console.chainstack.com → user settings → API keys)
+as `Authorization: Bearer`. The `mt_` RPC token is NOT a console API key —
+the two auth planes are separate.
