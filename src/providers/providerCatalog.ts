@@ -138,6 +138,20 @@ export const PRIVATE_PROVIDERS: ProviderSpec[] = [
     cuCost: { eth_call: 1, eth_getLogs: 1, eth_blockNumber: 1, eth_chainId: 0, default: 1 },
     notes: 'TEE-attested relay (Automata) — zero-tracking metadata masking, useful as a private/reserve lane. Key in FIRST path segment (account = seg[0], not last). Slugs chainId-verified live 2026-10-20.',
   },
+  {
+    id: 'blockscout',
+    envKey: 'BLOCKSCOUT_PRO_API_KEY',
+    // slug = numeric chain_id — gateway is api.blockscout.com/{chain_id}/json-rpc.
+    // Free-plan verified 2026-10-20: eth/arb/op/scroll live; poly/base paywalled
+    // ("Featured chain requires Builder/Business/Pro"); bsc/avax/linea/blast
+    // "Network not supported" — excluded, not assumed.
+    slugs: { eth: '1', arb: '42161', op: '10', scroll: '534352' },
+    http: (slug, key) => `https://api.blockscout.com/${slug}/json-rpc?apikey=${key}`,
+    rps: 5,
+    cuPerMonth: 3_000_000,      // free tier 100k credits/day; per-endpoint credit table at /api/json/config
+    cuCost: { eth_call: 1, eth_getLogs: 1, eth_blockNumber: 1, eth_chainId: 0, default: 1 },
+    notes: 'explorer-indexed REST + JSON-RPC gateway under ONE `proapi_` key — REST surface (scam flags, decoded txs, token metadata) lives in src/providers/blockscout.ts. `x-credits-remaining` header = live quota telemetry.',
+  },
 ];
 
 /** Multi-app key schema — <P>_API_KEY plus <P>_API_KEY_2.._5. Every key is
@@ -183,14 +197,16 @@ export function providerOf(url: string): { id: string; account: string } {
     else if (h === 'rpc.nodeflare.app') id = 'nodeflare';
     else if (h.endsWith('core.chainstack.com')) id = 'chainstack';
     else if (h === '1rpc.io' || h.endsWith('.1rpc.io')) id = 'onerpc';
+    else if (h === 'api.blockscout.com') id = 'blockscout';
     else if (h.endsWith('infura.io')) id = 'infura';
     const spec = PRIVATE_PROVIDERS.find((p) => p.id === id);
-    // account token: dkey query / last path segment / v2 token —
+    // account token: dkey/apikey query / last path segment / v2 token —
     // 1rpc is the exception: key is the FIRST path segment (/key/slug)
     const segs = u.pathname.split('/').filter(Boolean);
     const account =
       u.searchParams.get('dkey') ??
       u.searchParams.get('key') ??
+      u.searchParams.get('apikey') ??
       (id === 'onerpc' ? segs[0] : segs.pop()) ??
       h;
     return { id: spec ? id : `other:${h}`, account: `${id}:${account.slice(0, 12)}` };

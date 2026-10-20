@@ -14,7 +14,7 @@ targets assets heavily pooled inside the Balancer Vault first
 | Solver | `src/strategies/solver.ts` + `src/strategies/graph.ts` | CPU-eval ALL pools per cycle. TRACE = probe-gated settled-evidence lane; P01 = 2-hop cross-venue; P02 = multi-hop cyclic. Bellman-Ford negative-cycle pathfinder discovers arbitrary n-hop cycles over every discovered pool. P09 dead, EV dead. |
 | Predictive | `src/engine/predictiveEngine.ts` | 12-variant matrix; VariantScheduler rotates on latency anomalies and settled-evidence score. |
 | Whale | `src/services/whaleTracker.ts` | >$500K single transfers; Whale Alert API if keyed, else on-chain Transfer-log scan. Pipes token addr → Scout targeted refresh. |
-| Forensics | `src/forensics/baitPool.ts` | Pool-level convictions: gap>2% ceiling, exec-probe revert, >3x peer divergence, fee outside sane tiers. Persisted `data/leaders/<chain>/_bait_pools.json`. |
+| Forensics | `src/forensics/baitPool.ts` + `src/providers/blockscout.ts` | Pool-level convictions: gap>2% ceiling, exec-probe revert, >3x peer divergence, fee outside sane tiers, **explorer `is_scam` verdict** (Blockscout — async reputation check on every discovered pool, cached, 1 credit/address). Persisted `data/leaders/<chain>/_bait_pools.json`. |
 | Executor | `src/exec/*` | fresh-state re-sim at real size → baseFee breaker → exec-probe `eth_call` from SMART_ACCOUNT → Pimlico UserOp → receipt → settled accounting. Flashbots bundle (eth) when keyed. |
 | Telemetry | `src/telemetry/*` + `apps/dashboard/*` | Express API :3001 + Banbot React cockpit :9205. Only `arb_settled_net_usd` on landed records is profit. |
 
@@ -50,6 +50,7 @@ logs, or token-list streams + on-chain metadata.
 | NodeFlare key | 212ms | 252ms | 226ms | 9 | ~2M CU/mo | docs disagree 2M vs 3M — conservative bound used |
 | Chainstack `mt_` token | **no-nodes** | **no-nodes** | **no-nodes** | 22 (25×0.9) | 3M RU/mo | multichain auth token verified — `401 Access token missing or invalid` on all 10 DNS-verified slugs = **zero Global Nodes attached**, NOT a bad key. Console task: deploy Global Node per chain (instant, free) → attach to the multichain endpoint. Auto-onboards via 60-min dead-lane TTL. MCP platform server: `mcp.chainstack.com/mcp` (keyless docs/pricing; console API key unlocks `create_node`) |
 | 1RPC key | live | live | live | ~0.01 | 1k req/day (~30k/mo) | TEE-attested relay, 8/10 chains chainId-verified (`eth,bnb,matic,arb,op,base,linea,scroll`; avax/blast `unknown network` — excluded). Key in FIRST path segment `1rpc.io/<key>/<slug>`. **Reserve/failover lane only** — free Starter drip, no WSS at this tier; bucket floor 0.01 rps prevents drain |
+| Blockscout `proapi_` | live (gw+rest) | unsupported | featured-paywalled | 4.5 | 100k credits/day | dual-surface key: `{chain_id}/json-rpc` gateway feeds the pool on **eth/arb/op/scroll** (verified); poly/base = "Featured chain" paid plans; bsc/avax/linea/blast unsupported. REST indexer live — `is_scam`/`reputation` verdicts wired into forensics; `x-credits-remaining` header = live quota telemetry |
 
 Aggregate safe capacity: eth **~86 rps** / bsc,poly **~77 rps** across 4 live accounts
 (+22 rps/chain on Chainstack once nodes attach) —
@@ -70,6 +71,7 @@ figures — a request to ANY chain burns the same account pool.
 | NodeFlare | 9 | ~67,000 | ~2M | conservative 2M CU bound |
 | Chainstack | 22 | ~100,000 | ~3M | 1 RU/req (archive 2) — reserved until Global Nodes attached |
 | 1RPC | ~0.01 | ~1,000 | ~30k | free Starter drip — reserve lane, bucket rate-limits to ~930/day |
+| Blockscout | 4.5 | ~100,000 credits/day | ~3M | gateway+REST share ONE credit pool — eth/arb/op/scroll only on free |
 | **TOTAL** | **~86 rps** | **~7.1M req/day** | **~214M req/mo** | across 4 live quota pools (+22 rps/~3M/mo pending Chainstack attach) |
 
 Effective view-call capacity is ~200× higher on multicall paths

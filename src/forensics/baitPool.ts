@@ -5,6 +5,7 @@ import { PoolState, registry } from '../pools/registry.js';
 import { v2SpotPrice } from '../math/univ2.js';
 import { v3SpotPrice } from '../math/univ3.js';
 import { CREDIBILITY_CEILING_PCT } from '../math/profit.js';
+import { addressReputation } from '../providers/blockscout.js';
 import { logger } from '../config/logger.js';
 
 /**
@@ -35,6 +36,8 @@ export class TokenCircuitBreaker {
   /** poolStats[chain][poolAddr] -> fail counts; convicted pools persisted. */
   poolStats = new Map<string, { probes: number; reverts: number; lastFail: number }>();
   private convicted = new Map<string, Conviction>(); // chain:addr -> conviction
+  /** Blockscout explorer verdicts — 1 REST call per address, cached for the boot. */
+  private repCache = new Map<string, { scam: boolean; at: number }>();
 
   fileFor(chain: ChainKey): string {
     return join(DATA_DIR, chain, '_bait_pools.json');
@@ -85,9 +88,26 @@ export class TokenCircuitBreaker {
     if (reverted) this.convict(chain, pool, 'exec_probe_revert_errorpayload');
   }
 
+  /** Async explorer-reputation check — fire-and-forget from discovery.
+   *  `is_scam` convicts immediately (explorer verdict = strong evidence);
+   *  clean verdicts cache so screen() can read them at zero call cost. */
+  checkReputation(chain: ChainKey, address: string) {
+    const k = `${chain}:${address.toLowerCase()}`;
+    if (this.repCache.has(k) || this.isConvicted(chain, address)) return;
+    this.repCache.set(k, { scam: false, at: Date.now() }); // in-flight marker — dedupes repeat discoveries
+    void addressReputation(chain, address).then((rep) => {
+      if (!rep) { this.repCache.delete(k); return; } // transport fail — don't poison the cache
+      this.repCache.set(k, { scam: rep.isScam, at: Date.now() });
+      if (rep.isScam) this.convict(chain, address, 'explorer_scam_flag');
+    });
+  }
+
   /** Screen a pool before it enters a candidate path. */
   screen(chain: ChainKey, p: PoolState): { ok: boolean; reason?: string } {
     if (this.isConvicted(chain, p.address)) return { ok: false, reason: 'convicted' };
+    if (this.repCache.get(`${chain}:${p.address.toLowerCase()}`)?.scam) {
+      return { ok: false, reason: 'explorer_scam_flag' };
+    }
 
     if (p.kind === 'v3' && p.feeBps && !V3_SANE_TIERS.has(p.feeBps * 100)) {
       return { ok: false, reason: `fee_outside_sane_tiers:${p.feeBps}` };

@@ -137,6 +137,7 @@ export class Discovery {
 
   private upsertPool(f: FactoryRef, pool: string, a: DiscoveredToken, b: DiscoveredToken, fee?: number) {
     if (breaker.isConvicted(this.chain.key, pool)) return;
+    breaker.checkReputation(this.chain.key, pool); // async explorer verdict — convicts scam-flagged addresses
     const [t0, t1] = [a, b].sort((x, y) => x.address.toLowerCase().localeCompare(y.address.toLowerCase()));
     registry.upsert({
       address: pool,
