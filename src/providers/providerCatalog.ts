@@ -123,6 +123,21 @@ export const PRIVATE_PROVIDERS: ProviderSpec[] = [
     wssChains: ['eth', 'bsc', 'poly', 'arb', 'op', 'avax', 'base', 'linea', 'scroll', 'blast'],
     notes: 'key = `mt_` multichain token (one token, all attached Global Nodes) OR per-node auth token — same URL slot. `401 Access token missing or invalid` = no Global Node attached, NOT a bad key. Slugs DNS-verified 2026-10-20.',
   },
+  {
+    id: 'onerpc',
+    envKey: 'ONERPC_API_KEY',
+    slugs: {
+      eth: 'eth', bsc: 'bnb', poly: 'matic', arb: 'arb', op: 'op',
+      base: 'base', linea: 'linea', scroll: 'scroll',
+      // avax/blast return 'unknown network' at this tier — excluded, not assumed
+    },
+    http: (slug, key) => `https://1rpc.io/${key}/${slug}`,
+    // NO wss on free Starter — WebSocket endpoints start at Personal ($9.90)
+    rps: 0.012,                 // 1,000 req/day free-keyed budget — reserve/failover lane only
+    cuPerMonth: 30_000,         // 1k/day × 30
+    cuCost: { eth_call: 1, eth_getLogs: 1, eth_blockNumber: 1, eth_chainId: 0, default: 1 },
+    notes: 'TEE-attested relay (Automata) — zero-tracking metadata masking, useful as a private/reserve lane. Key in FIRST path segment (account = seg[0], not last). Slugs chainId-verified live 2026-10-20.',
+  },
 ];
 
 /** Multi-app key schema — <P>_API_KEY plus <P>_API_KEY_2.._5. Every key is
@@ -167,13 +182,16 @@ export function providerOf(url: string): { id: string; account: string } {
     else if (h === 'rpc.ankr.com') id = 'ankr';
     else if (h === 'rpc.nodeflare.app') id = 'nodeflare';
     else if (h.endsWith('core.chainstack.com')) id = 'chainstack';
+    else if (h === '1rpc.io' || h.endsWith('.1rpc.io')) id = 'onerpc';
     else if (h.endsWith('infura.io')) id = 'infura';
     const spec = PRIVATE_PROVIDERS.find((p) => p.id === id);
-    // account token: dkey query / last path segment / v2 token
+    // account token: dkey query / last path segment / v2 token —
+    // 1rpc is the exception: key is the FIRST path segment (/key/slug)
+    const segs = u.pathname.split('/').filter(Boolean);
     const account =
       u.searchParams.get('dkey') ??
       u.searchParams.get('key') ??
-      u.pathname.split('/').filter(Boolean).pop() ??
+      (id === 'onerpc' ? segs[0] : segs.pop()) ??
       h;
     return { id: spec ? id : `other:${h}`, account: `${id}:${account.slice(0, 12)}` };
   } catch {

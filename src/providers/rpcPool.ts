@@ -69,7 +69,7 @@ export class RpcPool {
       const { id, account } = providerOf(url);
       if (!this.buckets.has(account)) {
         const rps = specOf(id)?.rps ?? DEFAULT_SAFE_RPS;
-        this.buckets.set(account, new AccountBucket(Math.max(1, rps * SAFE_FACTOR)));
+        this.buckets.set(account, new AccountBucket(Math.max(0.01, rps * SAFE_FACTOR)));
       }
       this.members.push({
         url,
