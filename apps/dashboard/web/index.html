@@ -6,12 +6,39 @@
   <title>AllBright — Banbot Cockpit</title>
   <link rel="icon" type="image/x-icon" href="./favicon.ico" />
   <link rel="icon" type="image/svg+xml" href="./logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Obsidian terminal system — zero gradients, zero shadows, 1px hairlines */
+    :root { --bg:#050505; --line:#1A1A1A; --fg:#FFFFFF; --dim:#888888; --acc:#00FF66; --warn:#FFB224; --bad:#FF4444; }
+    * { box-shadow:none !important; border-radius:0 !important; }
+    html,body { background:var(--bg); color:var(--fg); font-family:'JetBrains Mono',ui-monospace,monospace; }
+    .hairline { border:1px solid var(--line); }
+    .hairline-b { border-bottom:1px solid var(--line); }
+    .dim { color:var(--dim); }
+    .acc { color:var(--acc); }
+    .warn { color:var(--warn); }
+    .bad { color:var(--bad); }
+    /* micro-dot status */
+    .dot { display:inline-block; width:6px; height:6px; border-radius:50%; }
+    .dot.live { background:var(--acc); } .dot.dead { background:var(--bad); } .dot.armed { background:var(--warn); }
+    /* tooltip — heavy metadata lives here, never in the layout */
+    .tt { position:relative; cursor:default; }
+    .tt:hover::after {
+      content:attr(data-tt); position:absolute; left:0; top:100%; z-index:50;
+      background:#0A0A0B; border:1px solid var(--line); color:var(--dim);
+      padding:6px 8px; font-size:10px; line-height:1.5; white-space:pre;
+      min-width:180px; pointer-events:none;
+    }
+    ::-webkit-scrollbar { width:6px; height:6px; } ::-webkit-scrollbar-thumb { background:var(--line); }
+    ::selection { background:var(--acc); color:#000; }
+  </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100">
+<body>
   <div id="root"></div>
   <script type="text/babel" src="./app.jsx"></script>
 </body>
