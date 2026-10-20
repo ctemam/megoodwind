@@ -123,6 +123,25 @@ RPC-request cost: ceil(N / MULTICALL3_batch) requests vs N
   total ≤ the node's eth_call gas cap (~50–100M typical). 200 cheap views
   ≈ 10M — safe headroom.
 
+## Flashbots private-rail protocol (`src/exec/flashbots.ts`)
+
+Raw JSON-RPC to `relay.flashbots.net` — no bundle-provider dep. Auth:
+`X-Flashbots-Signature: <addr>:<EIP-191 sig of raw body>` — the signing
+key is a REPUTATION identity (use `FLASHBOOTS_AUTH_KEY`, not the exec key).
+
+| Method | Use |
+|---|---|
+| `eth_sendBundle` | atomic bundle, ≤100 txs / ≤300kB; opts: `maxTimestamp`, `replacementUuid` (cancelable), `revertingTxHashes` |
+| `eth_callBundle` | **shadow validator** — simulates signed bundle on real builder state; per-tx gasUsed/error/revert |
+| `eth_sendPrivateTransaction` | single signed tx, private ≤25 blocks; `preferences.fast` = all builders |
+| `eth_cancelBundle` | revoke by replacementUuid — no retroactive bid adjustment, cancel only future blocks |
+| `flashbots_getFeeRefundTotalsByRecipient` | weekly refund telemetry (pending/received) |
+
+Doctrine: bundles = raw signed txs only — a 4337 UserOp is not a raw tx;
+the route arms when the exec path produces signed raw txs. mev_sendBundle
+(MEV-Share) = different body format (inclusion/body/validity), one backrun
+tx max as of 2025-10 — keep separate from eth_sendBundle.
+
 ## Live-fork simulation skills (`test/anvil/`)
 
 Simulation runs against REAL forked state — Alchemy/keyed upstream, never

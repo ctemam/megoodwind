@@ -17,7 +17,6 @@
     "test:inventory": "tsx test/rpc_inventory.ts"
   },
   "dependencies": {
-    "@flashbots/ethers-provider-bundle": "^1.0.0",
     "dotenv": "16.4.5",
     "ethers": "6.13.5",
     "express": "4.21.2",
