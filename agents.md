@@ -72,7 +72,9 @@ figures — a request to ANY chain burns the same account pool.
 | Chainstack | 22 | ~100,000 | ~3M | 1 RU/req (archive 2) — reserved until Global Nodes attached |
 | 1RPC | ~0.01 | ~1,000 | ~30k | free Starter drip — reserve lane, bucket rate-limits to ~930/day |
 | Blockscout | 4.5 | ~100,000 credits/day | ~3M | gateway+REST share ONE credit pool — eth/arb/op/scroll only on free |
-| **TOTAL** | **~86 rps** | **~7.1M req/day** | **~214M req/mo** | across 4 live quota pools (+22 rps/~3M/mo pending Chainstack attach) |
+| **LIVE TOTAL** | **~90 rps** | **~7.2M req/day** | **~217M req/mo** | 6 active quota pools (dRPC, Alchemy, Ankr, NodeFlare, 1RPC, Blockscout) |
+| **ARMED** | +22.5 | +100,000 | +3M | Chainstack — activates automatically on Global Node attach (60-min dead-lane TTL re-qualifies) |
+| **GRAND TOTAL** | **~112.5 rps** | **~7.3M req/day** | **~220M req/mo** | 7 quota pools incl. armed Chainstack |
 
 Effective view-call capacity is ~200× higher on multicall paths
 (aggregate3 = 1 request per ≤200 subcalls): discovery+refresh burn
