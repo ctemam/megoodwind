@@ -1,4 +1,5 @@
 import { ChainKey } from '../config/index.js';
+import { isSuspended, providerServesChain } from './rpcPoolConfig.js';
 
 /**
  * Item #10/#12 — PRIVATE PROVIDER CATALOG (keyed free-tier universe).
@@ -166,6 +167,10 @@ const keysFor = (envKey: string): string[] =>
 export function keyedEndpointsFor(chain: ChainKey): { url: string; provider: string }[] {
   const out: { url: string; provider: string }[] = [];
   for (const p of PRIVATE_PROVIDERS) {
+    // rpc_pool_config.json gates: SUSPENDED emits nothing; supported_chains
+    // whitelist narrows the catalog slug map (Alchemy = eth-only until the
+    // dashboard toggles flip — never burn a probe on a known 403).
+    if (isSuspended(p.id) || !providerServesChain(p.id, chain)) continue;
     const slug = p.slugs[chain];
     if (!slug) continue;
     for (const key of keysFor(p.envKey)) out.push({ url: p.http(slug, key), provider: p.id });
@@ -176,6 +181,7 @@ export function keyedEndpointsFor(chain: ChainKey): { url: string; provider: str
 export function keyedWssFor(chain: ChainKey): { url: string; provider: string }[] {
   const out: { url: string; provider: string }[] = [];
   for (const p of PRIVATE_PROVIDERS) {
+    if (isSuspended(p.id) || !providerServesChain(p.id, chain)) continue;
     const slug = p.slugs[chain];
     if (!slug || !p.wss) continue;
     if (p.wssChains && !p.wssChains.includes(chain)) continue;

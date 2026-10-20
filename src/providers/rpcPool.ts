@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { providerOf, specOf } from './providerCatalog.js';
+import { isSuspended, providerServesChain } from './rpcPoolConfig.js';
 import { rpcRegistry } from '../discovery/rpcRegistry.js';
 
 /**
@@ -60,10 +61,15 @@ export class RpcPool {
 
   constructor(chain: ChainConfig) {
     this.chain = chain;
-    const urls = [...chain.rpcUrls];
-    if (chain.fallbackRpcUrl && !urls.includes(chain.fallbackRpcUrl)) {
-      urls.push(chain.fallbackRpcUrl);
-    }
+    // Last-line interception: the config gates apply even to explicit
+    // <CHAIN>_RPC_URLS env entries — suspended providers never get a
+    // provider object, so no connect/probe/retry can ever reach them.
+    const urls = [...chain.rpcUrls, ...(chain.fallbackRpcUrl ? [chain.fallbackRpcUrl] : [])]
+      .filter((u, i, a) => a.indexOf(u) === i)
+      .filter((u) => {
+        const { id } = providerOf(u);
+        return !isSuspended(id) && providerServesChain(id, chain.key);
+      });
     if (!urls.length) throw new Error(`no private RPC endpoints for ${chain.key}`);
     for (const url of urls) {
       const { id, account } = providerOf(url);

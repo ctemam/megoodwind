@@ -142,11 +142,42 @@ the route arms when the exec path produces signed raw txs. mev_sendBundle
 (MEV-Share) = different body format (inclusion/body/validity), one backrun
 tx max as of 2025-10 — keep separate from eth_sendBundle.
 
+## RPC routing config overlay (`rpc_pool_config.json` + `src/providers/rpcPoolConfig.ts`)
+
+Operational state lives in the JSON, templates/budgets live in the TS
+catalog. Statuses: `LIVE`, `LIVE_RESTRICTED_L1_ONLY`, `RESERVE_LANE`,
+`SUSPENDED_*`. Gates apply at ENDPOINT EMISSION (zero URLs emitted for
+suspended providers or non-whitelisted chains) and again inside `RpcPool`
+for explicit env URLs. Loader re-reads on mtime change (~30s) — the sync
+script promotes without a restart.
+
+```json
+provider_catalog.<id>.status            // LIVE | RESERVE_LANE | SUSPENDED_*
+provider_catalog.<id>.supported_chains  // ["all"] | explicit chain keys
+provider_catalog.<id>.priority          // 1 = primary, lower wins ties
+```
+
+### `rpc_provider_fault_interception` skill
+
+| Fault | Action | Surface |
+|---|---|---|
+| `status SUSPENDED*` | emit zero endpoints — never connect/probe/retry | catalog + pool |
+| 401 / 403 / not-enabled | persistent dead-lane (`rpcRegistry` 60min+) — stronger than a timed blacklist | `isDeadEndpoint` |
+| 429 / timeout / volume | escalating cooldown 20s→300s, wait-earliest-refill, no hot loop | `penalize` + buckets |
+| account-bucket drain | wait earliest refill — budget binds per KEY not per URL | `AccountBucket` |
+| RESERVE_LANE (1RPC) | hard-clamped ~0.01 rps ≈ 1 call/100s — drip cannot be burst-drained | bucket floor |
+
 ## Live-fork simulation skills (`test/anvil/`)
 
 Simulation runs against REAL forked state — Alchemy/keyed upstream, never
 hardcoded mocks. Verified live 2026-10-20 (eth pinned @26,235,817,
 impersonated send PASS, 34,194 gas, 0% variance).
+
+Fork upstream selection follows `rpc_pool_config.json` priority: **Ankr**
+for high-volume multi-run sweeps (6.7M req/day headroom), **dRPC** for
+burst/parallel fork matrices (36 safe rps), Alchemy only for chainId 1
+while `LIVE_RESTRICTED_L1_ONLY`, suspended providers never offered as
+upstream. `--compute-units-per-second` still caps whatever is chosen.
 
 ### `fork_live_chain_state` (`test/anvil/forkSim.ts`)
 
@@ -160,6 +191,9 @@ anvil --fork-url <keyed-rpc> --fork-block-number <pin> \
 
 - `--compute-units-per-second` is the upstream throttle — the fork's own
   RPC pool, so a sim loop can never burn the provider free tier.
+- Upstream endpoint comes from the config overlay — resolve via
+  `keyedEndpointsFor(chain)` which already excludes suspended providers
+  and non-whitelisted chains; pick by priority then EWMA.
 - Readiness loop on `eth_chainId` — never fixed sleeps; the provider must
   answer before the fork declares state ready.
 - `--fork-headers` exists for providers demanding custom headers.

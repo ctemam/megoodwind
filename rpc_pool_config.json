@@ -1,0 +1,73 @@
+{
+  "system_mode": "SIMULATION",
+  "multicall_optimization": {
+    "enabled": true,
+    "target_contract": "0xcA11bde05977b3631167028862bE2a173976CA11",
+    "batch_multiplier_target": 200
+  },
+  "interception": {
+    "suspended_skip": "providers whose status starts with SUSPENDED emit zero endpoints — no connect, no probe, no retry",
+    "auth_fatal": "401/403/not-enabled => persistent dead-lane (rpcRegistry), stronger than a timed blacklist",
+    "rate_limit": "429/volume faults => escalating cooldown 20s -> 300s, wait-earliest-refill, never hot-loop",
+    "reserve_lane": "RESERVE_LANE providers stay bucket-clamped at their drip rate (1RPC ~0.01 rps ~= 1 call/100s)"
+  },
+  "provider_catalog": {
+    "drpc": {
+      "safe_rps": 36,
+      "daily_budget": 350000,
+      "supports_wss": true,
+      "supported_chains": ["all"],
+      "status": "LIVE",
+      "priority": 1
+    },
+    "ankr": {
+      "safe_rps": 27,
+      "daily_budget": 6670000,
+      "supports_wss": false,
+      "supported_chains": ["all"],
+      "status": "LIVE",
+      "priority": 1
+    },
+    "alchemy": {
+      "safe_rps": 14,
+      "daily_budget": 38000,
+      "supports_wss": true,
+      "supported_chains": ["eth"],
+      "status": "LIVE_RESTRICTED_L1_ONLY",
+      "priority": 2
+    },
+    "nodeflare": {
+      "safe_rps": 9,
+      "daily_budget": 67000,
+      "supports_wss": true,
+      "wss_chain_count": 6,
+      "supported_chains": ["eth", "bsc", "poly", "arb", "op", "avax", "base", "linea"],
+      "status": "LIVE",
+      "priority": 2
+    },
+    "blockscout": {
+      "safe_rps": 4.5,
+      "daily_budget": 100000,
+      "supports_wss": false,
+      "supported_chains": ["eth", "arb", "op", "scroll"],
+      "status": "LIVE",
+      "priority": 3
+    },
+    "onerpc": {
+      "safe_rps": 0.01,
+      "daily_budget": 1000,
+      "supports_wss": false,
+      "supported_chains": ["eth", "bsc", "poly", "arb", "op", "base", "linea", "scroll"],
+      "status": "RESERVE_LANE",
+      "priority": 4
+    },
+    "chainstack": {
+      "safe_rps": 22.5,
+      "daily_budget": 0,
+      "supports_wss": true,
+      "supported_chains": [],
+      "status": "SUSPENDED_CONSOLE_ATTACH_PENDING",
+      "priority": 99
+    }
+  }
+}

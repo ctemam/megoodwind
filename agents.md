@@ -34,6 +34,10 @@ logs, or token-list streams + on-chain metadata.
 | Multicall3 batching | `aggregate3` on canonical `0xcA11bde05977b3631167028862bE2a173976CA11` — N view calls collapse into ONE eth_call (~200× request-rate reduction on discovery + sim refresh). Contract-level aggregation — immune to JSON-RPC envelope batch caps (dRPC's 3-item limit does not apply). `MULTICALL3_ADDR` env override; auto-fallback to per-call if the aggregate errors | `src/providers/multicall.ts` |
 | Private provider universe | keyed expansion per chain from `*_API_KEY` — dRPC, Alchemy, Ankr, NodeFlare, Chainstack (`mt_` multichain token = one key every chain), 1RPC (TEE relay reserve lane) templates verified against provider docs (2026-10-20); each account key is a distinct quota pool; explicit `<CHAIN>_RPC_URLS` keep precedence, deduped | `src/providers/providerCatalog.ts` + `src/config/index.ts` |
 | Account budget scheduler | quota binds per ACCOUNT KEY not per URL — one token bucket per provider account sized `doc_rps × 0.9` (10% reserve never ordinary workload); pick = lowest EWMA among cooled-in + budget-live members; when all drained, wait earliest refill — never hot-loop | `src/providers/rpcPool.ts` |
+| Routing config overlay | `rpc_pool_config.json` = live source of truth for provider STATUS + chain whitelists; mtime-reload (~30s) hot-picks edits. `SUSPENDED*` emits ZERO endpoints (no connect/probe/retry); `supported_chains` whitelist narrows the slug map — Alchemy emits `eth` only while `LIVE_RESTRICTED_L1_ONLY`. Pool applies the same gates to explicit env URLs as last-line defense | `src/providers/rpcPoolConfig.ts` + `rpc_pool_config.json` |
+| Status auto-promotion | `scripts/sync_rpc_pool_status.ts` probes suspended providers via `eth_chainId`; on ≥1 live chain it flips status→LIVE, writes real supported_chains + daily_budget, priority 2 — console-side attach activates routing with zero code edits | `scripts/sync_rpc_pool_status.ts` |
+| Routing config overlay | `rpc_pool_config.json` = live source of truth for provider STATUS + chain whitelists; mtime-reload (~30s) hot-picks edits. `SUSPENDED*` emits ZERO endpoints (no connect/probe/retry); `supported_chains` whitelist narrows the slug map — Alchemy emits `eth` only while `LIVE_RESTRICTED_L1_ONLY`. Pool applies the same gates to explicit env URLs as last-line defense | `src/providers/rpcPoolConfig.ts` + `rpc_pool_config.json` |
+| Status auto-promotion | `scripts/sync_rpc_pool_status.ts` probes suspended providers via `eth_chainId`; on ≥1 live chain it flips status→LIVE, writes real supported_chains + daily_budget, priority 2 — console-side attach activates routing with zero code edits | `scripts/sync_rpc_pool_status.ts` |
 | RPC inventory probe | bounded census (`test/rpc_inventory.ts`): chainId verify, p50 latency ×5, tiny burst — ~14 req/endpoint; prints per-account pool + documented budget table; never a load test | `test/rpc_inventory.ts` |
 | Alchemy state & forking tier | Supernode-keyed endpoints drive Anvil mainnet forks — archive-depth live state, `--fork-block-number` pinning for repeatable simulations, node-level request caching (aggregate3 + registry EWMA). `anvil --compute-units-per-second` throttles the fork's upstream calls so a sim loop can't burn the free tier; `--fork-headers` passes provider-required headers where a plan demands them | `test/anvil/forkSim.ts` (`fork_live_chain_state`) |
 | Rate-limit protection & resiliency | Request queue = per-account token buckets (the queueing layer — a request only flows when its account has a token); automated exponential backoff = member cooldowns `×3` on 429, `×5`-capped failure multiplier + adaptive discovery delay `×4`; rotational multi-app keys = `<P>_API_KEY` plus `<P>_API_KEY_2.._5`, each a distinct quota pool | `src/providers/rpcPool.ts`, `src/providers/providerCatalog.ts` |
@@ -81,6 +85,42 @@ Effective view-call capacity is ~200× higher on multicall paths
 requests, not subcalls — ~7.1M req/day ≈ **~1.4B subcall-equivalents/day**
 headroom for bulk reads. WSS subscriptions are separate stream capacity
 (dRPC live all chains, Alchemy where enabled, NodeFlare 6 chains, Ankr none).
+
+### Routing interception rules (`rpc_pool_config.json`)
+
+1. `status: SUSPENDED*` → **emission-level skip**: zero endpoints generated,
+   zero pool members, zero probes — Chainstack burns no CPU on known 401s.
+   Console attach + `sync_rpc_pool_status.ts` flips it automatically.
+2. `supported_chains` whitelist → Alchemy `LIVE_RESTRICTED_L1_ONLY` routes
+   ONLY chainId 1; every rollup/L2 bypasses it — no 403 "not enabled" churn.
+   Same gates re-apply inside `RpcPool` against explicit env URLs.
+3. Auth-fatal (401/403/not-enabled) → persistent dead-lane via `rpcRegistry`
+   (60-min persisted state) — stronger than a timed blacklist, never retried.
+4. Volume faults (429/timeout) → escalating cooldown 20s→300s +
+   wait-earliest-refill — never a hot loop.
+5. `RESERVE_LANE` (1RPC) stays bucket-clamped ~0.01 rps ≈ 1 call/100s —
+   the drip budget cannot be burst-drained.
+6. Priority 1 volume driver = Ankr (raw monthly headroom) + dRPC (burst/WSS);
+   Multicall3 `aggregate3` wraps every bulk read path — subcalls never
+   count against per-request rate limits.
+
+### Routing interception rules (`rpc_pool_config.json`)
+
+1. `status: SUSPENDED*` → **emission-level skip**: zero endpoints generated,
+   zero pool members, zero probes — Chainstack burns no CPU on known 401s.
+   Console attach + `sync_rpc_pool_status.ts` flips it automatically.
+2. `supported_chains` whitelist → Alchemy `LIVE_RESTRICTED_L1_ONLY` routes
+   ONLY chainId 1; every rollup/L2 bypasses it — no 403 "not enabled" churn.
+   Same gates re-apply inside `RpcPool` against explicit env URLs.
+3. Auth-fatal (401/403/not-enabled) → persistent dead-lane via `rpcRegistry`
+   (60-min persisted state) — stronger than a timed blacklist, never retried.
+4. Volume faults (429/timeout) → escalating cooldown 20s→300s +
+   wait-earliest-refill — never a hot loop.
+5. `RESERVE_LANE` (1RPC) stays bucket-clamped ~0.01 rps ≈ 1 call/100s —
+   the drip budget cannot be burst-drained.
+6. Priority 1 volume driver = Ankr (raw monthly headroom) + dRPC (burst/WSS);
+   Multicall3 `aggregate3` wraps every bulk read path — subcalls never
+   count against per-request rate limits.
 
 ## Invariants
 
