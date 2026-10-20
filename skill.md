@@ -90,6 +90,12 @@ excluded, never guessed.
 4. Daily budget (uniform draw): `cuPerMonth / 30 / cuCost[method]` — e.g.
    Alchemy free ≈ 38k eth_call/day, dRPC ≈ 350k, Ankr ≈ 6.6M, NodeFlare ≈ 66k.
    `eth_getLogs` and trace/debug cost 3–8× simple calls — reserve them.
+5. Fleet totals (measured 2026-10-20): **~86 req/s safe across 4 accounts,
+   ~7.1M req/day, ~214M req/month** — request-level. On multicall paths the
+   view-call effective capacity is ~200× (aggregate3 = 1 request per ≤200
+   subcalls ≈ ~1.4B subcall-equivalents/day). Quota arithmetic is per
+   REQUEST to the provider — subcalls inside one aggregate3 don't hit the
+   HTTP rate limiter, only the node's eth_call gas cap.
 
 ## Multicall3 request algebra (`src/providers/multicall.ts`)
 

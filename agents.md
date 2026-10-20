@@ -50,6 +50,25 @@ vs the single-account ~36 rps that saturated at shadow boot. Combined with
 Multicall3 (~200× request reduction on bulk paths), boot discovery drops
 from ~2,900 requests to ~15 aggregate3 calls.
 
+### RPC capacity totals — per second / day / month (documented free tiers)
+
+Uniform `eth_call` draw; `req/day = monthly_budget / 30 / cuCost`. Per-chain
+figures — a request to ANY chain burns the same account pool.
+
+| Account | SAFE_RPS | req/day (eth_call) | req/month | Notes |
+|---|---|---|---|---|
+| dRPC | 36 | ~350,000 | ~10.5M | 210M CU/30d ÷ 20 CU; min-floor under load ~40% |
+| Alchemy | 14 | ~38,000 | ~1.15M | 30M CU/mo ÷ 26 CU; eth-only until app toggles |
+| Ankr | 27 | ~6,670,000 | ~200M | 1 credit/req — largest raw pool |
+| NodeFlare | 9 | ~67,000 | ~2M | conservative 2M CU bound |
+| **TOTAL** | **~86 rps** | **~7.1M req/day** | **~214M req/mo** | across 4 distinct quota pools |
+
+Effective view-call capacity is ~200× higher on multicall paths
+(aggregate3 = 1 request per ≤200 subcalls): discovery+refresh burn
+requests, not subcalls — ~7.1M req/day ≈ **~1.4B subcall-equivalents/day**
+headroom for bulk reads. WSS subscriptions are separate stream capacity
+(dRPC live all chains, Alchemy where enabled, NodeFlare 6 chains, Ankr none).
+
 ## Invariants
 
 - Atomicity law: the whole cycle lives in one flash callback; revert = zero loss.
