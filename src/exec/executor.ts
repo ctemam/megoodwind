@@ -5,6 +5,8 @@ import { Candidate } from '../strategies/solver.js';
 import { buildPlan } from './planBuilder.js';
 import { baseFeeOk, execProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
+import { sendUserOpViaFlashbots } from './privateRoute.js';
+import { flashbotsAvailable } from './flashbots.js';
 import { breaker } from '../forensics/baitPool.js';
 import { metrics } from '../telemetry/metrics.js';
 import { VariantScheduler } from '../engine/predictiveEngine.js';
@@ -75,7 +77,28 @@ export async function executeCandidate(
     return;
   }
 
-  // 4. submit via strict 4337
+  // 4. submit via strict 4337 — private rail first on eth (Flashbots
+  //    bundle/private-tx wraps the signed UserOp in a handleOps carrier
+  //    tx; mempool never sees it). Fallback to Pimlico on failure.
+  if (flashbotsAvailable(chain)) {
+    const priv = await sendUserOpViaFlashbots(chain, rpc, execData);
+    if (priv.kind === 'sent') {
+      metrics.inc('arb_submit_total', { chain: chain.key, strategy: cand.strategy });
+      metrics.inc('arb_submit_private_total', { chain: chain.key, strategy: cand.strategy });
+      log.info(`PRIVATE submit ${cand.strategy} ${chain.key} bundle=${priv.bundleHash ?? priv.txHash}`);
+      const rc = await awaitTxReceipt(rpc, priv.txHash!);
+      if (!rc.landed) { metrics.inc('arb_unlanded_total', { chain: chain.key }); return; }
+      if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); return; }
+      scheduler.recordSettle(cand.variant, cand.netUsd);
+      metrics.addSettled(chain.key, cand.strategy, cand.netUsd, rc.txHash!, cand.spreadPct);
+      log.info(`SETTLED(private) ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${rc.txHash}`);
+      return;
+    }
+    if (priv.kind === 'failed') {
+      log.warn(`private route failed (${priv.reason}) — falling back to Pimlico`);
+      metrics.inc('arb_private_fallback_total', { chain: chain.key });
+    }
+  }
   const sub = await submitExecUserOp(chain, rpc, execData);
   if (sub.kind !== 'sent' || !sub.userOpHash) {
     metrics.inc('arb_submit_fail_total', { chain: chain.key });
@@ -99,6 +122,31 @@ export async function executeCandidate(
   scheduler.recordSettle(cand.variant, cand.netUsd);
   metrics.addSettled(chain.key, cand.strategy, cand.netUsd, receipt.txHash!, cand.spreadPct);
   log.info(`SETTLED ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${receipt.txHash}`);
+}
+
+/** Poll eth_getTransactionReceipt on the carrier tx — the private rail's
+ *  settled-evidence path (same honesty floor as the UserOp receipt). */
+async function awaitTxReceipt(
+  rpc: RpcPool,
+  txHash: string,
+  timeoutMs = 60_000,
+): Promise<{ landed: boolean; success: boolean; txHash?: string }> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const r = await rpc.call<{ status?: string; transactionHash?: string } | null>(
+        'eth_getTransactionReceipt',
+        [txHash],
+      );
+      if (r?.transactionHash) {
+        return { landed: true, success: r.status === '0x1', txHash: r.transactionHash };
+      }
+    } catch {
+      /* transport — keep polling */
+    }
+    await new Promise((res) => setTimeout(res, 3_000));
+  }
+  return { landed: false, success: false };
 }
 
 export {};
