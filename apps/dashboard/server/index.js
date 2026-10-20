@@ -60,7 +60,13 @@ app.get('/api/ops', (_req, res) => {
 
 app.use(
   '/api',
-  createProxyMiddleware({ target: API, changeOrigin: true }),
+  // Express strips the /api mount before the proxy sees the request —
+  // restore it so upstreams mounted at /api/* resolve correctly.
+  createProxyMiddleware({
+    target: API,
+    changeOrigin: true,
+    pathRewrite: { '^/': '/api/' },
+  }),
 );
 app.use('/health', (_req, res) => res.json({ ok: true, api: API }));
 app.use(express.static(WEB));
