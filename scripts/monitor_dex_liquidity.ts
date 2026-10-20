@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { ethers } from 'ethers';
-import { mkdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cfg, chainConfig, privKeyHex, ChainConfig } from '../src/config/index.js';
 import { logger } from '../src/config/logger.js';
@@ -12,6 +12,7 @@ import { solve, Candidate } from '../src/strategies/solver.js';
 import { VARIANTS } from '../src/engine/predictiveEngine.js';
 import { buildPlan } from '../src/exec/planBuilder.js';
 import { fork_live_chain_state, execute_fork_dry_run, ForkHandle } from '../test/anvil/forkSim.js';
+import { emitSignal } from '../src/telemetry/signalSink.js';
 
 /**
  * Multi-chain DEX liquidity surveillance — the Shadow-Mode monitor.
@@ -63,15 +64,6 @@ interface ChainRuntime {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Emitted signal — JSONL per chain, is_simulation always true. */
-function emitSignal(chain: ChainConfig, rec: Record<string, unknown>) {
-  mkdirSync(SIGNAL_DIR, { recursive: true });
-  appendFileSync(
-    resolve(SIGNAL_DIR, `${chain.key}_signals.jsonl`),
-    JSON.stringify({ ts: new Date().toISOString(), is_simulation: true, ...rec }) + '\n',
-  );
-}
 
 async function baseFeeWei(rpc: RpcPool): Promise<bigint> {
   const b = await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false]).catch(() => null);

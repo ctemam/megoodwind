@@ -12,8 +12,9 @@ targets assets heavily pooled inside the Balancer Vault first
 | Discovery | `src/discovery/*` | `tokenLists.ts` = token-list streams + on-chain `decimals()` fallback. `factories.ts` = env-overridable factory registry (infrastructure, not pools). `discovery.ts` = boot matrix + creation-event watcher. |
 | Feed | `src/feed/dexscreener.ts` + `src/feed/refresh.ts` | DexScreener batched ingest (30 addrs/call), then ONE merged on-chain refresh per cycle. Never serialize per-item RPC. |
 | Solver | `src/strategies/solver.ts` + `src/strategies/graph.ts` | CPU-eval ALL pools per cycle. TRACE = probe-gated settled-evidence lane; P01 = 2-hop cross-venue; P02 = multi-hop cyclic. Bellman-Ford negative-cycle pathfinder discovers arbitrary n-hop cycles over every discovered pool. P09 dead, EV dead. |
-| Predictive | `src/engine/predictiveEngine.ts` | 12-variant matrix; VariantScheduler rotates on latency anomalies and settled-evidence score. |
-| Whale | `src/services/whaleTracker.ts` | >$500K single transfers; Whale Alert API if keyed, else on-chain Transfer-log scan. Pipes token addr → Scout targeted refresh. |
+| Predictive | `src/engine/predictiveEngine.ts` + `src/engine/strategyRouter.ts` | 12-variant matrix tagged into families (MOMENTUM/MEAN_REVERSION/STAT_ARB/CROSS_PAIR_VOL/MICROSTRUCTURE); VariantScheduler rotates on latency anomalies and settled-evidence score. **Regime gate runs first** — `evaluatePredictiveVariants(regime)` suppresses ineligible families before the scheduler picks. |
+| Regime | `src/engine/marketRegime.ts` | Conditioning layer over every solver cycle: `volBps` (median |Δprice| across pools), `trendScore` (directional consistency −1..1), `illiquidFrac` (stale-state share) → HIGH_VOL_TRENDING / LOW_VOL_MEAN_REVERTING / ILLIQUID_CRASH / BALANCED. Emitted to the signal sink each cycle. |
+| Whale | `src/services/whaleTracker.ts` → `route_whale_alpha_signal` | >$500K single transfers; Whale Alert API if keyed, else on-chain Transfer-log scan. Routes into a **cross-pair correlation check**: direct pools + peer venues (same pair, other DEX/fee) refreshed as ONE set — the arb lives in the venue gap. |
 | Forensics | `src/forensics/baitPool.ts` + `src/providers/blockscout.ts` + `src/providers/bitquery.ts` | Pool-level convictions: gap>2% ceiling, exec-probe revert, >3x peer divergence, fee outside sane tiers, **explorer `is_scam` verdict** (Blockscout — async per discovered pool, cached), **zero-real-trades + divergent** (Bitquery DEXTrades — ONE batched GraphQL query per discovery chunk, `in: [...]` filter ≈ same cost as single addr; convicts pools quoting >3x divergent with ZERO real trades in 72h). Persisted `data/leaders/<chain>/_bait_pools.json`. |
 | Executor | `src/exec/*` | fresh-state re-sim at real size → baseFee breaker → exec-probe `eth_call` from SMART_ACCOUNT → submit → receipt → settled accounting. **Private rail (eth, `privateRoute.ts`)**: signed UserOp → `EntryPoint.handleOps` carrier tx signed by owner EOA → `eth_callBundle` builder-state gate (revert/OOG aborts before spending a slot) → `eth_sendBundle`/`eth_sendPrivateTransaction`. Strict-4337 preserved — the UserOp executes via EntryPoint; only the ORDERFLOW is private. Settled parity: carrier txHash = `keccak256(signedTx)` → `eth_getTransactionReceipt` honesty floor identical to Pimlico path. Fallback to Pimlico on private failure. `eth_cancelBundle` + refund telemetry armed. |
 | Telemetry | `src/telemetry/*` + `apps/dashboard/*` | Express API :3001 + Banbot React cockpit :9205. Only `arb_settled_net_usd` on landed records is profit. |
@@ -102,6 +103,21 @@ headroom for bulk reads. WSS subscriptions are separate stream capacity
 6. Priority 1 volume driver = Ankr (raw monthly headroom) + dRPC (burst/WSS);
    Multicall3 `aggregate3` wraps every bulk read path — subcalls never
    count against per-request rate limits.
+
+### Strategy conditioning rules (regime gate)
+
+1. `HIGH_VOL_TRENDING` (median pool move ≥25bps/cycle + trend consistency
+   ≥0.35) → **MEAN_REVERSION variants suppressed**, MOMENTUM + CROSS_PAIR_VOL
+   prioritized. A fading strategy never runs against a confirmed trend.
+2. `LOW_VOL_MEAN_REVERTING` (median move ≤3bps) → MOMENTUM + CROSS_PAIR_VOL
+   suppressed; MEAN_REVERSION + STAT_ARB prioritized.
+3. `ILLIQUID_CRASH` (>50% of pool universe stale) → only STAT_ARB variants
+   with `minDepthUsd ≥ 250k` — a crisis tape quotes deepest pools only.
+4. Whale alert → immediate `route_whale_alpha_signal`: direct pools +
+   peer-venue correlation set refreshed as one batch; the signal lands in
+   the same `data/monitor/<chain>_signals.jsonl` trace (kind=whale_alpha).
+5. Regime decisions emit `kind=regime` records each cycle — the
+   `verify_monitor_signals` verifier traces them like any other signal.
 
 ## Invariants
 

@@ -13,6 +13,9 @@ import { breaker } from '../forensics/baitPool.js';
 import { metrics } from '../telemetry/metrics.js';
 import { startMetricsServer } from '../telemetry/metricsServer.js';
 import { Discovery } from '../discovery/discovery.js';
+import { classifyMarketRegime } from '../engine/marketRegime.js';
+import { nextVariant, routeWhaleAlphaSignal } from '../engine/strategyRouter.js';
+import { emitSignal } from '../telemetry/signalSink.js';
 
 /**
  * arb-runner — primary orchestration loop.
@@ -81,8 +84,6 @@ async function cycle(
   scheduler: VariantScheduler,
   discovery: Discovery,
 ): Promise<void> {
-  const variant = scheduler.next();
-
   // Discovery phase: pull newly deployed pools (bounded, skips same-block)
   await discovery.scanNewPools().catch((e) => log.debug(`${chain.key} scanNewPools`, e));
 
@@ -91,6 +92,12 @@ async function cycle(
   const tracked = registry.all(chain.key);
   if (!tracked.length) return;
   await refreshPools(rpc, tracked);
+
+  // Conditioning layer: the regime snapshot gates variant eligibility
+  // BEFORE the scheduler picks — suppressed families never evaluate.
+  const snap = classifyMarketRegime(chain.key);
+  emitSignal(chain, { kind: 'regime', ...snap });
+  const variant = nextVariant(scheduler, snap);
 
   const baseFeeWei = (await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false])
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
@@ -118,17 +125,20 @@ async function main() {
   const scheduler = new VariantScheduler();
 
   const scout = new ScoutListener(chains, rpcs);
+  const lastWhaleUsd = new Map<string, number>(); // chain:token -> usd size of latest alert
   const whale = new WhaleTracker(chains, rpcs, (chain, tokenAddr, usd) => {
     log.info(`whale transfer $${usd.toFixed(0)} on ${chain.key} -> targeted refresh`, { tokenAddr });
+    lastWhaleUsd.set(`${chain.key}:${tokenAddr.toLowerCase()}`, usd);
     scout.requestTargetedRefresh(chain, tokenAddr);
     metrics.inc('whale_hits_total', { chain: chain.key });
   });
   scout.on('whale', async (chain: ChainConfig, _token: string) => {
-    // targeted refresh of pools containing the flagged token
-    const hit = registry.all(chain.key).filter(
-      (p) => p.token0.toLowerCase() === _token.toLowerCase() || p.token1.toLowerCase() === _token.toLowerCase(),
-    );
-    if (hit.length) await refreshPools(rpcs.get(chain.key)!, hit);
+    // whale alpha routing: direct pools + cross-pair correlation venues
+    // (same pair, other DEX/fee tier) — the arb lives in the gap.
+    const usd = lastWhaleUsd.get(`${chain.key}:${_token.toLowerCase()}`) ?? 0;
+    const { direct, correlation } = routeWhaleAlphaSignal(chain, _token, usd);
+    const refreshSet = [...direct, ...correlation];
+    if (refreshSet.length) await refreshPools(rpcs.get(chain.key)!, refreshSet);
   });
 
   await scout.start();

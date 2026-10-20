@@ -157,6 +157,46 @@ provider_catalog.<id>.supported_chains  // ["all"] | explicit chain keys
 provider_catalog.<id>.priority          // 1 = primary, lower wins ties
 ```
 
+### Strategy-layer skills (`src/engine/`)
+
+**`classify_market_regime(chainKey)`** — `marketRegime.ts`
+
+```
+in : chainKey                    # one configured chain
+out: RegimeSnapshot {
+       regime: HIGH_VOL_TRENDING | LOW_VOL_MEAN_REVERTING | ILLIQUID_CRASH | BALANCED
+       volBps: number            # median |Δprice bps| across pools
+       trendScore: -1..1        # directional consistency
+       illiquidFrac: 0..1       # stale/zero-state share
+       poolsSampled, at }
+```
+Inputs are live registry state post-`refreshPools` — the same state the
+solver quotes, sourced from the keyed fleet (dRPC/Ankr/Alchemy-lanes via
+`rpc_pool_config.json`). Call once per solver cycle.
+
+**`evaluate_predictive_variants(regimeSnapshot)`** — `strategyRouter.ts`
+
+```
+in : RegimeSnapshot
+out: Variant[]                   # eligible subset of VARIANTS[12]
+```
+Gate matrix: HIGH_VOL_TRENDING suppresses MEAN_REVERSION;
+LOW_VOL_MEAN_REVERTING suppresses MOMENTUM+CROSS_PAIR_VOL;
+ILLIQUID_CRASH allows only STAT_ARB with minDepthUsd ≥ 250k;
+BALANCED passes all. `nextVariant(scheduler, snap)` wraps the
+settled-evidence rotation — a suppressed pick is skipped, never run.
+
+**`route_whale_alpha_signal(chain, tokenAddr, usd)`** — `strategyRouter.ts`
+
+```
+in : chain, tokenAddr, usd       # from WhaleTracker (> $500k transfers)
+out: { direct: PoolState[], correlation: PoolState[] }
+```
+Direct pools = every registry pool containing the token; correlation =
+peer venues of the same pair (other DEX/fee tier) — refreshed as one
+batch so the solver sees the cross-venue gap in the same state tick.
+Emits `kind:whale_alpha` to the signal sink.
+
 ### `rpc_provider_fault_interception` skill
 
 | Fault | Action | Surface |
