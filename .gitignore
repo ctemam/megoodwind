@@ -8,3 +8,4 @@ broadcast/
 *.tsbuildinfo
 apps/dashboard/web/dist/
 apps/dashboard/web/node_modules/
+data/rpc_registry.json

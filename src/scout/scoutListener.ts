@@ -3,6 +3,7 @@ import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { WssLane } from '../providers/wss.js';
 import { RpcPool } from '../providers/rpcPool.js';
+import { providerOf } from '../providers/providerCatalog.js';
 
 /**
  * Item #14 — TypeScript Live Listener (the Scout Agent).
@@ -25,7 +26,13 @@ export class ScoutListener extends EventEmitter {
   private lanes: WssLane[] = [];
   private lastHead = new Map<string, number>();
   private pendingThrottle = new Map<string, number>();
+  /** Mempool-union dedupe — rolling bounded sets per chain. A pending tx
+   *  arriving on two provider lanes is processed ONCE; different accounts
+   *  see different mempool slices, which is the whole point of the union. */
+  private seenPending = new Map<string, { cur: Set<string>; prev: Set<string>; rotatedAt: number }>();
   private log = logger('scout');
+  private static PEND_SET_CAP = 200_000;
+  private static PEND_ROTATE_MS = 120_000;
 
   constructor(
     private chains: ChainConfig[],
@@ -37,15 +44,31 @@ export class ScoutListener extends EventEmitter {
   async start(): Promise<void> {
     for (const chain of this.chains) {
       const isPredictive = cfg.predictiveChains.includes(chain.key);
-      const lane = new WssLane(
-        chain,
-        (blockNumber) => this.handleHead(chain, blockNumber),
-        isPredictive ? (hash) => this.handlePending(chain, hash) : undefined,
-      );
-      this.lanes.push(lane);
-      void lane.start();
+      // UNION MODE — one pinned lane per distinct provider ACCOUNT.
+      // Same-account URLs subscribe to the same mempool view (no gain);
+      // different accounts = different node sets = genuinely new slices.
+      const urls = chain.wssUrls?.length ? chain.wssUrls : [chain.wssUrl].filter(Boolean) as string[];
+      const byAccount = new Map<string, string>();
+      for (const u of urls) {
+        const { account } = providerOf(u);
+        if (!byAccount.has(account)) byAccount.set(account, u);
+      }
+      for (const [account, url] of byAccount) {
+        const lane = new WssLane(
+          chain,
+          (blockNumber) => this.handleHead(chain, blockNumber),
+          isPredictive ? (hash) => this.handlePending(chain, hash) : undefined,
+          url,
+        );
+        this.lanes.push(lane);
+        void lane.start();
+        this.log.info(`${chain.key} WSS union member: ${account}`);
+      }
+      if (!byAccount.size) {
+        this.log.warn(`${chain.key}: no WSS endpoints — head polling only`);
+      }
     }
-    this.log.info(`scout online: ${this.chains.map((c) => c.key).join(', ')}`);
+    this.log.info(`scout online: ${this.chains.map((c) => c.key).join(', ')} (${this.lanes.length} union lanes)`);
   }
 
   private handleHead(chain: ChainConfig, n: number) {
@@ -56,8 +79,16 @@ export class ScoutListener extends EventEmitter {
   }
 
   private handlePending(chain: ChainConfig, hash: string) {
-    // PEND_THROTTLE_MS — cap intake so a mempool burst can't flood the loop
     const now = Date.now();
+    // rolling two-set dedupe — bounded, no unbounded growth under floods
+    let s = this.seenPending.get(chain.key);
+    if (!s) { s = { cur: new Set(), prev: new Set(), rotatedAt: now }; this.seenPending.set(chain.key, s); }
+    if (now - s.rotatedAt > ScoutListener.PEND_ROTATE_MS || s.cur.size > ScoutListener.PEND_SET_CAP) {
+      s.prev = s.cur; s.cur = new Set(); s.rotatedAt = now;
+    }
+    if (s.cur.has(hash) || s.prev.has(hash)) return; // same tx on another lane
+    s.cur.add(hash);
+    // PEND_THROTTLE_MS — cap intake so a mempool burst can't flood the loop
     const last = this.pendingThrottle.get(chain.key) ?? 0;
     if (now - last < cfg.PEND_THROTTLE_MS) return;
     this.pendingThrottle.set(chain.key, now);

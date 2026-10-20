@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { providerOf, specOf } from './providerCatalog.js';
+import { rpcRegistry } from '../discovery/rpcRegistry.js';
 
 /**
  * Item #12 — Agent-to-RPC integration.
@@ -77,12 +78,16 @@ export class RpcPool {
           polling: false,
         }),
         account,
-        ewmaMs: 500,
+        // hydrate from the persistent registry: known-dead skips its
+        // boot handshake entirely; known-good keeps its learned latency
+        ewmaMs: rpcRegistry.ewmaSeed(chain.key, url) ?? 500,
         failures: 0,
         cooldownUntil: 0,
+        dead: rpcRegistry.isDead(chain.key, url) || undefined,
       });
     }
-    this.log.info(`${chain.key}: ${this.members.length} endpoints across ${this.buckets.size} provider account(s)`, {
+    const deadCount = this.members.filter((m) => m.dead).length;
+    this.log.info(`${chain.key}: ${this.members.length} endpoints across ${this.buckets.size} provider account(s)${deadCount ? ` (${deadCount} registry-dead, skipped)` : ''}`, {
       accounts: [...this.buckets.entries()].map(([a, b]) => `${a.split(':')[0]}@${b.cap.toFixed(0)}rps`),
     });
   }
@@ -133,6 +138,8 @@ export class RpcPool {
   private kill(m: Member, reason: string) {
     if (m.dead) return;
     m.dead = true;
+    const { id, account } = providerOf(m.url);
+    rpcRegistry.markDead(this.chain.key, m.url, reason, id, account);
     this.log.warn(`${this.chain.key} endpoint DEAD — ${reason}`, { url: hostOf(m.url) });
   }
 
@@ -168,6 +175,8 @@ export class RpcPool {
           ]);
           m.ewmaMs = m.ewmaMs * (1 - EWMA_ALPHA) + (performance.now() - t0) * EWMA_ALPHA;
           m.failures = 0;
+          const { id, account } = providerOf(m.url);
+          rpcRegistry.markOk(this.chain.key, m.url, m.ewmaMs, this.chain.chainId, id, account);
           return res as T;
         } catch (e) {
           lastErr = e;

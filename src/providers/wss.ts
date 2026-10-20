@@ -25,15 +25,21 @@ export class WssLane {
     private chain: ChainConfig,
     private onHead: HeadHandler,
     private onPending?: PendingHandler,
+    /** Union mode: pin this lane to ONE endpoint — the caller owns the
+     *  union across accounts; rotation is disabled when pinned. */
+    private pinnedUrl?: string,
   ) {}
 
-  /** Current WSS candidate — pool rotates on dead-lane/auth failures. */
+  /** Current WSS candidate — pool rotates on dead-lane/auth failures
+   *  (single-candidate lanes when pinned). */
   private get url(): string | undefined {
+    if (this.pinnedUrl) return this.pinnedUrl;
     const pool = this.chain.wssUrls?.length ? this.chain.wssUrls : [this.chain.wssUrl].filter(Boolean) as string[];
     return pool[this.urlIdx % pool.length];
   }
 
   private rotate(reason: string): boolean {
+    if (this.pinnedUrl) return false; // union lanes never rotate — dead is dead
     const pool = this.chain.wssUrls ?? [];
     if (pool.length < 2) return false;
     this.urlIdx = (this.urlIdx + 1) % pool.length;
@@ -94,7 +100,7 @@ export class WssLane {
     // only fall back to RPC polling once the whole pool is exhausted.
     if (this.consecutiveFails >= WssLane.MAX_FAILS && hardQuota) {
       if (this.rotate('quota')) { setTimeout(() => void this.start(), 500); return; }
-      this.log.warn(`${this.chain.key} WSS dead-lane: all candidates quota-blocked, falling back to RPC poll`);
+      this.log.warn(`${this.chain.key} WSS dead-lane: ${this.pinnedUrl ? 'union member' : 'all candidates'} quota-blocked, ${this.pinnedUrl ? 'lane retired' : 'falling back to RPC poll'}`);
       this.destroyed = true;
       return;
     }
