@@ -58,30 +58,45 @@ export class RpcPool {
     return set[this.cursor] === best ? set[(this.cursor + 1) % set.length] : best;
   }
 
-  private penalize(m: Member) {
-    m.failures++;
-    m.cooldownUntil = Date.now() + COOLDOWN_MS * Math.min(m.failures, 5);
-    this.log.warn(`${this.chain.key} endpoint cooled down`, { url: hostOf(m.url), failures: m.failures });
+  /** Ms until the earliest member exits cooldown (0 when one is live). */
+  private cooldownWaitMs(): number {
+    const now = Date.now();
+    if (this.members.some((m) => m.cooldownUntil <= now)) return 0;
+    return Math.min(...this.members.map((m) => m.cooldownUntil)) - now;
   }
 
-  /** Raw JSON-RPC call with failover. Retries each member once on 429/timeout. */
+  private penalize(m: Member, is429: boolean) {
+    m.failures++;
+    m.cooldownUntil = Date.now() + (is429 ? COOLDOWN_MS * 3 : COOLDOWN_MS) * Math.min(m.failures, 5);
+    // throttle log spam — only state transitions and powers of 10
+    if (m.failures <= 3 || m.failures % 25 === 0) {
+      this.log.warn(`${this.chain.key} endpoint cooled down`, { url: hostOf(m.url), failures: m.failures, is429 });
+    }
+  }
+
+  /** Raw JSON-RPC call with failover. Waits out cooldowns instead of
+   *  hot-looping 429s; retries each member once per invocation. */
   async call<T = unknown>(method: string, params: unknown[]): Promise<T> {
     let lastErr: unknown;
-    for (let i = 0; i < this.members.length; i++) {
-      const m = this.pick();
-      const t0 = performance.now();
-      try {
-        const res = await Promise.race([
-          m.provider.send(method, params),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('rpc_timeout')), TIMEOUT_MS)),
-        ]);
-        m.ewmaMs = m.ewmaMs * (1 - EWMA_ALPHA) + (performance.now() - t0) * EWMA_ALPHA;
-        m.failures = 0;
-        return res as T;
-      } catch (e) {
-        lastErr = e;
-        if (isTransportError(e)) this.penalize(m);
-        else throw e; // deterministic payload errors are not transport faults
+    for (let round = 0; round < 2; round++) {
+      const wait = this.cooldownWaitMs();
+      if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 5_000)));
+      for (let i = 0; i < this.members.length; i++) {
+        const m = this.pick();
+        const t0 = performance.now();
+        try {
+          const res = await Promise.race([
+            m.provider.send(method, params),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('rpc_timeout')), TIMEOUT_MS)),
+          ]);
+          m.ewmaMs = m.ewmaMs * (1 - EWMA_ALPHA) + (performance.now() - t0) * EWMA_ALPHA;
+          m.failures = 0;
+          return res as T;
+        } catch (e) {
+          lastErr = e;
+          if (isTransportError(e)) this.penalize(m, isRateLimit(e));
+          else throw e; // deterministic payload errors are not transport faults
+        }
       }
     }
     throw lastErr;
@@ -117,6 +132,11 @@ const isTransportError = (e: unknown): boolean => {
     s.includes('ENOTFOUND') ||
     s.includes('SERVER_ERROR')
   );
+};
+
+const isRateLimit = (e: unknown): boolean => {
+  const s = String((e as { message?: string })?.message ?? e);
+  return s.includes('429') || s.includes('rate limit') || s.includes('code\":15') || s.includes('"code":15');
 };
 
 const hostOf = (url: string) => {

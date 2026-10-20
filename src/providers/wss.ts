@@ -16,7 +16,9 @@ export class WssLane {
   private provider?: ethers.WebSocketProvider;
   private destroyed = false;
   private reconnectMs = 1_000;
+  private consecutiveFails = 0;
   private log = logger('wss');
+  private static MAX_FAILS = 6;
 
   constructor(
     private chain: ChainConfig,
@@ -55,15 +57,26 @@ export class WssLane {
       socket.on?.('error', () => this.scheduleReconnect());
 
       this.reconnectMs = 1_000;
+      this.consecutiveFails = 0;
       this.log.info(`${this.chain.key} WSS connected`);
     } catch (e) {
-      this.log.error(`${this.chain.key} WSS connect failed`, e);
-      this.scheduleReconnect();
+      this.consecutiveFails++;
+      this.log.error(`${this.chain.key} WSS connect failed (${this.consecutiveFails})`, e);
+      this.scheduleReconnect(e);
     }
   }
 
-  private scheduleReconnect() {
+  private scheduleReconnect(err?: unknown) {
     if (this.destroyed) return;
+    const msg = String((err as { message?: string })?.message ?? err ?? '');
+    const hardQuota = msg.includes('rate limit') || msg.includes('paid plan') || msg.includes('"code":15');
+    // dead-lane circuit: persistent hard-quota failures mean the endpoint
+    // can't serve this account — stop hammering, runner polls instead.
+    if (this.consecutiveFails >= WssLane.MAX_FAILS && hardQuota) {
+      this.log.warn(`${this.chain.key} WSS dead-lane: quota-blocked, falling back to RPC poll`);
+      this.destroyed = true;
+      return;
+    }
     const wait = this.reconnectMs;
     this.reconnectMs = Math.min(this.reconnectMs * 2, 30_000);
     setTimeout(() => void this.start(), wait);

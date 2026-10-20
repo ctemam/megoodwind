@@ -30,7 +30,10 @@ export class Discovery {
 
   constructor(private chain: ChainConfig, private rpc: RpcPool) {}
 
-  /** Boot phase — build the initial pool universe from on-chain state. */
+  /** Boot phase — build the initial pool universe from on-chain state.
+   *  Call-budget disciplined: DS pair feed supplies CANDIDATE pairs (cheap
+   *  host), factory getPool/getPair VERIFY existence on-chain (truth).
+   *  Full-brute matrix only for top-12 tokens to catch what feeds miss. */
   async boot(): Promise<void> {
     const t0 = performance.now();
     const tokens = (await tokensForChain(this.chain, this.rpc))
@@ -39,10 +42,47 @@ export class Discovery {
 
     const factories = factoriesFor(this.chain.key).slice(0, cfg.DISCOVERY_MAX_FACTORIES);
     let found = 0;
+
+    // Phase 1: candidate-pair verify — token pairs observed by the feed
+    // (one factory call per pair, not the full Cartesian matrix)
+    const candidatePairs = await this.feedPairs(tokens);
     for (const f of factories) {
-      found += await this.factoryMatrix(f, tokens);
+      found += await this.verifyPairs(f, candidatePairs);
     }
+
+    // Phase 2: bounded matrix over top-12 — on-chain discovery for pairs
+    // the feed never listed (new/unindexed pools)
+    const matrixCap = tokens.slice(0, 12);
+    for (const f of factories) {
+      found += await this.factoryMatrix(f, matrixCap);
+    }
+
     log.info(`${this.chain.key} discovery boot: ${tokens.length} tokens, ${found} pools, ${(performance.now() - t0).toFixed(0)}ms`);
+  }
+
+  /** Candidate (tokenA,tokenB,fee?) tuples from the pair feed. */
+  private async feedPairs(tokens: DiscoveredToken[]): Promise<Map<string, { a: DiscoveredToken; b: DiscoveredToken; fee?: number }>> {
+    const { poolsForTokens } = await import('../feed/dexscreener.js');
+    const out = new Map<string, { a: DiscoveredToken; b: DiscoveredToken; fee?: number }>();
+    const byAddr = new Map(tokens.map((t) => [t.address.toLowerCase(), t]));
+    const refs = await poolsForTokens(this.chain.key, tokens.map((t) => t.address));
+    for (const r of refs) {
+      const a = byAddr.get(r.token0.toLowerCase());
+      const b = byAddr.get(r.token1.toLowerCase());
+      if (!a || !b) continue;
+      const sig = `${r.token0.toLowerCase()}:${r.token1.toLowerCase()}:${r.feeBps}`;
+      if (!out.has(sig)) out.set(sig, { a, b, fee: r.kind === 'v3' ? r.feeBps * 100 : undefined });
+    }
+    return out;
+  }
+
+  private async verifyPairs(f: FactoryRef, pairs: Map<string, { a: DiscoveredToken; b: DiscoveredToken; fee?: number }>): Promise<number> {
+    const combos = [...pairs.values()].flatMap((p) =>
+      f.kind === 'v3'
+        ? (p.fee !== undefined ? [{ ...p, fee: p.fee }] : f.feeTiers.map((fee) => ({ ...p, fee })))
+        : [{ a: p.a, b: p.b, fee: undefined as number | undefined }],
+    );
+    return this.runCombos(f, combos);
   }
 
   /** Pair matrix against one factory — chunked batched eth_calls. */
@@ -54,7 +94,15 @@ export class Discovery {
         else combos.push({ a: tokens[i], b: tokens[j] });
       }
     }
+    return this.runCombos(f, combos);
+  }
+
+  private async runCombos(
+    f: FactoryRef,
+    combos: { a: DiscoveredToken; b: DiscoveredToken; fee?: number }[],
+  ): Promise<number> {
     let found = 0;
+    let delay = cfg.DISCOVERY_BATCH_DELAY_MS;
     for (let i = 0; i < combos.length; i += cfg.DISCOVERY_BATCH_SIZE) {
       const chunk = combos.slice(i, i + cfg.DISCOVERY_BATCH_SIZE);
       const calls = chunk.map((c) => ({
@@ -76,9 +124,11 @@ export class Discovery {
         this.upsertPool(f, pool, a, b, fee);
         found++;
       });
-      // Rate-limit throttle — fixed micro-delay between batches, extended
-      // adaptively when the batch observed transport failures (429s).
-      const delay = cfg.DISCOVERY_BATCH_DELAY_MS * (failures > 10 ? 4 : 1);
+      // Adaptive throttle — delay doubles while batches keep failing,
+      // decays back to base on clean batches. Cap 2s.
+      delay = failures > 10
+        ? Math.min(delay * 2, 2_000)
+        : Math.max(cfg.DISCOVERY_BATCH_DELAY_MS, Math.floor(delay / 2));
       if (i + cfg.DISCOVERY_BATCH_SIZE < combos.length) await sleep(delay);
     }
     return found;
