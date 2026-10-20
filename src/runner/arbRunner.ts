@@ -12,6 +12,7 @@ import { registry } from '../pools/registry.js';
 import { breaker } from '../forensics/baitPool.js';
 import { metrics } from '../telemetry/metrics.js';
 import { startMetricsServer } from '../telemetry/metricsServer.js';
+import { Discovery } from '../discovery/discovery.js';
 
 /**
  * arb-runner — primary orchestration loop.
@@ -78,10 +79,19 @@ async function cycle(
   chain: ChainConfig,
   rpc: RpcPool,
   scheduler: VariantScheduler,
+  discovery: Discovery,
 ): Promise<void> {
   const variant = scheduler.next();
 
-  // CPU-eval ALL items first — zero per-item RPC before this point
+  // Discovery phase: pull newly deployed pools (bounded, skips same-block)
+  await discovery.scanNewPools().catch((e) => log.debug(`${chain.key} scanNewPools`, e));
+
+  // ONE merged refresh across ALL tracked pools — graph edges need live
+  // state before CPU-eval (latency discipline: never per-item RPC).
+  const tracked = registry.all(chain.key);
+  if (!tracked.length) return;
+  await refreshPools(rpc, tracked);
+
   const baseFeeWei = (await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false])
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
     .catch(() => 0n)) ?? 0n;
@@ -93,10 +103,6 @@ async function cycle(
     sizeOf: () => SIZE_TABLE.default,
   });
   if (!candidates.length) return;
-
-  // ONE merged refresh for all pools touched by survivors
-  const touched = [...new Map(candidates.flatMap((c) => c.legs.map((l) => [l.pool.address, l.pool]))).values()];
-  await refreshPools(rpc, touched);
 
   // submit loop — best candidate first, probe gates each
   for (const cand of candidates.slice(0, 3)) {
@@ -129,7 +135,17 @@ async function main() {
   await whale.start();
   startMetricsServer(() => scheduler.snapshot());
 
-  // bootstrap ingest, then SCAN_INTERVAL loop; newHeads also nudge cycles
+  // Discovery phase — on-chain factory matrix + token lists per chain
+  const discoveries = new Map<string, Discovery>(
+    chains.map((c) => [c.key, new Discovery(c, rpcs.get(c.key)!)]),
+  );
+  for (const c of chains) {
+    const d = discoveries.get(c.key)!;
+    await d.boot().catch((e) => log.warn(`${c.key} discovery boot`, e));
+    d.startLoop();
+  }
+
+  // DexScreener enrichment (liquidity/price metadata — NOT pool discovery)
   for (const c of chains) await ingest(c).catch((e) => log.warn(`${c.key} ingest`, e));
   log.info(`registry: ${chains.map((c) => `${c.key}=${registry.all(c.key).length}`).join(' ')}`);
 
@@ -137,7 +153,7 @@ async function main() {
   const tick = async (c: ChainConfig) => {
     if (running.has(c.key)) return;
     running.add(c.key);
-    try { await cycle(c, rpcs.get(c.key)!, scheduler); }
+    try { await cycle(c, rpcs.get(c.key)!, scheduler, discoveries.get(c.key)!); }
     catch (e) { log.error(`${c.key} cycle`, e); }
     finally { running.delete(c.key); }
   };
@@ -148,6 +164,7 @@ async function main() {
   scout.on('head', (c: ChainConfig) => void tick(c));
 
   const shutdown = async () => {
+    for (const d of discoveries.values()) d.stop();
     await scout.stop();
     whale.stop();
     process.exit(0);

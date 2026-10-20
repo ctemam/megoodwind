@@ -54,25 +54,39 @@ const envSchema = z.object({
   EV_CHAINS: z.string().default(''),
   P09_ENABLED: z.coerce.boolean().default(false),
   RPC_PRIVATE_CHAINS: z.string().default(''),
+
+  // Discovery engine — automated multi-chain expansion (no manual registration)
+  TOKEN_LIST_URLS: z.string().default('https://tokens.uniswap.org'),
+  DISCOVERY_TOP_TOKENS: z.coerce.number().default(60),
+  DISCOVERY_RESCAN_SECS: z.coerce.number().default(300),
+  DISCOVERY_MAX_FACTORIES: z.coerce.number().default(8),
 });
 
-export type ChainKey =
-  | 'eth' | 'bsc' | 'poly' | 'arb' | 'op'
-  | 'avax' | 'base' | 'linea' | 'scroll' | 'blast';
+/** Generic chain key — any string. The 10 provisioned chains ship with
+ *  known IDs; ANY additional chain joins the fleet by setting
+ *  `CHAIN_ID_<KEY>` + keyed `<KEY>_RPC_URLS` in env — zero code edits. */
+export type ChainKey = string;
 
-export const CHAIN_ID: Record<ChainKey, number> = {
+export const KNOWN_CHAIN_ID: Record<string, number> = {
   eth: 1, bsc: 56, poly: 137, arb: 42161, op: 10,
   avax: 43114, base: 8453, linea: 59144, scroll: 534352, blast: 81457,
 };
 
+export function chainIdFor(key: ChainKey): number {
+  const envKey = `CHAIN_ID_${key.toUpperCase()}`;
+  const fromEnv = process.env[envKey];
+  if (fromEnv) return Number(fromEnv);
+  const known = KNOWN_CHAIN_ID[key];
+  if (known) return known;
+  throw new Error(`unknown chain '${key}' — set ${envKey}=<eip155 chainId>`);
+}
+
 export const CHAIN_BY_ID: Record<number, ChainKey> = Object.fromEntries(
-  Object.entries(CHAIN_ID).map(([k, v]) => [v, k as ChainKey]),
+  Object.entries(KNOWN_CHAIN_ID).map(([k, v]) => [v, k]),
 );
 
-export const ENV_PREFIX: Record<ChainKey, string> = {
-  eth: 'ETH', bsc: 'BSC', poly: 'POLY', arb: 'ARB', op: 'OP',
-  avax: 'AVAX', base: 'BASE', linea: 'LINEA', scroll: 'SCROLL', blast: 'BLAST',
-};
+/** Env var prefix for a chain — convention is the uppercase key. */
+export const envPrefixFor = (key: ChainKey): string => key.toUpperCase();
 
 const raw = envSchema.parse(process.env);
 
@@ -89,8 +103,7 @@ export function assertPrivateUrl(url: string, wss = false): string {
 }
 
 function collect(kind: 'RPC_URLS' | 'RPC_URL' | 'WSS_URL', chain: ChainKey): string[] {
-  const prefix = ENV_PREFIX[chain];
-  const val = process.env[`${prefix}_${kind}`];
+  const val = process.env[`${envPrefixFor(chain)}_${kind}`];
   if (!val) return [];
   return csv(val).map((u) => assertPrivateUrl(u, kind === 'WSS_URL'));
 }
@@ -107,13 +120,13 @@ export interface ChainConfig {
 
 export const cfg = {
   ...raw,
-  activeChains: csv(raw.ACTIVE_CHAINS) as ChainKey[],
-  predictiveChains: csv(raw.PREDICTIVE_CHAINS) as ChainKey[],
-  backrunChains: csv(raw.BACKRUN_CHAINS) as ChainKey[],
-  auctionChains: csv(raw.AUCTION_CHAINS) as ChainKey[],
+  activeChains: csv(raw.ACTIVE_CHAINS),
+  predictiveChains: csv(raw.PREDICTIVE_CHAINS),
+  backrunChains: csv(raw.BACKRUN_CHAINS),
+  auctionChains: csv(raw.AUCTION_CHAINS),
   strategies: csv(raw.STRATEGIES),
-  evChains: csv(raw.EV_CHAINS) as ChainKey[],
-  privateChains: csv(raw.RPC_PRIVATE_CHAINS) as ChainKey[],
+  evChains: csv(raw.EV_CHAINS),
+  privateChains: csv(raw.RPC_PRIVATE_CHAINS),
 };
 
 export function chainConfig(chain: ChainKey): ChainConfig {
@@ -127,11 +140,11 @@ export function chainConfig(chain: ChainKey): ChainConfig {
   const wss = collect('WSS_URL', chain);
   return {
     key: chain,
-    chainId: CHAIN_ID[chain],
+    chainId: chainIdFor(chain),
     rpcUrls: pool.length ? pool : fallback,
     fallbackRpcUrl: fallback[0],
     wssUrl: wss[0],
-    executor: process.env[`ALLBRIGHT_EXECUTOR_${ENV_PREFIX[chain]}`],
+    executor: process.env[`ALLBRIGHT_EXECUTOR_${envPrefixFor(chain)}`],
     role,
   };
 }

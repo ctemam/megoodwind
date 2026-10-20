@@ -6,6 +6,7 @@ import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT } from '../math/profit.js';
 import { breaker } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards } from '../engine/predictiveEngine.js';
 import { logger } from '../config/logger.js';
+import { buildEdges, findCycles } from './graph.js';
 
 /**
  * Strategy solver — CPU-eval ALL items before any RPC.
@@ -122,7 +123,15 @@ export function solve(
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
+  const seenPaths = new Set<string>();
   const strat = new Set(cfg.strategies);
+  const push = (c: Candidate | null) => {
+    if (!c) return;
+    const sig = c.legs.map((l) => l.pool.address.toLowerCase()).join('>');
+    if (seenPaths.has(sig)) return;
+    seenPaths.add(sig);
+    cands.push(c);
+  };
 
   // --- P01: cross-venue 2-hop on same pair, different pools ---
   if (strat.has('P01') || strat.has('TRACE')) {
@@ -146,8 +155,8 @@ export function solve(
           for (const legs of [legsAB, legsBA]) {
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(legs[0].tokenIn);
-            const c = emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1);
-            if (c) cands.push(c);
+            const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1;
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd));
           }
         }
       }
@@ -184,11 +193,24 @@ export function solve(
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(a);
             const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1);
-            if (cnd) cands.push(cnd);
+            push(cnd);
           }
         }
       }
     }
+  }
+
+  // --- graph discovery: Bellman-Ford negative cycles across ALL
+  //     discovered pools — arbitrary n-hop cycles, not just triangles ---
+  const edges = buildEdges(pools);
+  for (const legs of findCycles(edges)) {
+    const label = legs.length <= 2 ? 'P01' : 'P02';
+    if (!strat.has(label)) continue;
+    if (!pathScreen(chain, legs, v)) continue;
+    const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
+    if (usd === undefined) continue; // unpriced borrow token = dishonest net
+    const borrow = opts.sizeOf(legs[0].tokenIn);
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd));
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

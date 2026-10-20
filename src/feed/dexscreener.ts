@@ -9,10 +9,11 @@ import { DexKind, PoolRef } from '../pools/registry.js';
  * on-chain state before sizing.
  */
 
-const DS_CHAIN: Record<ChainKey, string> = {
+const DS_CHAIN: Record<string, string> = {
   eth: 'ethereum', bsc: 'bsc', poly: 'polygon', arb: 'arbitrum', op: 'optimism',
   avax: 'avalanche', base: 'base', linea: 'linea', scroll: 'scroll', blast: 'blast',
 };
+const dsChain = (key: ChainKey): string => DS_CHAIN[key] ?? key;
 
 const log = logger('dexscreener');
 const BASE = 'https://api.dexscreener.com';
@@ -84,7 +85,7 @@ export async function poolsForTokens(chain: ChainKey, tokenAddrs: string[]): Pro
   const out: PoolRef[] = [];
   for (let i = 0; i < tokenAddrs.length; i += 30) {
     const chunk = tokenAddrs.slice(i, i + 30).join(',');
-    const data = await dsFetch<{ pairs?: DSPair[] }>(`/tokens/v1/${DS_CHAIN[chain]}/${chunk}`);
+    const data = await dsFetch<{ pairs?: DSPair[] }>(`/tokens/v1/${dsChain(chain)}/${chunk}`);
     for (const p of data?.pairs ?? []) out.push(toPoolRef(chain, p));
   }
   return out;
@@ -96,6 +97,6 @@ export async function topPools(chain: ChainKey, query: string): Promise<PoolRef[
     `/latest/dex/search?q=${encodeURIComponent(query)}`,
   );
   return (data?.pairs ?? [])
-    .filter((p) => p.chainId === DS_CHAIN[chain])
+    .filter((p) => p.chainId === dsChain(chain))
     .map((p) => toPoolRef(chain, p));
 }

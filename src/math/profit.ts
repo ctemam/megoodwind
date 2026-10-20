@@ -38,7 +38,7 @@ export function netUsd(i: CostInput): NetResult {
   const premiumUsd = (Number(i.flashPremiumToken) / 1e18) * i.tokenUsd;
 
   let bribeUsd = 0;
-  if (cfg.auctionChains.includes(i.chain as never)) {
+  if (cfg.auctionChains.includes(i.chain)) {
     bribeUsd = Math.max(0, (grossUsd - gasUsd - premiumUsd) * (cfg.COINBASE_BRIBE_PCT_MAX / 100));
   }
 
