@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+import {IBalancerVault, IFlashLoanRecipient, IAavePool, IFlashLoanSimpleReceiver} from "./interfaces/IFlash.sol";
+import {ISwapRouter, IUniswapV2Pair} from "./interfaces/IDex.sol";
+
+/// @title AllBrightExecutor — flash-loan arbitrage executor.
+/// @notice Item #5 (Balancer V2 primary, 0% fee) + Item #6 (Aave V3 fallback,
+///         0.09% fee) + Item #7 (UniV3/V2 leg execution) + Item #9 (OZ guards).
+///         Atomicity law (Item #1): every leg lives inside one flash callback —
+///         the whole loop succeeds or the whole tx reverts. Last-hop minOut is
+///         the repay amount so a decayed spread reverts instead of losing money.
+///         Owner = ERC-4337 smart account (Kernel); entries arrive via UserOp.
+contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, ReentrancyGuard, Ownable {
+    using SafeERC20 for IERC20;
+
+    enum FlashSource { BALANCER, AAVE }
+    enum DexKind { V2_PAIR, V3_ROUTER }
+
+    struct Hop {
+        DexKind kind;
+        address venue;      // V2: pair address. V3: ISwapRouter address.
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;         // V3 fee tier (100/500/3000/10000)
+        uint16 feeBps;      // V2 swap fee in bps (30 = 0.3%)
+    }
+
+    struct ArbPlan {
+        FlashSource source;
+        address borrowToken;
+        uint256 borrowAmount;
+        Hop[] hops;
+        uint256 minOut;     // last-hop floor — set = repay amount by caller
+        uint256 minProfit;  // post-repay profit floor in borrowToken units
+    }
+
+    address public balancerVault;   // 0 on chains without Balancer V2 (e.g. BSC)
+    address public aavePool;        // Aave V3 Pool
+    bool private _inFlash;
+
+    event ArbSettled(address indexed borrowToken, uint256 borrowed, uint256 profit);
+    event VenuesUpdated(address balancerVault, address aavePool);
+    event Swept(address indexed token, address indexed to, uint256 amount);
+
+    error NotFlashProvider();
+    error VenueUnset(FlashSource source);
+    error BadPlan();
+    error ProfitFloor(uint256 got, uint256 want);
+
+    constructor(address _balancerVault, address _aavePool) Ownable(msg.sender) {
+        balancerVault = _balancerVault;
+        aavePool = _aavePool;
+    }
+
+    function setVenues(address _balancerVault, address _aavePool) external onlyOwner {
+        balancerVault = _balancerVault;
+        aavePool = _aavePool;
+        emit VenuesUpdated(_balancerVault, _aavePool);
+    }
+
+    /// @notice Owner entry — decode plan and pull capital from the chosen engine.
+    function exec(bytes calldata planBytes) external onlyOwner nonReentrant {
+        ArbPlan memory plan = abi.decode(planBytes, (ArbPlan));
+        if (plan.borrowToken == address(0) || plan.borrowAmount == 0 || plan.hops.length == 0) {
+            revert BadPlan();
+        }
+        _inFlash = true;
+        if (plan.source == FlashSource.BALANCER) {
+            if (balancerVault == address(0)) revert VenueUnset(plan.source);
+            address[] memory t = new address[](1);
+            uint256[] memory a = new uint256[](1);
+            t[0] = plan.borrowToken;
+            a[0] = plan.borrowAmount;
+            IBalancerVault(balancerVault).flashLoan(address(this), t, a, planBytes);
+        } else {
+            if (aavePool == address(0)) revert VenueUnset(plan.source);
+            IAavePool(aavePool).flashLoanSimple(address(this), plan.borrowToken, plan.borrowAmount, planBytes, 0);
+        }
+        _inFlash = false;
+    }
+
+    /// Item #5 — Balancer V2 callback (0% fee: feeAmounts[0] == 0 on most pools).
+    function receiveFlashLoan(
+        address[] memory tokens,
+        uint256[] memory amounts,
+        uint256[] memory feeAmounts,
+        bytes memory userData
+    ) external override {
+        if (msg.sender != balancerVault || !_inFlash) revert NotFlashProvider();
+        ArbPlan memory plan = abi.decode(userData, (ArbPlan));
+        uint256 pre = IERC20(plan.borrowToken).balanceOf(address(this)) - amounts[0];
+        _runHops(plan);
+        uint256 repay = amounts[0] + feeAmounts[0];
+        IERC20(tokens[0]).safeTransfer(balancerVault, repay);
+        _checkProfit(plan, pre);
+    }
+
+    /// Item #6 — Aave V3 callback. Pool pulls repay via allowance.
+    function executeOperation(
+        address asset,
+        uint256 amount,
+        uint256 premium,
+        address initiator,
+        bytes calldata params
+    ) external override returns (bool) {
+        if (msg.sender != aavePool || initiator != address(this) || !_inFlash) revert NotFlashProvider();
+        ArbPlan memory plan = abi.decode(params, (ArbPlan));
+        uint256 pre = IERC20(asset).balanceOf(address(this)) - amount;
+        _runHops(plan);
+        IERC20(asset).forceApprove(aavePool, amount + premium);
+        _checkProfitAfterPull(plan, pre, amount + premium);
+        return true;
+    }
+
+    function _runHops(ArbPlan memory plan) internal {
+        uint256 n = plan.hops.length;
+        for (uint256 i; i < n; i++) {
+            Hop memory h = plan.hops[i];
+            uint256 amountIn = IERC20(h.tokenIn).balanceOf(address(this));
+            bool last = i == n - 1;
+            if (h.kind == DexKind.V2_PAIR) {
+                _swapV2(h, amountIn, last ? plan.minOut : 0);
+            } else {
+                _swapV3(h, amountIn, last ? plan.minOut : 0);
+            }
+        }
+    }
+
+    function _swapV2(Hop memory h, uint256 amountIn, uint256 minOut) internal {
+        IUniswapV2Pair pair = IUniswapV2Pair(h.venue);
+        (uint112 r0, uint112 r1,) = pair.getReserves();
+        bool zeroForOne = pair.token0() == h.tokenIn;
+        (uint256 rIn, uint256 rOut) = zeroForOne ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
+        uint256 inAfterFee = amountIn * (10_000 - h.feeBps);
+        uint256 out = (inAfterFee * rOut) / (rIn * 10_000 + inAfterFee);
+        require(out >= minOut, "V2_MINOUT");
+        IERC20(h.tokenIn).safeTransfer(h.venue, amountIn);
+        pair.swap(zeroForOne ? 0 : out, zeroForOne ? out : 0, address(this), "");
+    }
+
+    function _swapV3(Hop memory h, uint256 amountIn, uint256 minOut) internal {
+        IERC20(h.tokenIn).forceApprove(h.venue, amountIn);
+        ISwapRouter(h.venue).exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: h.tokenIn,
+                tokenOut: h.tokenOut,
+                fee: h.fee,
+                recipient: address(this),
+                deadline: block.timestamp,
+                amountIn: amountIn,
+                amountOutMinimum: minOut,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _checkProfit(ArbPlan memory plan, uint256 pre) internal {
+        uint256 post = IERC20(plan.borrowToken).balanceOf(address(this));
+        if (post < pre + plan.minProfit) revert ProfitFloor(post - pre, plan.minProfit);
+        emit ArbSettled(plan.borrowToken, plan.borrowAmount, post - pre);
+    }
+
+    /// Aave pulls repay after callback returns — measure against expected post-pull balance.
+    function _checkProfitAfterPull(ArbPlan memory plan, uint256 pre, uint256 repay) internal {
+        uint256 bal = IERC20(plan.borrowToken).balanceOf(address(this));
+        if (bal < repay) revert ProfitFloor(0, repay);
+        uint256 post = bal - repay;
+        if (post < pre + plan.minProfit) revert ProfitFloor(post - pre, plan.minProfit);
+        emit ArbSettled(plan.borrowToken, plan.borrowAmount, post - pre);
+    }
+
+    /// @notice Profit sweep to PROFIT_WALLET (owner decides recipient).
+    function sweep(address token, address to, uint256 amount) external onlyOwner {
+        IERC20(token).safeTransfer(to, amount);
+        emit Swept(token, to, amount);
+    }
+
+    function sweepEth(address payable to) external onlyOwner {
+        to.transfer(address(this).balance);
+    }
+
+    receive() external payable {}
+}

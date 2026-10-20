@@ -1,0 +1,35 @@
+{
+  "name": "allbright-arb",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AllBright flash-loan arbitrage engine — ERC-4337 execution, private-RPC only",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "runner": "tsx src/runner/arbRunner.ts",
+    "scout": "tsx src/scout/scoutListener.ts",
+    "dashboard": "node apps/dashboard/server/index.js",
+    "metrics": "tsx src/telemetry/metricsServer.ts",
+    "test:anvil": "tsx test/anvil/forkDiagnostics.ts"
+  },
+  "dependencies": {
+    "@flashbots/ethers-provider-bundle": "^1.0.0",
+    "dotenv": "16.4.5",
+    "ethers": "6.13.5",
+    "express": "4.21.2",
+    "http-proxy-middleware": "^3.0.3",
+    "permissionless": "^0.5.0",
+    "viem": "^2.57.7",
+    "ws": "8.18.0",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "^5.1.0",
+    "@types/express": "4.17.21",
+    "@types/node": "22.10.2",
+    "@types/ws": "8.5.13",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2"
+  }
+}

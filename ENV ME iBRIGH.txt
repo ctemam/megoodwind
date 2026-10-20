@@ -1,0 +1,189 @@
+# ── RPC: private free-tier only (AGENTS §36.9) ──────────────────────
+# AllBright runs on PRIVATE keyed endpoints — shared public RPCs are
+# removed from the production path (rate limits = blindness).
+# Set a provider key once: it auto-provisions a private endpoint on
+# every chain the provider supports and PREPENDS it ahead of public
+# capacity. Advertised free tiers (provider-published, not measured):
+#   Alchemy     ~300M CU/mo     all 10 chains
+#   Infura      ~100k req/day   all 10 chains
+#   dRPC        free tier       all 10 — debug/trace included
+#   BlastAPI    ~12M calls/mo   all 10 chains
+#   Ankr        ~30 req/s       all 10 chains
+#   Chainstack  3M RU/mo        eth bsc arb op poly avax base
+#   BlockPI     ~50M RU/mo      all 10 chains
+#   Nodit       free tier       bsc arb op poly base
+#   Tenderly    free tier       eth bsc arb op poly avax base
+#   NOWNodes    ~100k req/day   eth bsc arb op poly avax base
+#   Moralis     ~40k CU/day     eth bsc arb op poly avax base
+#   OnFinality  ~500k req/day   eth bsc arb op poly avax base
+#   NodeReal    free tier       eth bsc arb op poly base
+#   Chainnodes  free tier       eth bsc arb op poly base
+#   AllThatNode free tier       eth bsc arb op poly avax base
+#   Dwellir     free tier       eth bsc arb op poly avax base
+ALCHEMY_API_KEY=
+INFURA_API_KEY=
+DRPC_API_KEY=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BLASTAPI_KEY=
+ANKR_API_KEY=330dc9d6b76374cac1093d5b2ae629affa66260164798573210688405acf83e7
+SWIFTNODES_API_KEY=sn_HV5Ws_plVLJZj93RMHKthCb4uIaEjTYA
+NODEFLARE_API_KEY=nf_live_53c475474977fda43ee490d4e4b99a1506c189a84b574a708dea12b534826100
+CHAINSTACK_API_KEY=
+BLOCKPI_API_KEY=
+NODIT_API_KEY=
+TENDERLY_API_KEY=
+NOWNODES_API_KEY=
+MORALIS_API_KEY=
+ONFINALITY_API_KEY=
+NODEREAL_API_KEY=
+CHAINNODES_API_KEY=
+ALLTHATNODE_API_KEY=
+DVELLIR_API_KEY=
+
+# Paste-in keyed providers — can't be templated from a bare key
+# (per-endpoint subdomain + token). Generate on the free tier and
+# paste the FULL URL into <CHAIN>_RPC_URLS below:
+#   QuickNode  10M credits/mo · 80+ chains · MEV-protect add-on
+#              https://<subdomain>.<net>.quiknode.pro/<token>/
+#   GetBlock   ~50k req/day · https://go.getblock.io/<token>/
+#   Zan        free tier    · https://api.zan.top/node/v1/<net>/<key>
+# Verified keyless-premium URLs (PublicNode, Tenderly public gateway,
+# 1RPC, OnFinality public) already live in the pools below.
+# <CHAIN>_WSS_URL: private wss endpoint for event-driven ingestion.
+
+# Per-chain pools — comma-separated, PRIVATE keyed URLs only.
+# Empty until keys above or explicit private URLs are set.
+# PRIVATE-ONLY (Commander protocol 2026-10-18): public/shared RPC is
+# forbidden. Every URL below is a verified keyed dRPC endpoint; the
+# DRPC_API_KEY expansion also prepends lb.drpc.org/ogrpc ahead of each
+# pool. Keyless floor is frozen out via RPC_PRIVATE_CHAINS (all 10).
+ETH_RPC_URL=https://lb.drpc.live/ethereum/AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+ARB_RPC_URL=https://lb.drpc.org/ogrpc?network=arbitrum&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+OP_RPC_URL=https://lb.drpc.org/ogrpc?network=optimism&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+POLY_RPC_URL=https://lb.drpc.live/polygon/AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BSC_RPC_URL=https://lb.drpc.live/bsc/AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+AVAX_RPC_URL=https://lb.drpc.org/ogrpc?network=avalanche&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BASE_RPC_URL=https://lb.drpc.org/ogrpc?network=base&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+LINEA_RPC_URL=https://lb.drpc.org/ogrpc?network=linea&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+SCROLL_RPC_URL=https://lb.drpc.org/ogrpc?network=scroll&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BLAST_RPC_URL=https://lb.drpc.org/ogrpc?network=blast&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+
+# Per-chain pools — keyed URLs only, verified live 2026-10-18
+# (eth_chainId + eth_subscribe newHeads; newPendingTransactions on
+# eth/bsc/poly). QUOTA-FIT (2026-10-18): one account-level free quota
+# means a second same-account endpoint only doubles requests during a
+# 429 window — pools hold ONE endpoint each; lb.drpc.live stays on the
+# _RPC_URL fallback (exec-path diversity, zero steady-state cost).
+ETH_RPC_URLS=https://lb.drpc.org/ogrpc?network=ethereum&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BSC_RPC_URLS=https://lb.drpc.org/ogrpc?network=bsc&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+POLY_RPC_URLS=https://lb.drpc.org/ogrpc?network=polygon&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+ARB_RPC_URLS=https://lb.drpc.org/ogrpc?network=arbitrum&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+OP_RPC_URLS=https://lb.drpc.org/ogrpc?network=optimism&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+AVAX_RPC_URLS=https://lb.drpc.org/ogrpc?network=avalanche&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BASE_RPC_URLS=https://lb.drpc.org/ogrpc?network=base&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+LINEA_RPC_URLS=https://lb.drpc.org/ogrpc?network=linea&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+SCROLL_RPC_URLS=https://lb.drpc.org/ogrpc?network=scroll&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BLAST_RPC_URLS=https://lb.drpc.org/ogrpc?network=blast&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+RPC_PRIVATE_CHAINS=eth,bsc,poly,arb,op,avax,base,linea,scroll,blast
+
+# Velora Market API (ex-ParaSwap)
+VELORA_API_KEY=
+
+# Server
+PORT=3001
+
+# Flashbots
+FLASHBOOTS_RELAY=https://relay.flashbots.net
+FLASHBOOTS_AUTH_KEY=
+
+# Pimlico (ERC-4337)
+PIMLICO_API_KEY=pim_Euij2eH5sRsb21GQxAXR6y
+
+# ZeroDev (ERC-4337)
+ZERODEV_PROJECT_ID=
+
+# Wallet (EOA owner of the ERC-4337 smart account)
+# Public address: 0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56
+PRIVATE_KEY=019ea201e7c9759554119f3ca5dd0a8abf659be1f75d672a1760faeece78251a
+
+# USD value of one wrapped-native unit
+NATIVE_USD=2674.87
+
+# Profit transfer
+PROFIT_TRANSFER_MODE=AUTO
+PROFIT_TRANSFER_MIN_USD=100
+PROFIT_WALLET=0x2eF34d88EC4EBBd5543fFF2784D5AdbC01f14D56
+
+# Execution
+AUTO_EXECUTE=true
+MIN_PROFIT_USD=5
+SCAN_INTERVAL_SECS=12
+ACTIVE_CHAINS=eth,bsc,poly
+# TRACE = settled-evidence template lane; P01/P02 = predictive-lane
+# cyclic candidates (2-hop cross-venue / 3-hop triangular on projected
+# state). Enabled per ToR III A1 — predictive zones eth,bsc,poly.
+STRATEGIES=TRACE,P01,P02
+
+# Deployed executor contracts (ALLBRIGHT_EXECUTOR_<CHAIN>)
+# All 10 chains: deployed 2026-10-08 via Kernel smart account (sponsored
+# UserOp → CREATE2 proxy, gasless). Same CREATE2 address on every chain.
+# owner = Kernel smart account 0x663050Be401F590E8E2c3F01f05536948275015B
+# Bytecode + owner() verified on-chain per chain.
+ALLBRIGHT_EXECUTOR_ETH=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_ARB=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_OP=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_POLY=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_BSC=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_AVAX=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_BASE=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_LINEA=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_SCROLL=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+ALLBRIGHT_EXECUTOR_BLAST=0x6614ecc774e4d5d595a6403058e2a0792f72025a
+# Private WSS for event-driven ingestion — dRPC keyed endpoints verified
+# live 2026-10-18 (chainId + eth_subscribe newHeads on all 10;
+# newPendingTransactions on eth/bsc/poly, the three predictive chains).
+ETH_WSS_URL=wss://lb.drpc.org/ogrpc?network=ethereum&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BSC_WSS_URL=wss://lb.drpc.org/ogrpc?network=bsc&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+POLY_WSS_URL=wss://lb.drpc.org/ogrpc?network=polygon&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+ARB_WSS_URL=wss://lb.drpc.org/ogrpc?network=arbitrum&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+OP_WSS_URL=wss://lb.drpc.org/ogrpc?network=optimism&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+AVAX_WSS_URL=wss://lb.drpc.org/ogrpc?network=avalanche&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BASE_WSS_URL=wss://lb.drpc.org/ogrpc?network=base&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+LINEA_WSS_URL=wss://lb.drpc.org/ogrpc?network=linea&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+SCROLL_WSS_URL=wss://lb.drpc.org/ogrpc?network=scroll&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+BLAST_WSS_URL=wss://lb.drpc.org/ogrpc?network=blast&dkey=AroJxU8sgEYfvv6GckN-TN4dY13iyzwR8Yn_bj3Fs6u0
+# EV-class opportunities — sub-floor edge, cheap-revert attempts
+# EV lane disabled — 0 realized settlements across ~765 attempts;
+# re-enable per-chain only when trace evidence shows net-positive.
+EV_CHAINS=
+EV_FLOOR_USD=0.01
+EV_EMIT_SECS=30
+# P09 predictive-dust lane killed at source (TRACE-01): ~77% of exec
+# attempts were sub-cent dry-run reverts. P03 divergence stays live.
+P09_ENABLED=0
+
+# ── ToR Part III: predictive-mode parameters (locked 2026-10-14) ──────
+# Chain topology split — public mempool exists => true predictive;
+# centralized sequencer => same-block backrun only.
+PREDICTIVE_CHAINS=eth,bsc,poly
+BACKRUN_CHAINS=arb,op,base,avax,linea,scroll,blast
+# V3 math guard — skip legs whose swap crosses >200 ticks (tick-walk
+# approximation error bound per ToR §2 matrix).
+MAX_TICK_DISTANCE=200
+# Hard floor enforcement — no emission path may bypass min_profit_usd.
+STRICT_PROFIT_FLOOR_GUARD=true
+# Bundle economics (eth) — builder tip share of gross profit.
+# AUCTION_CHAINS: chains whose net estimate deducts the expected ordering
+# bid (worst-case COINBASE_BRIBE_PCT_MAX share) from gross before the
+# profit floor — honest capturable-net qualification.
+AUCTION_CHAINS=eth
+COINBASE_BRIBE_PCT=50
+COINBASE_BRIBE_PCT_MAX=80
+# EIP-1559 circuit breaker — dormant above this base fee.
+MAX_BASE_FEE_GWEI=300
+PRIORITY_FEE_GWEI=5
+# Slippage guardrail (bps) on projected price.
+SLIPPAGE_BPS=15
+# FoT quarantine registry — measured on-chain (tools/token_tax.json);
+# solver loads tools/fot_blacklist.json.
+FOT_BLACKLIST_PATH=tools/fot_blacklist.json
+PEND_THROTTLE_MS=100

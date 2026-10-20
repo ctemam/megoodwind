@@ -1,0 +1,4 @@
+{
+  "_comment": "Fee-on-Transfer quarantine registry — measured on-chain via tools/token_tax.json methodology. Solver refuses any leg touching these tokens.",
+  "tokens": []
+}

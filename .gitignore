@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/leaders/
+data/*.log
+out/
+cache/
+broadcast/
+*.tsbuildinfo
+apps/dashboard/web/dist/
+apps/dashboard/web/node_modules/
