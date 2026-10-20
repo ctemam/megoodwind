@@ -117,14 +117,17 @@ export class Discovery {
       let transportFail = 0;
       const results = await multicall(this.rpc, calls, calls.length, () => transportFail++);
       let failures = transportFail;
+      const chunkPools: string[] = [];
       results.forEach((value, k) => {
         if (value === '0x' || value.length < 66) return;
         const pool = ethers.getAddress(`0x${value.slice(-40)}`);
         if (pool === ZERO) return;
         const { a, b, fee } = chunk[k];
         this.upsertPool(f, pool, a, b, fee);
+        chunkPools.push(pool);
         found++;
       });
+      breaker.checkRealVolumes(this.chain.key, chunkPools); // ONE batched Bitquery query per chunk
       // Adaptive throttle — delay doubles while batches keep failing,
       // decays back to base on clean batches. Cap 2s.
       delay = failures > 10

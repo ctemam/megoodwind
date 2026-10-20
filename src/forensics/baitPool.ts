@@ -6,6 +6,7 @@ import { v2SpotPrice } from '../math/univ2.js';
 import { v3SpotPrice } from '../math/univ3.js';
 import { CREDIBILITY_CEILING_PCT } from '../math/profit.js';
 import { addressReputation } from '../providers/blockscout.js';
+import { pairsWithRecentTrades } from '../providers/bitquery.js';
 import { logger } from '../config/logger.js';
 
 /**
@@ -38,6 +39,8 @@ export class TokenCircuitBreaker {
   private convicted = new Map<string, Conviction>(); // chain:addr -> conviction
   /** Blockscout explorer verdicts — 1 REST call per address, cached for the boot. */
   private repCache = new Map<string, { scam: boolean; at: number }>();
+  /** Bitquery volume checks — one batched query covers a whole chunk; addr set dedupes. */
+  private volChecked = new Set<string>();
 
   fileFor(chain: ChainKey): string {
     return join(DATA_DIR, chain, '_bait_pools.json');
@@ -102,6 +105,30 @@ export class TokenCircuitBreaker {
     });
   }
 
+  /** Batched real-volume check (Bitquery) — ONE query per chunk of pools.
+   *  Convicts `0 real trades in 72h AND >3x peer-divergent` — zero trades
+   *  alone is legal for new pools, divergence alone is already screened;
+   *  the combination is the bait signature. */
+  checkRealVolumes(chain: ChainKey, addrs: string[]) {
+    const fresh = addrs.filter((a) => {
+      const k = `${chain}:${a.toLowerCase()}`;
+      if (this.volChecked.has(k)) return false;
+      this.volChecked.add(k);
+      return true;
+    });
+    if (!fresh.length) return;
+    void pairsWithRecentTrades(chain, fresh, 72).then((live) => {
+      if (!live) return; // lane down — no inference allowed
+      for (const addr of fresh) {
+        if (live.has(addr.toLowerCase())) continue;
+        const p = registry.get(`${chain}:${addr.toLowerCase()}`);
+        if (p && peerDivergence(chain, p) > 3) {
+          this.convict(chain, addr, 'zero_real_trades_divergent');
+        }
+      }
+    });
+  }
+
   /** Screen a pool before it enters a candidate path. */
   screen(chain: ChainKey, p: PoolState): { ok: boolean; reason?: string } {
     if (this.isConvicted(chain, p.address)) return { ok: false, reason: 'convicted' };
@@ -114,16 +141,8 @@ export class TokenCircuitBreaker {
     }
 
     // peer divergence: >3x vs median of tracked same-pair pools
-    const peers = registry.peers(chain, p.token0, p.token1).filter((x) => x.address !== p.address);
-    if (peers.length >= 3) {
-      const mine = poolPrice(p);
-      const theirs = peers.map(poolPrice).filter((x) => x > 0).sort((a, b) => a - b);
-      const median = theirs[Math.floor(theirs.length / 2)];
-      if (mine > 0 && median > 0) {
-        const div = Math.max(mine / median, median / mine);
-        if (div > 3) return { ok: false, reason: `peer_divergence_${div.toFixed(1)}x` };
-      }
-    }
+    const div = peerDivergence(chain, p);
+    if (div > 3) return { ok: false, reason: `peer_divergence_${div.toFixed(1)}x` };
     return { ok: true };
   }
 
@@ -131,6 +150,17 @@ export class TokenCircuitBreaker {
   gapSuspicious(simulatedSpreadPct: number): boolean {
     return simulatedSpreadPct > CREDIBILITY_CEILING_PCT;
   }
+}
+
+/** Divergence ratio vs median of tracked same-pair peers (1 = aligned). */
+export function peerDivergence(chain: ChainKey, p: PoolState): number {
+  const peers = registry.peers(chain, p.token0, p.token1).filter((x) => x.address !== p.address);
+  if (peers.length < 3) return 1;
+  const mine = poolPrice(p);
+  const theirs = peers.map(poolPrice).filter((x) => x > 0).sort((a, b) => a - b);
+  const median = theirs[Math.floor(theirs.length / 2)];
+  if (mine <= 0 || median <= 0) return 1;
+  return Math.max(mine / median, median / mine);
 }
 
 export function poolPrice(p: PoolState): number {
