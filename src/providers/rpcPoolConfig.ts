@@ -31,7 +31,9 @@ interface PoolConfig {
   provider_catalog?: Record<string, ProviderEntry>;
 }
 
-const CONFIG_PATH = resolve(process.cwd(), 'rpc_pool_config.json');
+// RPC_POOL_CONFIG_PATH lets tests/tooling point at a scratch config so a
+// state-transition probe can never race the live file the sync daemon owns.
+const CONFIG_PATH = resolve(process.env.RPC_POOL_CONFIG_PATH ?? 'rpc_pool_config.json');
 const RELOAD_MS = 30_000; // mtime poll cadence — hot-picks promote/demote edits
 
 let cfg: PoolConfig | null = null;
@@ -50,7 +52,10 @@ function load(force = false) {
     lastMtime = mtime;
     loaded = true;
   } catch {
-    if (!loaded) cfg = null; // absent/corrupt file => permissive
+    // Partial-write safe: a torn JSON (manual edit racing the sync daemon's
+    // writeFileSync) keeps the LAST GOOD config in memory — never drops to
+    // permissive or wedges. Only a first-boot failure falls back to null.
+    if (!loaded) cfg = null;
   }
 }
 
