@@ -57,9 +57,11 @@ const envSchema = z.object({
 
   // Discovery engine — automated multi-chain expansion (no manual registration)
   TOKEN_LIST_URLS: z.string().default('https://tokens.uniswap.org'),
-  DISCOVERY_TOP_TOKENS: z.coerce.number().default(60),
+  DISCOVERY_TOP_TOKENS: z.coerce.number().default(30),      // conservative: majors cut only
   DISCOVERY_RESCAN_SECS: z.coerce.number().default(300),
   DISCOVERY_MAX_FACTORIES: z.coerce.number().default(8),
+  DISCOVERY_BATCH_DELAY_MS: z.coerce.number().default(35),  // inter-batch throttle vs 429s
+  DISCOVERY_BATCH_SIZE: z.coerce.number().default(200),
 });
 
 /** Generic chain key — any string. The 10 provisioned chains ship with

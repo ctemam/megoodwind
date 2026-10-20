@@ -19,8 +19,9 @@ import {
  */
 
 const log = logger('discovery');
-const BATCH = 200;
 const ZERO = '0x0000000000000000000000000000000000000000';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Discovery {
   private tokens = new Map<string, DiscoveredToken>(); // addr -> token
@@ -54,8 +55,8 @@ export class Discovery {
       }
     }
     let found = 0;
-    for (let i = 0; i < combos.length; i += BATCH) {
-      const chunk = combos.slice(i, i + BATCH);
+    for (let i = 0; i < combos.length; i += cfg.DISCOVERY_BATCH_SIZE) {
+      const chunk = combos.slice(i, i + cfg.DISCOVERY_BATCH_SIZE);
       const calls = chunk.map((c) => ({
         to: f.address,
         data: f.kind === 'v3'
@@ -63,14 +64,22 @@ export class Discovery {
           : FACTORY_ABI.encodeFunctionData('getPair', [c.a.address, c.b.address]),
       }));
       const results = await Promise.allSettled(calls.map((c) => this.rpc.callContract(c.to, c.data)));
+      let failures = 0;
       results.forEach((r, k) => {
-        if (r.status !== 'fulfilled' || r.value === '0x' || r.value.length < 66) return;
+        if (r.status !== 'fulfilled' || r.value === '0x' || r.value.length < 66) {
+          if (r.status === 'rejected') failures++;
+          return;
+        }
         const pool = ethers.getAddress(`0x${r.value.slice(-40)}`);
         if (pool === ZERO) return;
         const { a, b, fee } = chunk[k];
         this.upsertPool(f, pool, a, b, fee);
         found++;
       });
+      // Rate-limit throttle — fixed micro-delay between batches, extended
+      // adaptively when the batch observed transport failures (429s).
+      const delay = cfg.DISCOVERY_BATCH_DELAY_MS * (failures > 10 ? 4 : 1);
+      if (i + cfg.DISCOVERY_BATCH_SIZE < combos.length) await sleep(delay);
     }
     return found;
   }
