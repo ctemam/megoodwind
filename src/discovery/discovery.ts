@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { RpcPool } from '../providers/rpcPool.js';
+import { multicall } from '../providers/multicall.js';
 import { registry } from '../pools/registry.js';
 import { breaker } from '../forensics/baitPool.js';
 import { tokensForChain, DiscoveredToken } from './tokenLists.js';
@@ -111,14 +112,14 @@ export class Discovery {
           ? FACTORY_ABI.encodeFunctionData('getPool', [c.a.address, c.b.address, c.fee])
           : FACTORY_ABI.encodeFunctionData('getPair', [c.a.address, c.b.address]),
       }));
-      const results = await Promise.allSettled(calls.map((c) => this.rpc.callContract(c.to, c.data)));
-      let failures = 0;
-      results.forEach((r, k) => {
-        if (r.status !== 'fulfilled' || r.value === '0x' || r.value.length < 66) {
-          if (r.status === 'rejected') failures++;
-          return;
-        }
-        const pool = ethers.getAddress(`0x${r.value.slice(-40)}`);
+      // Multicall3: the whole chunk is ONE aggregate3 eth_call — ~200x
+      // fewer requests on the factory matrix.
+      let transportFail = 0;
+      const results = await multicall(this.rpc, calls, calls.length, () => transportFail++);
+      let failures = transportFail;
+      results.forEach((value, k) => {
+        if (value === '0x' || value.length < 66) return;
+        const pool = ethers.getAddress(`0x${value.slice(-40)}`);
         if (pool === ZERO) return;
         const { a, b, fee } = chunk[k];
         this.upsertPool(f, pool, a, b, fee);
@@ -206,9 +207,9 @@ export class Discovery {
       'function symbol() view returns (string)',
     ]);
     try {
-      const [dec, sym] = await Promise.all([
-        this.rpc.callContract(addr, ABI.encodeFunctionData('decimals')),
-        this.rpc.callContract(addr, ABI.encodeFunctionData('symbol')).catch(() => '0x'),
+      const [dec, sym] = await multicall(this.rpc, [
+        { to: addr, data: ABI.encodeFunctionData('decimals') },
+        { to: addr, data: ABI.encodeFunctionData('symbol') },
       ]);
       const decimals = Number(ABI.decodeFunctionResult('decimals', dec)[0]);
       let symbol = k.slice(0, 8);

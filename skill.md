@@ -58,3 +58,56 @@ Projected price is discounted by `slippageBps` before profit check.
 
 Simulated spreads > ~2% on top-liquidity pairs are fake (`CREDIBILITY_CEILING_PCT`).
 A candidate over the ceiling convicts every pool in the path.
+
+## Provider Key Expansion — one key, every chain (`src/providers/providerCatalog.ts`)
+
+Doctrine (measured 2026-10-20): a provider API key is an ACCOUNT credential —
+one key serves every chain that provider carries. Per-chain access is a
+URL-slug transform, never a per-chain key. Expansion = `key + slug -> endpoint`.
+
+| Provider | HTTP template | WSS | Free budget (docs) | Verified traps |
+|---|---|---|---|---|
+| dRPC | `https://lb.drpc.org/ogrpc?network=<slug>&dkey=<key>` | ogws variant, live on all 10 | 210M CU/30d, ~100 eth_call/s nominal (min ~40 under load), batch ≤3 | free plan = public-node class; code-15 quota errors nest inside ethers `could not coalesce` — scan the whole error tree |
+| Alchemy | `https://<slug>.g.alchemy.com/v2/<key>` | wss same path | 30M CU/mo, 300 CU/s (~15 rps), 10s token bucket, account-wide | `403 "<NET> is not enabled for this app"` = per-app network toggle OFF in the Alchemy dashboard — operator fix, NOT a key/template defect. Same key serves all chains once enabled |
+| Ankr | `https://rpc.ankr.com/<slug>/<key>` | none on Freemium | 30 req/s, 200M credits/mo | do NOT derive wss URLs — HTTPS-only on free |
+| NodeFlare | `https://rpc.nodeflare.app/<slug>/v1/<key>` | `/ws/v1/` on eth/base/bnb/arb/op/avax only | ~2–3M CU/mo (docs disagree — use min), 10 req/s | poly WSS 404s at this tier; slug `bnb` not `bsc` |
+
+Slug tables live in `PRIVATE_PROVIDERS[].slugs` — the catalog, not memory.
+A chain absent from the map = provider does not serve it at this tier —
+excluded, never guessed.
+
+### Expansion rules
+
+1. `ALCHEMY_API_KEY=<k>` alone provisions all 10 chains — the loader calls
+   `keyedEndpointsFor(chain)` and dedupes against explicit `<CHAIN>_RPC_URLS`.
+2. Probe `eth_chainId` per generated URL before counting capacity — a
+   `403 not enabled` is a config flag on the provider side, a chainId
+   mismatch is a wrong slug, a 401/404 is a dead key. Classify, don't guess.
+3. Rate limits bind per ACCOUNT KEY. Two same-key URLs = zero headroom —
+   the pool groups members by account (`providerOf()`) and gives each group
+   ONE token bucket at `doc_rps × 0.9`. Cross-provider diversity is the only
+   real capacity lever; same-account failover is self-amplifying churn.
+4. Daily budget (uniform draw): `cuPerMonth / 30 / cuCost[method]` — e.g.
+   Alchemy free ≈ 38k eth_call/day, dRPC ≈ 350k, Ankr ≈ 6.6M, NodeFlare ≈ 66k.
+   `eth_getLogs` and trace/debug cost 3–8× simple calls — reserve them.
+
+## Multicall3 request algebra (`src/providers/multicall.ts`)
+
+Canonical `0xcA11bde05977b3631167028862bE2a173976CA11` on all 10 chains.
+
+```
+N view calls -> 1 aggregate3 eth_call   (request-count saving = N - 1)
+allowFailure=true per subcall -> Promise.allSettled semantics on-chain
+RPC-request cost: ceil(N / MULTICALL3_batch) requests vs N
+```
+
+- Contract-level aggregation — provider JSON-RPC envelope caps (dRPC ≤3)
+  do NOT apply; each aggregate3 is a single eth_call.
+- Applied to: factory matrix (`getPool`/`getPair`), decimals resolution,
+  `learnToken`, and the sim hot path (`refreshPools` slot0/reserves).
+  Boot discovery: ~2,900 requests -> ~15 aggregate3 calls (~200x).
+- eth_call gas caps vary by node — keep chunks ≤ `DISCOVERY_BATCH_SIZE`
+  (200); on aggregate transport failure degrade to per-call, never wedge.
+- Node-side gas: each subcall pays its own gas inside one call context —
+  total ≤ the node's eth_call gas cap (~50–100M typical). 200 cheap views
+  ≈ 10M — safe headroom.

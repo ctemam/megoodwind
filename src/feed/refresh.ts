@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import { RpcPool } from '../providers/rpcPool.js';
+import { multicall } from '../providers/multicall.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { SLOT0_ABI } from '../math/univ3.js';
 import { logger } from '../config/logger.js';
@@ -37,26 +38,26 @@ export async function refreshPools(rpc: RpcPool, pools: PoolState[]): Promise<vo
   });
 
   const flat = jobs.flatMap((j) => j.calls.map((c, i) => ({ j, c, i })));
-  const results = await Promise.allSettled(
-    flat.map(({ c }) => rpc.callContract(c.to, c.data)),
-  );
+  // Multicall3 — every touched pool state in ONE aggregate3 request
+  // (the single merged round-trip the hot path is allowed).
+  const results = await multicall(rpc, flat.map(({ c }) => c));
 
   let ok = 0, fail = 0;
   flat.forEach(({ j, i }, idx) => {
-    const r = results[idx];
-    if (r.status !== 'fulfilled' || typeof r.value !== 'string' || r.value === '0x') {
+    const value = results[idx];
+    if (typeof value !== 'string' || value === '0x') {
       fail++;
       return;
     }
     try {
       if (j.pool.kind === 'v2') {
-        const [r0, r1] = V2_ABI.decodeFunctionResult('getReserves', r.value);
+        const [r0, r1] = V2_ABI.decodeFunctionResult('getReserves', value);
         registry.updateState(j.key, { reserve0: r0, reserve1: r1 });
       } else if (i === 0) {
-        const [sqrtPriceX96, tick] = SLOT0_ABI.decodeFunctionResult('slot0', r.value);
+        const [sqrtPriceX96, tick] = SLOT0_ABI.decodeFunctionResult('slot0', value);
         registry.updateState(j.key, { sqrtPriceX96, tick: Number(tick) });
       } else {
-        const [liq] = SLOT0_ABI.decodeFunctionResult('liquidity', r.value);
+        const [liq] = SLOT0_ABI.decodeFunctionResult('liquidity', value);
         registry.updateState(j.key, { liquidity: liq });
       }
       ok++;

@@ -1,21 +1,49 @@
 import { ethers } from 'ethers';
-import { ChainConfig } from '../config/index.js';
+import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
+import { providerOf, specOf } from './providerCatalog.js';
 
 /**
  * Item #12 — Agent-to-RPC integration.
  * Pooled JsonRpcProviders with keep-alive, EWMA latency pick, and
  * automatic failover on HTTP 429 / transport timeout. One merged
  * transport object per chain (never serialized per-item on hot paths).
+ *
+ * Account budget doctrine (measured, not assumed): provider rate limits
+ * bind per ACCOUNT KEY, not per URL — so members are grouped by account
+ * and each group gets ONE token bucket sized to the provider's documented
+ * free-tier ceiling × 0.9 (10% reserve, never ordinary workload).
+ * Cross-provider diversity is the real headroom lever; same-account
+ * "failover" is self-amplifying churn and gets no extra budget.
  */
 
 interface Member {
   url: string;
   provider: ethers.JsonRpcProvider;
+  account: string;    // provider:key-token group — the real quota pool
   ewmaMs: number;
   failures: number;
   cooldownUntil: number;
 }
+
+/** Token bucket shared by every URL on one provider account. */
+class AccountBucket {
+  tokens: number;
+  last = Date.now();
+  constructor(readonly cap: number) { this.tokens = cap; }
+  private refill() {
+    const now = Date.now();
+    this.tokens = Math.min(this.cap, this.tokens + ((now - this.last) / 1000) * this.cap);
+    this.last = now;
+  }
+  /** consume one token if available */
+  take(): boolean { this.refill(); if (this.tokens >= 1) { this.tokens -= 1; return true; } return false; }
+  /** ms until a full token is available */
+  waitMs(): number { this.refill(); if (this.tokens >= 1) return 0; return Math.ceil(((1 - this.tokens) / this.cap) * 1000); }
+}
+
+const DEFAULT_SAFE_RPS = 5;      // unknown providers — conservative floor
+const SAFE_FACTOR = 0.9;         // 10% reserve is never ordinary workload
 
 const TIMEOUT_MS = 8_000;
 const COOLDOWN_MS = 20_000;
@@ -24,6 +52,7 @@ const EWMA_ALPHA = 0.3;
 export class RpcPool {
   readonly chain: ChainConfig;
   private members: Member[] = [];
+  private buckets = new Map<string, AccountBucket>();
   private cursor = 0;
   private log = logger('rpcPool');
 
@@ -35,27 +64,52 @@ export class RpcPool {
     }
     if (!urls.length) throw new Error(`no private RPC endpoints for ${chain.key}`);
     for (const url of urls) {
+      const { id, account } = providerOf(url);
+      if (!this.buckets.has(account)) {
+        const rps = specOf(id)?.rps ?? DEFAULT_SAFE_RPS;
+        this.buckets.set(account, new AccountBucket(Math.max(1, rps * SAFE_FACTOR)));
+      }
       this.members.push({
         url,
         provider: new ethers.JsonRpcProvider(url, chain.chainId, {
           staticNetwork: true,
           polling: false,
         }),
+        account,
         ewmaMs: 500,
         failures: 0,
         cooldownUntil: 0,
       });
     }
+    this.log.info(`${chain.key}: ${this.members.length} endpoints across ${this.buckets.size} provider account(s)`, {
+      accounts: [...this.buckets.entries()].map(([a, b]) => `${a.split(':')[0]}@${b.cap.toFixed(0)}rps`),
+    });
   }
+
+  private bucket(m: Member): AccountBucket { return this.buckets.get(m.account)!; }
 
   private pick(): Member {
     const now = Date.now();
-    const live = this.members.filter((m) => m.cooldownUntil <= now);
+    // peek budget (waitMs refills without consuming) — take() runs only
+    // on the member actually chosen, or every candidate would drain it
+    const live = this.members.filter((m) => m.cooldownUntil <= now && this.bucket(m).waitMs() === 0);
     const set = live.length ? live : this.members;
-    // round-robin bias toward lowest EWMA
     const best = set.reduce((a, b) => (a.ewmaMs <= b.ewmaMs ? a : b));
     this.cursor = (this.cursor + 1) % set.length;
-    return set[this.cursor] === best ? set[(this.cursor + 1) % set.length] : best;
+    const chosen = set[this.cursor] === best ? set[(this.cursor + 1) % set.length] : best;
+    this.bucket(chosen).take();
+    return chosen;
+  }
+
+  /** Ms until any endpoint is usable (live member with bucket budget). */
+  private budgetWaitMs(): number {
+    const now = Date.now();
+    if (this.members.some((m) => m.cooldownUntil <= now && this.bucket(m).waitMs() === 0)) return 0;
+    const waits = this.members.map((m) => Math.max(
+      m.cooldownUntil - now > 0 ? m.cooldownUntil - now : 0,
+      this.bucket(m).waitMs(),
+    ));
+    return Math.min(...waits);
   }
 
   /** Ms until the earliest member exits cooldown (0 when one is live). */
@@ -64,6 +118,7 @@ export class RpcPool {
     if (this.members.some((m) => m.cooldownUntil <= now)) return 0;
     return Math.min(...this.members.map((m) => m.cooldownUntil)) - now;
   }
+
 
   private penalize(m: Member, is429: boolean) {
     m.failures++;
@@ -79,7 +134,9 @@ export class RpcPool {
   async call<T = unknown>(method: string, params: unknown[]): Promise<T> {
     let lastErr: unknown;
     for (let round = 0; round < 2; round++) {
-      const wait = this.cooldownWaitMs();
+      // wait for the earliest usable member — cooldown OR budget refill,
+      // whichever the constraint is; never hot-loop a drained quota pool
+      const wait = Math.max(this.cooldownWaitMs(), this.budgetWaitMs());
       if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 5_000)));
       for (let i = 0; i < this.members.length; i++) {
         const m = this.pick();
@@ -134,9 +191,14 @@ const isTransportError = (e: unknown): boolean => {
   );
 };
 
+/** Rate-limit detection — inspects the WHOLE error tree (ethers wraps
+ *  provider errors: top message is 'could not coalesce error', the real
+ *  'free plan rate limit' / code-15 lives in nested error/payload). */
 const isRateLimit = (e: unknown): boolean => {
-  const s = String((e as { message?: string })?.message ?? e);
-  return s.includes('429') || s.includes('rate limit') || s.includes('code\":15') || s.includes('"code":15');
+  let s = '';
+  try { s = JSON.stringify(e) + String((e as { message?: string })?.message ?? ''); }
+  catch { s = String(e); }
+  return /429|rate limit|paid plan|code.{0,3}15|quota/i.test(s);
 };
 
 const hostOf = (url: string) => {

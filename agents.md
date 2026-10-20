@@ -31,6 +31,24 @@ logs, or token-list streams + on-chain metadata.
 | All multi-hop paths | Bellman-Ford negative-cycle pathfinder (runtime edges) | `src/strategies/graph.ts` |
 | All EVM chains | generic chain keys — `CHAIN_ID_<KEY>` + keyed `<KEY>_RPC_URLS` joins a chain with zero code edits; Chainlist-class metadata for IDs only (its public RPCs are forbidden) | `src/config/index.ts` |
 | Cross-chain telemetry | metrics API + Banbot cockpit (subgraph feeds reserved) | `src/telemetry/*` |
+| Multicall3 batching | `aggregate3` on canonical `0xcA11bde05977b3631167028862bE2a173976CA11` — N view calls collapse into ONE eth_call (~200× request-rate reduction on discovery + sim refresh). Contract-level aggregation — immune to JSON-RPC envelope batch caps (dRPC's 3-item limit does not apply). `MULTICALL3_ADDR` env override; auto-fallback to per-call if the aggregate errors | `src/providers/multicall.ts` |
+| Private provider universe | keyed expansion per chain from `*_API_KEY` — dRPC, Alchemy, Ankr, NodeFlare templates verified against provider docs (2026-10-19); each account key is a distinct quota pool; explicit `<CHAIN>_RPC_URLS` keep precedence, deduped | `src/providers/providerCatalog.ts` + `src/config/index.ts` |
+| Account budget scheduler | quota binds per ACCOUNT KEY not per URL — one token bucket per provider account sized `doc_rps × 0.9` (10% reserve never ordinary workload); pick = lowest EWMA among cooled-in + budget-live members; when all drained, wait earliest refill — never hot-loop | `src/providers/rpcPool.ts` |
+| RPC inventory probe | bounded census (`test/rpc_inventory.ts`): chainId verify, p50 latency ×5, tiny burst — ~14 req/endpoint; prints per-account pool + documented budget table; never a load test | `test/rpc_inventory.ts` |
+
+### Measured provider inventory (probe 2026-10-20 — re-run before any capacity claim)
+
+| Account | eth | bsc | poly | SAFE_RPS | Monthly budget | Measured facts |
+|---|---|---|---|---|---|---|
+| dRPC key | 179ms | 161ms | 167ms | 36 | 210M CU/30d | JSON-RPC batch ≤3; WSS live on all 3 (docs say paid-only — capability not guarantee) |
+| Alchemy key | 201ms | **not-enabled** | **not-enabled** | 14 | 30M CU/mo | key verified valid on all 10 slugs — same key every chain; app has only `eth-mainnet` enabled (`403 <NET> is not enabled for this app` = operator toggle in Alchemy dashboard, not a defect) |
+| Ankr key | 175ms | 192ms | 204ms | 27 | 200M credits/mo | HTTPS-only on Freemium — no WSS derived |
+| NodeFlare key | 212ms | 252ms | 226ms | 9 | ~2M CU/mo | docs disagree 2M vs 3M — conservative bound used |
+
+Aggregate safe capacity: eth **~86 rps** / bsc,poly **~77 rps** across 4 accounts —
+vs the single-account ~36 rps that saturated at shadow boot. Combined with
+Multicall3 (~200× request reduction on bulk paths), boot discovery drops
+from ~2,900 requests to ~15 aggregate3 calls.
 
 ## Invariants
 

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
+import * as providers from '../providers/providerCatalog.js';
 
 /**
  * Item #13 — Environment Config (System Security Layer).
@@ -15,6 +16,7 @@ const envSchema = z.object({
   INFURA_API_KEY: z.string().optional(),
   DRPC_API_KEY: z.string().optional(),
   ANKR_API_KEY: z.string().optional(),
+  NODEFLARE_API_KEY: z.string().optional(),
   PIMLICO_API_KEY: z.string().min(1, 'PIMLICO_API_KEY required (ERC-4337 bundler/paymaster)'),
   ZERODEV_PROJECT_ID: z.string().optional(),
   VELORA_API_KEY: z.string().optional(),
@@ -140,12 +142,18 @@ export function chainConfig(chain: ChainKey): ChainConfig {
   const pool = collect('RPC_URLS', chain);
   const fallback = collect('RPC_URL', chain);
   const wss = collect('WSS_URL', chain);
+  // Provider-key expansion: every configured *_API_KEY contributes its
+  // keyed endpoint — distinct accounts = distinct quota pools (the real
+  // headroom). Explicit env URLs keep precedence; expansion is deduped.
+  const { keyedEndpointsFor, keyedWssFor } = providers;
+  for (const e of keyedEndpointsFor(chain)) if (!pool.includes(e.url)) pool.push(e.url);
+  const wssPool = [...wss, ...keyedWssFor(chain).map((e) => e.url)];
   return {
     key: chain,
     chainId: chainIdFor(chain),
     rpcUrls: pool.length ? pool : fallback,
     fallbackRpcUrl: fallback[0],
-    wssUrl: wss[0],
+    wssUrl: wssPool[0],
     executor: process.env[`ALLBRIGHT_EXECUTOR_${envPrefixFor(chain)}`],
     role,
   };

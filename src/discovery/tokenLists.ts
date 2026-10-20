@@ -1,6 +1,7 @@
 import { ChainConfig, cfg } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { RpcPool } from '../providers/rpcPool.js';
+import { multicall } from '../providers/multicall.js';
 import { ethers } from 'ethers';
 
 /**
@@ -63,15 +64,17 @@ export async function tokensForChain(chain: ChainConfig, rpc: RpcPool): Promise<
     }
   }
 
-  // resolve missing decimals on-chain — one merged batch
+  // resolve missing decimals on-chain — ONE aggregate3 request for the
+  // entire missing set (Multicall3, not N eth_calls)
   const missing = [...seen.values()].filter((t) => t.decimals < 0);
   if (missing.length) {
-    const results = await Promise.allSettled(
-      missing.map((t) => rpc.callContract(t.address, DECIMALS_ABI.encodeFunctionData('decimals'))),
+    const results = await multicall(
+      rpc,
+      missing.map((t) => ({ to: t.address, data: DECIMALS_ABI.encodeFunctionData('decimals') })),
     );
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value !== '0x') {
-        try { missing[i].decimals = Number(DECIMALS_ABI.decodeFunctionResult('decimals', r.value)[0]); }
+    results.forEach((value, i) => {
+      if (value !== '0x') {
+        try { missing[i].decimals = Number(DECIMALS_ABI.decodeFunctionResult('decimals', value)[0]); }
         catch { /* leave -1 */ }
       }
     });
