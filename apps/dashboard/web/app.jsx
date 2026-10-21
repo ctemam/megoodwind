@@ -416,6 +416,7 @@ function App() {
   const [unit, setUnit] = useState(() => loadStored('ab_unit', 'usd'));
   const [profitSpan, setProfitSpan] = useState('lifetime');
   const [windowMs, setWindowMs] = useState(Infinity);
+  const [refreshSec, setRefreshSec] = useState(() => loadStored('ab_refresh', 3));
   const [accounts, setAccounts] = useState(() => loadStored('ab_accounts', []));
   const [prices, setPrices] = useState({});
   const wsRef = useRef(null);
@@ -469,9 +470,14 @@ function App() {
       if (s.ops) setOps(s.ops);
       setErr(null);
     };
-    const t = setInterval(() => { if (!wsRef.current || wsRef.current.readyState !== 1) pull(); }, 3000);
-    return () => { clearInterval(t); ws.close(); };
+    return () => { ws.close(); };
   }, []);
+
+  // REST fallback cadence — operator-selectable 1s–30s (only polls while ws is down)
+  useEffect(() => {
+    const t = setInterval(() => { if (!wsRef.current || wsRef.current.readyState !== 1) pull(); }, refreshSec * 1000);
+    return () => clearInterval(t);
+  }, [refreshSec]);
 
   if (err) return <div className="p-8 bad">Dashboard Api Unreachable: {err}</div>;
   const metrics = m ?? {};
@@ -585,8 +591,14 @@ function App() {
               ▣ Emergency Kill
             </button>
             <span className="text-[12px] tracking-[0.25em] text-white">{page.toUpperCase()}</span>
-            <span className={`ml-auto text-[11px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
+            <span className="ml-auto flex items-center gap-3">
+              <select value={refreshSec} onChange={(e) => { const v = Number(e.target.value); setRefreshSec(v); saveStored('ab_refresh', v); }}
+                className="hairline bg-transparent px-1.5 py-1 text-[10px] dim" title="Refresh Interval" aria-label="Refresh Interval">
+                {[1, 2, 3, 5, 10, 15, 20, 30].map((s) => <option key={s} value={s} className="bg-black">{s}s</option>)}
+              </select>
+            <span className={`text-[11px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
               {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
+            </span>
             </span>
           </div>
         </header>
