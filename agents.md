@@ -125,7 +125,7 @@ headroom for bulk reads. WSS subscriptions are separate stream capacity
 
 - Atomicity law: the whole cycle lives in one flash callback; revert = zero loss.
 - Strict 4337: submissions are sponsored UserOps; probes use the smart-account identity, never the EOA.
-- STRICT_PROFIT_FLOOR_GUARD: no emission path bypasses `MIN_PROFIT_USD`; lane floors tighten further — `PREDICTIVE_MIN_PROFIT_USD` (.50) scheduled lane, `WHALE_MIN_PROFIT_USD` () inside the 30s whale-alpha window; floor misses record ledger `misses`, passes record `hits` + peak yield.
+- STRICT_PROFIT_FLOOR_GUARD: no emission path bypasses `MIN_PROFIT_USD`; lane floors tighten further — `PREDICTIVE_MIN_PROFIT_USD` (.50) scheduled lane, `WHALE_MIN_PROFIT_USD` (5.00) inside the 30s whale-alpha window; floor misses record ledger `misses`, passes record `hits` + peak yield.
 - PRIVATE-RPC-ONLY: unkeyed endpoints are rejected at boot (`PUBLIC_RPC_FORBIDDEN`).
 - Last-hop `minOut = flash_amount + premium` — decayed spread reverts.
 - Transport faults (429/timeout) never convict; ErrorPayload reverts always convict.

@@ -59,6 +59,17 @@ export class WssLane {
         staticNetwork: true,
       });
       this.provider = ws;
+      // Attach socket handlers BEFORE any await — a handshake failure
+      // (e.g. HTTP 502) emits 'error' on the underlying socket during
+      // getBlockNumber; an unhandled socket error crashes the process.
+      const socket = ws.websocket as unknown as {
+        on?: (ev: string, fn: () => void) => void;
+      };
+      socket.on?.('close', () => this.scheduleReconnect());
+      socket.on?.('error', () => this.scheduleReconnect());
+      // belt: provider-level errors (socket swaps on reconnect create
+      // fresh instances our socket handlers never saw)
+      ws.on('error', (e: unknown) => this.scheduleReconnect(e));
       await ws.getBlockNumber();
 
       ws.on('block', (n: number) => this.onHead(n, Date.now()));
@@ -71,12 +82,6 @@ export class WssLane {
           this.log.warn(`${this.chain.key}: newPendingTransactions unsupported on this endpoint`);
         }
       }
-
-      const socket = ws.websocket as unknown as {
-        on?: (ev: string, fn: () => void) => void;
-      };
-      socket.on?.('close', () => this.scheduleReconnect());
-      socket.on?.('error', () => this.scheduleReconnect());
 
       this.reconnectMs = 1_000;
       this.consecutiveFails = 0;
