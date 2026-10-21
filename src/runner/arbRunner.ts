@@ -6,7 +6,7 @@ import { WhaleTracker } from '../services/whaleTracker.js';
 import { VariantScheduler } from '../engine/predictiveEngine.js';
 import { solve } from '../strategies/solver.js';
 import { executeCandidate } from '../exec/executor.js';
-import { refreshPools } from '../feed/refresh.js';
+import { refreshPools, resolveTokenDecimals } from '../feed/refresh.js';
 import { topPools, poolsForTokens } from '../feed/dexscreener.js';
 import { registry } from '../pools/registry.js';
 import { breaker } from '../forensics/baitPool.js';
@@ -91,6 +91,12 @@ async function cycle(
   // state before CPU-eval (latency discipline: never per-item RPC).
   const tracked = registry.all(chain.key);
   if (!tracked.length) return;
+
+  // decimals authority: feed metadata omits decimals => 10^k scale
+  // corruption convicts legitimate pools; resolve ON-CHAIN (incremental —
+  // already-resolved tokens skip the multicall entirely)
+  await resolveTokenDecimals(rpc, tracked).catch((e) => log.debug(`${chain.key} decimals`, e));
+
   await refreshPools(rpc, tracked);
 
   // Conditioning layer: the regime snapshot gates variant eligibility

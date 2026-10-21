@@ -4,7 +4,7 @@ import { RpcPool } from '../src/providers/rpcPool.js';
 import { fork_live_chain_state } from '../test/anvil/forkSim.js';
 import { VariantScheduler } from '../src/engine/predictiveEngine.js';
 import { solve } from '../src/strategies/solver.js';
-import { refreshPools } from '../src/feed/refresh.js';
+import { refreshPools, resolveTokenDecimals } from '../src/feed/refresh.js';
 import { topPools, poolsForTokens } from '../src/feed/dexscreener.js';
 import { registry } from '../src/pools/registry.js';
 import { breaker } from '../src/forensics/baitPool.js';
@@ -101,6 +101,11 @@ async function main() {
   }
   let tracked = registry.all(chainKey);
   log.info(`registry: ${tracked.length} discovered pools loaded for fork eval`);
+
+  // decimals authority: resolve token0/token1 decimals ON-CHAIN before any
+  // price math — feed metadata omits decimals => wrong 10^k scales corrupt
+  // spot prices and convict legitimate pools (WETH=18 vs USDC=6)
+  await resolveTokenDecimals(rpc, tracked).catch((e) => log.warn('decimals resolve', e));
 
   // first refresh on the fork — prune pools with no readable on-chain
   // state (aggregators/routers DexScreener lists that never expose

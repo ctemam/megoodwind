@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
-import { RpcPool } from '../providers/rpcPool.js';
 import { multicall } from '../providers/multicall.js';
+import { RpcPool } from '../providers/rpcPool.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { SLOT0_ABI } from '../math/univ3.js';
 import { logger } from '../config/logger.js';
@@ -67,4 +67,53 @@ export async function refreshPools(rpc: RpcPool, pools: PoolState[]): Promise<vo
     }
   });
   logger('refresh').debug(`${rpc.chain.key}: refreshed ${ok} slots, ${fail} failed`);
+}
+
+const DECIMALS_ABI = new ethers.Interface(['function decimals() view returns (uint8)']);
+
+/**
+ * On-chain decimals authority — DexScreener/feed metadata is untrusted:
+ * missing or wrong decimals poison spot prices by powers of ten and
+ * convict legitimate pools. ONE aggregate3 call covers every unique
+ * token0/token1 across the tracked set; pools whose tokens fail the
+ * call keep their existing decimals.
+ */
+const resolvedDecimals = new Set<string>(); // `${chain}:${token}` — immutable on-chain
+
+export async function resolveTokenDecimals(rpc: RpcPool, pools: PoolState[]): Promise<number> {
+  const chainKey = rpc.chain.key;
+  const tokens = [...new Set(pools.flatMap((p) => [p.token0.toLowerCase(), p.token1.toLowerCase()]))]
+    .filter((t) => !resolvedDecimals.has(`${chainKey}:${t}`));
+  if (!tokens.length) return 0;
+  const toChecksum = new Map<string, string>();
+  for (const p of pools) {
+    if (!toChecksum.has(p.token0.toLowerCase())) toChecksum.set(p.token0.toLowerCase(), p.token0);
+    if (!toChecksum.has(p.token1.toLowerCase())) toChecksum.set(p.token1.toLowerCase(), p.token1);
+  }
+  const results = await multicall(rpc, tokens.map((t) => ({
+    to: toChecksum.get(t)!, data: DECIMALS_ABI.encodeFunctionData('decimals'),
+  })));
+  const dec = new Map<string, number>();
+  for (let i = 0; i < tokens.length; i++) {
+    const r = results[i];
+    if (!r || r === '0x') continue;
+    try {
+      const d = Number(DECIMALS_ABI.decodeFunctionResult('decimals', r)[0]);
+      if (d >= 0 && d <= 255) {
+        dec.set(tokens[i], d);
+        resolvedDecimals.add(`${chainKey}:${tokens[i]}`);
+      }
+    } catch { /* decode fail — keep existing */ }
+  }
+  for (const p of pools) {
+    const d0 = dec.get(p.token0.toLowerCase());
+    const d1 = dec.get(p.token1.toLowerCase());
+    if (d0 === undefined && d1 === undefined) continue;
+    registry.updateState(`${rpc.chain.key}:${p.address.toLowerCase()}`, {
+      ...(d0 !== undefined ? { dec0: d0 } : {}),
+      ...(d1 !== undefined ? { dec1: d1 } : {}),
+    });
+  }
+  logger('refresh').info(`${rpc.chain.key}: decimals resolved on-chain for ${dec.size}/${tokens.length} tokens`);
+  return dec.size;
 }

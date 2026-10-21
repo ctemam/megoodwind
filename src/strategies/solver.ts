@@ -3,7 +3,7 @@ import { PoolState, registry } from '../pools/registry.js';
 import { v2AmountOut } from '../math/univ2.js';
 import { v3SpotPrice, tickDistanceOk } from '../math/univ3.js';
 import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT } from '../math/profit.js';
-import { breaker } from '../forensics/baitPool.js';
+import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards } from '../engine/predictiveEngine.js';
 import { logger } from '../config/logger.js';
 import { buildEdges, findCycles } from './graph.js';
@@ -95,8 +95,19 @@ function emit(
   if (out <= borrowAmount) return null;
   const sp = spreadPct(out, borrowAmount);
   if (sp > CREDIBILITY_CEILING_PCT) {
-    // >~2% on liquid pairs = bait — investigate, don't celebrate
-    for (const l of legs) breaker.convict(chain.key, l.pool.address, `gap_above_ceiling_${sp.toFixed(2)}pct`);
+    // >~2% = a pool in the path is lying about reserves. Convict ONLY the
+    // legs whose spot quote diverges >3x from same-pair peers — blaming
+    // every leg convicts honest pools (e.g. canonical WETH/USDC) that
+    // merely routed through the liar. No peers = no honest attribution;
+    // exec-probe reverts still convict solo fakes deterministically.
+    let convicted = 0;
+    for (const l of legs) {
+      if (peerDivergence(chain.key, l.pool) > 3) {
+        breaker.convict(chain.key, l.pool.address, `gap_above_ceiling_${sp.toFixed(2)}pct`);
+        convicted++;
+      }
+    }
+    if (!convicted) log.debug(`spread ${sp.toFixed(0)}% with no divergent leg — unattributed, no conviction`);
     return null;
   }
   const n = netUsd({
