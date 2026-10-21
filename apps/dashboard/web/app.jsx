@@ -91,35 +91,48 @@ const TIME_WINDOWS = [
 ];
 
 /* ── Digital Watch — HH:MM:SS + gear settings modal ─────────────── */
+const ALL_TZ = (() => {
+  try { return Intl.supportedValuesOf('timeZone'); }
+  catch { return ['UTC', 'Africa/Addis_Ababa', 'Europe/London', 'America/New_York', 'Asia/Tokyo']; }
+})();
+
 function DigitalWatch() {
-  const [cfg, setCfg] = useState(() => loadStored('ab_watch', { hour12: false, seconds: true, offsetMin: null }));
+  const [cfg, setCfg] = useState(() => {
+    const c = loadStored('ab_watch', { hour12: false, seconds: true, tz: null });
+    if (c.offsetMin != null) delete c.offsetMin; // migrate legacy offset → IANA zones
+    return c;
+  });
   const [open, setOpen] = useState(false);
+  const [tzFilter, setTzFilter] = useState('');
   const t = useTicker(1000);
-  const d = new Date(cfg.offsetMin == null ? t : t + (cfg.offsetMin - new Date().getTimezoneOffset()) * 60000);
-  const h24 = d.getHours();
-  const hh = String(cfg.hour12 ? (h24 % 12 || 12) : h24).padStart(2, '0');
-  const tz = cfg.offsetMin == null
-    ? (Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'Local')
-    : `UTC${cfg.offsetMin >= 0 ? '+' : ''}${(cfg.offsetMin / 60).toFixed(cfg.offsetMin % 60 ? 2 : 0)}`;
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit', minute: '2-digit',
+    ...(cfg.seconds ? { second: '2-digit' } : {}),
+    hour12: cfg.hour12,
+    ...(cfg.tz ? { timeZone: cfg.tz } : {}),
+  });
+  const zoneName = cfg.tz ?? (Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'Local');
+  const zones = tzFilter ? ALL_TZ.filter((z) => z.toLowerCase().includes(tzFilter.toLowerCase())) : ALL_TZ;
   const set = (patch) => { const n = { ...cfg, ...patch }; setCfg(n); saveStored('ab_watch', n); };
   return (
     <span className="relative inline-flex items-center gap-1">
-      <span className="num text-[12px]" title={tz}>
-        {hh}:{String(d.getMinutes()).padStart(2, '0')}{cfg.seconds ? `:${String(d.getSeconds()).padStart(2, '0')}` : ''}
-        {cfg.hour12 ? <span className="dim ml-1">{h24 >= 12 ? 'PM' : 'AM'}</span> : null}
-        <span className="dim ml-1 text-[9px]">{tz}</span>
+      <span className="num text-[12px]" title={zoneName}>
+        {fmt.format(t)} <span className="dim ml-1 text-[9px]">{zoneName}</span>
       </span>
       <button onClick={() => setOpen(!open)} className="dim hover:text-white" title="Watch Settings">⚙</button>
       {open && (
-        <div className="hairline absolute right-0 top-6 z-50 w-48 bg-[#0A0A0B] p-3 text-[10px]">
+        <div className="hairline absolute right-0 top-6 z-50 w-64 bg-[#0A0A0B] p-3 text-[10px]">
           <div className="mb-2 uppercase tracking-widest dim">Watch Settings</div>
           <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.hour12} onChange={(e) => set({ hour12: e.target.checked })} /> 12h Format</label>
           <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.seconds} onChange={(e) => set({ seconds: e.target.checked })} /> Show Seconds</label>
-          <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.offsetMin != null} onChange={(e) => set({ offsetMin: e.target.checked ? 0 : null })} /> Custom Offset</label>
-          {cfg.offsetMin != null && (
-            <input type="number" step="30" value={cfg.offsetMin} onChange={(e) => set({ offsetMin: Number(e.target.value) })}
-              className="hairline mt-1 w-full bg-transparent px-2 py-1 text-white" placeholder="Offset Minutes" />
-          )}
+          <div className="mb-1 mt-2 dim uppercase tracking-widest">Time Zone</div>
+          <input value={tzFilter} onChange={(e) => setTzFilter(e.target.value)} aria-label="Filter Time Zones"
+            className="hairline mb-1 w-full bg-transparent px-2 py-1 text-white" />
+          <select value={cfg.tz ?? '__local__'} onChange={(e) => set({ tz: e.target.value === '__local__' ? null : e.target.value })}
+            size="8" className="hairline w-full bg-black text-white" aria-label="Time Zone">
+            <option value="__local__" className="bg-black">— Local System —</option>
+            {zones.map((z) => <option key={z} value={z} className="bg-black">{z.replace(/_/g, ' ')}</option>)}
+          </select>
         </div>
       )}
     </span>
@@ -265,8 +278,9 @@ function Wallet({ ops, accounts, setAccounts, prices }) {
         {probeErr && <span className="bad text-[10px]">{probeErr}</span>}
       </div>
       <div className="flex items-center gap-2">
-        <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="0x… Add Account Manually"
-          className="hairline w-96 bg-transparent px-2 py-1 text-[11px] text-white placeholder:text-[#555]" />
+        <span className="dim text-[10px] uppercase tracking-widest">Add Account Manually</span>
+        <input value={manual} onChange={(e) => setManual(e.target.value)} aria-label="Add Account Manually"
+          className="hairline w-96 bg-transparent px-2 py-1 text-[11px] text-white" />
         <button onClick={addManual} className="hairline px-3 py-1 text-[10px] tracking-widest dim hover:text-white">+ Add</button>
       </div>
     </div>
