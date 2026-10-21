@@ -13,11 +13,27 @@ const projections = () => {
   try { return JSON.parse(readFileSync('data/projections.json', 'utf8')); } catch { return null; }
 };
 
-const metrics = () => ({
+// persistent gate counters written by src/telemetry/metrics.ts (5s flush)
+const counters = () => {
+  if (!existsSync('data/metrics_counters.json')) return {};
+  try { return JSON.parse(readFileSync('data/metrics_counters.json', 'utf8')); } catch { return {}; }
+};
+const gateSum = (c, name) =>
+  Object.entries(c).reduce((s, [k, v]) => s + (k.startsWith(`${name}|`) ? (Number(v) || 0) : 0), 0);
+
+const metrics = () => {
+  const c = counters();
+  return {
   arb_settled_net_usd: 0,
   settled_count: 0,
   settled_records: [],
-  counters: {},
+  counters: c,
+  forensicGates: {
+    total_detected_opportunities: gateSum(c, 'total_detected_opportunities'),
+    rejected_by_forensic_bait: gateSum(c, 'rejected_by_forensic_bait'),
+    rejected_by_profit_margin: gateSum(c, 'rejected_by_profit_margin'),
+    passed_to_simulation_probe: gateSum(c, 'passed_to_simulation_probe'),
+  },
   ts: Date.now(),
   pools: {},
   convicted: {},
@@ -31,7 +47,8 @@ const metrics = () => ({
     predictiveChains: (process.env.PREDICTIVE_CHAINS ?? 'eth,bsc,poly').split(','),
     backrunChains: (process.env.BACKRUN_CHAINS ?? 'arb,op,base,avax,linea,scroll,blast').split(','),
   },
-});
+};
+}
 
 http.createServer((req, res) => {
   res.setHeader('content-type', 'application/json');

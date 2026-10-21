@@ -21,12 +21,26 @@ class Metrics {
   private counters = new Map<string, number>();
   private settled: SettledRecord[] = [];
   private file = join(process.cwd(), 'data', 'settled.json');
+  private countersFile = join(process.cwd(), 'data', 'metrics_counters.json');
+  private countersDirty = false;
 
-  constructor() { this.load(); }
+  constructor() {
+    this.load();
+    // counters flush on an interval — inc() can fire hundreds of times
+    // per solver cycle; per-inc writes would be pure write amplification
+    setInterval(() => this.persistCounters(), 5_000).unref();
+  }
 
   private load() {
-    if (!existsSync(this.file)) return;
-    try { this.settled = JSON.parse(readFileSync(this.file, 'utf8')); } catch { /* fresh */ }
+    if (existsSync(this.file)) {
+      try { this.settled = JSON.parse(readFileSync(this.file, 'utf8')); } catch { /* fresh */ }
+    }
+    if (existsSync(this.countersFile)) {
+      try {
+        const c = JSON.parse(readFileSync(this.countersFile, 'utf8'));
+        for (const [k, v] of Object.entries(c)) this.counters.set(k, Number(v) || 0);
+      } catch { /* fresh */ }
+    }
   }
 
   private persist() {
@@ -34,9 +48,24 @@ class Metrics {
     writeFileSync(this.file, JSON.stringify(this.settled, null, 2));
   }
 
+  private persistCounters() {
+    if (!this.countersDirty) return;
+    this.countersDirty = false;
+    mkdirSync(dirname(this.countersFile), { recursive: true });
+    writeFileSync(this.countersFile, JSON.stringify(Object.fromEntries(this.counters), null, 2));
+  }
+
   inc(name: string, labels: Record<string, string> = {}) {
     const k = `${name}|${JSON.stringify(labels)}`;
     this.counters.set(k, (this.counters.get(k) ?? 0) + 1);
+    this.countersDirty = true;
+  }
+
+  /** Aggregate of a counter across all its label variants. */
+  counterSum(name: string): number {
+    let s = 0;
+    for (const [k, v] of this.counters) if (k.startsWith(`${name}|`)) s += v;
+    return s;
   }
 
   addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number) {
@@ -55,6 +84,12 @@ class Metrics {
       settled_count: this.settled.length,
       settled_records: this.settled.slice(-100),
       counters: Object.fromEntries(this.counters),
+      forensicGates: {
+        total_detected_opportunities: this.counterSum('total_detected_opportunities'),
+        rejected_by_forensic_bait: this.counterSum('rejected_by_forensic_bait'),
+        rejected_by_profit_margin: this.counterSum('rejected_by_profit_margin'),
+        passed_to_simulation_probe: this.counterSum('passed_to_simulation_probe'),
+      },
       ts: Date.now(),
     };
   }

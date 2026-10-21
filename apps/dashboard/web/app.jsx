@@ -169,9 +169,34 @@ function ProfitMetrics({ m, windowMs = Infinity }) {
   </>);
 }
 
+/* ── forensic filtration audit — four hard gate counters ── */
+const GATES = [
+  ['total_detected_opportunities', 'Total Detected Opportunities'],
+  ['rejected_by_forensic_bait', 'Rejected By Forensic Bait'],
+  ['rejected_by_profit_margin', 'Rejected By Profit Margin'],
+  ['passed_to_simulation_probe', 'Passed To Simulation Probe'],
+];
+function GateAudit({ m }) {
+  const g = m.forensicGates ?? {};
+  return (
+    <div className="metallic border hairline flex flex-col w-full">
+      <div className="metallic-head px-3 py-2 text-[10px] tracking-widest dim">Forensic Filtration Audit</div>
+      <div className="flex flex-col w-full">
+        {GATES.map(([k, label]) => (
+          <div key={k} className="flex items-center justify-between px-3 py-2 border-b border-[#1A1A1A] last:border-b-0 w-full">
+            <span className="text-[11px] dim">{label}</span>
+            <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)] text-[13px]">{g[k] ?? 0}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Strategy({ m, ops }) {
   const variants = Object.entries(m.variants ?? {});
   return (<>
+    <GateAudit m={m} />
     <div className="flex flex-col gap-1 p-3 text-[11px] border-b border-[#1A1A1A] w-full">
       {Object.entries(ops.regimes ?? {}).map(([c, r]) => (
         <Tip key={c} text={`${c}: ${REGIME_HINT[r.regime] ?? ''}\nVol ${r.volBps?.toFixed(1)}bps · Trend ${r.trendScore?.toFixed(2)} · Illiq ${(r.illiquidFrac * 100).toFixed(0)}%`}>
@@ -411,6 +436,7 @@ function Report({ m, ops }) {
   const signals = ops.signals ?? {};
   const lanes = ops.lanes ?? [];
   return (<>
+    <GateAudit m={m} />
     <Fold title="Signal Streams" cols={['Chain', 'Records', 'Whales']} defaultOpen
       rollups={[['Chains', Object.keys(signals).length], ['Records', Object.values(signals).reduce((s, x) => s + x.records, 0)], ['Whales', Object.values(signals).reduce((s, x) => s + x.whales, 0)]]}
       rows={Object.entries(signals).map(([c, s]) => [c, s.records, s.whales])} />

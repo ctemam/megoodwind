@@ -6,6 +6,7 @@ import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards } from '../engine/predictiveEngine.js';
 import { logger } from '../config/logger.js';
+import { metrics } from '../telemetry/metrics.js';
 import { buildEdges, findCycles } from './graph.js';
 
 /**
@@ -64,8 +65,8 @@ function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant): boolean {
   const g = effectiveGuards(v);
   for (const { pool } of legs) {
     const s = breaker.screen(chain.key, pool);
-    if (!s.ok) return false;
-    if (pool.liquidityUsd < g.minDepthUsd) return false;
+    if (!s.ok) { metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' }); return false; }
+    if (pool.liquidityUsd < g.minDepthUsd) { metrics.inc('rejected_by_profit_margin', { reason: 'depth' }); return false; }
   }
   return true;
 }
@@ -91,10 +92,12 @@ function emit(
   baseFeeWei: bigint,
   tokenUsd: number,
 ): Candidate | null {
+  metrics.inc('total_detected_opportunities', { chain: chain.key });
   const out = simulate(legs, borrowAmount);
-  if (out <= borrowAmount) return null;
+  if (out <= borrowAmount) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
   const sp = spreadPct(out, borrowAmount);
   if (sp > CREDIBILITY_CEILING_PCT) {
+    metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
     // >~2% = a pool in the path is lying about reserves. Convict ONLY the
     // legs whose spot quote diverges >3x from same-pair peers — blaming
     // every leg convicts honest pools (e.g. canonical WETH/USDC) that
@@ -122,7 +125,11 @@ function emit(
     chain: chain.key,
   });
   // STRICT_PROFIT_FLOOR_GUARD — no path may bypass min_profit_usd
-  if (cfg.STRICT_PROFIT_FLOOR_GUARD && n.netUsd < cfg.MIN_PROFIT_USD) return null;
+  if (cfg.STRICT_PROFIT_FLOOR_GUARD && n.netUsd < cfg.MIN_PROFIT_USD) {
+    metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
+    return null;
+  }
+  metrics.inc('passed_to_simulation_probe', { chain: chain.key });
   return { strategy, chain, legs, borrowToken, borrowAmount, simOut: out, spreadPct: sp, netUsd: n.netUsd, variant: v };
 }
 
