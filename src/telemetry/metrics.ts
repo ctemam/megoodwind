@@ -43,6 +43,9 @@ export interface SlippageState {
   boundBps: number;
   volBps: number;
   lastImpactBps: number;
+  peakImpactBps: number;  // worst impact observed this session
+  minOutUsd: number;      // last emitted candidate's on-chain minOut barrier, USD
+  floorUsd: number;       // the profit floor folded into minProfit
   at: number;
 }
 
@@ -158,10 +161,22 @@ class Metrics {
     this.slippage.set(chain, { ...s, at: Date.now() });
   }
 
-  /** Last measured path impact — written per evaluated candidate. */
+  /** Last measured path impact — written per evaluated candidate.
+   *  Peak tracks the worst observed clip for the session. */
   notePathImpact(chain: string, impactBps: number) {
     const s = this.slippage.get(chain);
-    if (s) s.lastImpactBps = impactBps;
+    if (s) {
+      s.lastImpactBps = impactBps;
+      if (impactBps > s.peakImpactBps) s.peakImpactBps = impactBps;
+    }
+  }
+
+  /** Active minOut barrier — the last candidate's on-chain output floor
+   *  in USD (repay + premium [+ whale lane floor]), streamed so the
+   *  cockpit renders the real barrier, not a static % assumption. */
+  noteMinOut(chain: string, minOutUsd: number, floorUsd: number) {
+    const s = this.slippage.get(chain);
+    if (s) { s.minOutUsd = minOutUsd; s.floorUsd = floorUsd; }
   }
 
   get analytics() {

@@ -67,6 +67,7 @@ const TOKEN_USD: Record<string, number> = {
   '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': cfg.NATIVE_USD,
   '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 600,
   '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 0.30,
+  '0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7': 35,   // WAVAX
   '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 1,
   '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d': 1,
   '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': 1,
@@ -75,6 +76,24 @@ const TOKEN_USD: Record<string, number> = {
   '0xc2132d05d31c914a87c6611c10748aeb04b58e8f': 1,
   '0x6b175474e89094c44da98b954eedeac495271d0f': 1,
 };
+
+/** Wrapped-native per chain — gas must be priced in THIS chain's native
+ *  USD, never a global ETH figure (poly gas at $2674/unit overstated the
+ *  cost ~8900x and silently killed every non-eth candidate). */
+const WNATIVE: Record<string, string> = {
+  eth: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  arb: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', // native ETH — fallback price is correct
+  op: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  base: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  linea: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  scroll: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  blast: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  bsc: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+  poly: '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270',
+  avax: '0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7',
+};
+const nativeUsdFor = (key: string): number =>
+  (WNATIVE[key] && TOKEN_USD[WNATIVE[key]]) || cfg.NATIVE_USD;
 
 async function ingest(chain: ChainConfig) {
   // leader scan: batched token->pairs on the majors (1 call / 30 addrs)
@@ -121,6 +140,12 @@ async function cycle(
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
     .catch(() => 0n)) ?? 0n;
 
+  // live priority fee — PRIORITY_FEE_GWEI is the fallback, not a constant:
+  // a fixed 5 gwei phantom-charges ~$6/candidate on eth where live tips
+  // run ~0.1-1 gwei, and under-prices poly's ~30 gwei norm
+  const livePrio = await rpc.call<string>('eth_maxPriorityFeePerGas', [])
+    .then((h) => BigInt(h)).catch(() => 0n);
+
   // OP-Stack dual-gas: L2 execution + L1 data availability (blob market).
   // Executor calldata is ~1.5KB worst-case; the oracle charges per nonzero
   // byte so this estimate is conservative. Scalars publish to the cockpit.
@@ -152,6 +177,8 @@ async function cycle(
     volBps: snap.volBps,
     tokenUsd: new Map(Object.entries(TOKEN_USD)),
     sizeOf,
+    nativeUsd: nativeUsdFor(chain.key),
+    priorityFeeWei: livePrio > 0n ? livePrio : BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
   });
   if (!candidates.length) return;
 

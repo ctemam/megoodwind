@@ -9,6 +9,7 @@ import { MarketRegime } from '../engine/marketRegime.js';
 import { logger } from '../config/logger.js';
 import { metrics, Lane } from '../telemetry/metrics.js';
 import { buildEdges, findCycles } from './graph.js';
+import { pickFlashSource, flashPremium } from '../exec/flashVenues.js';
 
 /**
  * Strategy solver — CPU-eval ALL items before any RPC.
@@ -109,6 +110,8 @@ function emit(
   l1DataFeeWei: bigint,
   lane: Lane = 'predictive',
   slipBoundBps = cfg.SLIPPAGE_BPS,
+  nativeUsd = cfg.NATIVE_USD,
+  priorityFeeWei = BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
   const decBorrow = decOf(legs[0].pool, borrowToken);
@@ -165,17 +168,23 @@ function emit(
     if (!convicted) log.debug(`spread ${sp.toFixed(0)}% with no divergent leg — unattributed, no conviction`);
     return null;
   }
+  // real flash premium at SCREEN time — aave-only chains (bsc/linea/
+  // scroll) charge 0.09%; assuming 0 produced phantom-positive candidates
+  // whose minOut=borrow+premium could never fill
+  const flSource = pickFlashSource(chain.key, borrowToken);
+  const flPremiumToken = flashPremium(flSource, borrow);
   const n = netUsd({
     gasUnits,
     baseFeeWei,
     l1DataFeeWei,
-    priorityFeeWei: BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
-    flashPremiumToken: 0n, // Balancer primary = 0%; Aave premium priced at plan build
+    priorityFeeWei,
+    flashPremiumToken: flPremiumToken,
     grossOutToken: out,
     borrowInToken: borrow,
     tokenUsd,
     tokenDec: decBorrow,
-    nativeUsd: cfg.NATIVE_USD,
+    nativeUsd, // chain's native price — ETH's $2.6k on poly/bsc overstated
+    // gas ~4-9000x and silently killed every non-eth candidate
     chain: chain.key,
   });
   // STRICT_PROFIT_FLOOR_GUARD — lane floor = max(global min, lane floor).
@@ -192,6 +201,14 @@ function emit(
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
   metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: n.netUsd, floorUsd });
+  // stream the ACTIVE on-chain barrier — minOut = repay + premium
+  // (+ floor on whale lane), in USD terms, for the cockpit
+  const toUsd = (amt: bigint) => (Number(amt) / 10 ** decBorrow) * tokenUsd;
+  metrics.noteMinOut(
+    chain.key,
+    toUsd(borrow + flPremiumToken) + (lane === 'whale' ? floorUsd : 0),
+    floorUsd,
+  );
   // lane floor in borrowToken units — the executor binds it into the
   // plan's minProfit (and whale-lane minOut), so the floor is enforced
   // on-chain, not just at screening.
@@ -207,7 +224,7 @@ function emit(
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint; nativeUsd?: number; priorityFeeWei?: bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
@@ -227,6 +244,9 @@ export function solve(
     boundBps: slipBps,
     volBps: opts.volBps ?? 0,
     lastImpactBps: 0,
+    peakImpactBps: 0,
+    minOutUsd: 0,
+    floorUsd: 0,
   });
   const push = (c: Candidate | null) => {
     if (!c) return;
@@ -260,7 +280,7 @@ export function solve(
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
             if (usd === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei));
           }
         }
       }
@@ -298,7 +318,7 @@ export function solve(
             const usdA = opts.tokenUsd.get(a);
             if (usdA === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(a, decOf(p1, a));
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps);
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei);
             push(cnd);
           }
         }
@@ -316,7 +336,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei));
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

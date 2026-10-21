@@ -187,8 +187,13 @@ export class RpcPool {
         } catch (e) {
           lastErr = e;
           const fatal = isDeadEndpoint(e);
-          if (fatal) { this.kill(m, fatal); continue; }
-          if (isTransportError(e)) this.penalize(m, isRateLimit(e));
+          // never dead-mark the LAST live member — a single-endpoint pool
+          // has no failover; permanent death guarantees zombie mode where
+          // every call throws while callers swallow errors on stale state.
+          // Penalize as transport instead: cooldown + retry is strictly
+          // better, and an auth-fatal endpoint fails fast anyway.
+          if (fatal && this.aliveCount() > 1) { this.kill(m, fatal); continue; }
+          if (isTransportError(e) || fatal) this.penalize(m, isRateLimit(e));
           else throw e; // deterministic payload errors are not transport faults
         }
       }
@@ -209,9 +214,18 @@ export class RpcPool {
     return this.call<string>('eth_call', [{ to, data }, blockTag]);
   }
 
-  /** exec-probe: eth_call from an explicit identity (smart account under 4337). */
-  async callFrom(from: string, to: string, data: string, value = '0x0'): Promise<string> {
-    return this.call<string>('eth_call', [{ from, to, data, value }, 'latest']);
+  /** exec-probe: eth_call from an explicit identity (smart account under
+   *  4337). blockTag enables pinned-state forensics; overrides carry the
+   *  eth_call state-override bundle (balance/code/stateDiff) — omitted
+   *  entirely when unset since not every backend accepts the param. */
+  async callFrom(
+    from: string, to: string, data: string, value = '0x0',
+    blockTag: string | number = 'latest',
+    overrides?: Record<string, { balance?: string; code?: string; stateDiff?: Record<string, string> }>,
+  ): Promise<string> {
+    const params: unknown[] = [{ from, to, data, value }, blockTag];
+    if (overrides) params.push(overrides);
+    return this.call<string>('eth_call', params);
   }
 }
 

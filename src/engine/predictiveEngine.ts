@@ -124,6 +124,10 @@ export interface SlippageCtx {
  * tape conditions instead of frozen:
  *   LOW_VOL_MEAN_REVERTING → clamp to SLIPPAGE_LOW_VOL_BPS (0.1%,
  *                            protective — dead tape can't absorb size)
+ *   BALANCED / unset       → clamp to SLIPPAGE_BASELINE_BPS (0.1%
+ *                            frontrun-protective baseline — mempool
+ *                            triage never ships a wide bound on
+ *                            standard loops)
  *   HIGH_VOL_TRENDING      → ×1.5 widening (trend legs need room)
  *   whale-alpha window     → widen to ≥WHALE_SLIPPAGE_BPS (transient
  *                            cross-venue spreads need slack)
@@ -135,6 +139,7 @@ export interface SlippageCtx {
 export function dynamicSlippageBps(v: Variant, ctx: SlippageCtx): number {
   let bps = effectiveGuards(v).slippageBps;
   if (ctx.regime === 'LOW_VOL_MEAN_REVERTING') bps = Math.min(bps, cfg.SLIPPAGE_LOW_VOL_BPS);
+  else if (ctx.regime !== 'HIGH_VOL_TRENDING') bps = Math.min(bps, cfg.SLIPPAGE_BASELINE_BPS);
   if (ctx.regime === 'HIGH_VOL_TRENDING') bps = Math.min(bps * 1.5, cfg.SLIPPAGE_CEILING_BPS);
   if (ctx.whale) bps = Math.max(bps, cfg.WHALE_SLIPPAGE_BPS);
   if (ctx.volBps !== undefined && Number.isFinite(ctx.volBps) && ctx.volBps > 0) {

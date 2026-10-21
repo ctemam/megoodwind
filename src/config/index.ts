@@ -60,6 +60,7 @@ const envSchema = z.object({
   SLIPPAGE_BPS: z.coerce.number().default(15),
   // dynamic slippage auto-tuning — bounds, not a static wall
   SLIPPAGE_LOW_VOL_BPS: z.coerce.number().default(10),    // 0.1% protective on dead tape
+  SLIPPAGE_BASELINE_BPS: z.coerce.number().default(10),   // 0.1% frontrun-protective baseline on standard (BALANCED) loops
   WHALE_SLIPPAGE_BPS: z.coerce.number().default(150),     // alpha-window width (transient spreads)
   SLIPPAGE_CEILING_BPS: z.coerce.number().default(200),   // absolute cap — never beyond
   FOT_BLACKLIST_PATH: z.string().default('tools/fot_blacklist.json'),

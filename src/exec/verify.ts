@@ -17,6 +17,12 @@ export type ProbeOutcome =
   | { kind: 'deterministic_revert'; reason: string }
   | { kind: 'transport'; reason: string };
 
+/** eth_call state overrides — dry-run forensics layer: the caller's
+ *  native balance is an environment artifact, not the exploit surface,
+ *  so probes may override it (e.g. { [from]: { balance: '0x...' } })
+ *  without faking the plan's own solvency. */
+export type StateOverride = Record<string, { balance?: string; code?: string; stateDiff?: Record<string, string> }>;
+
 const log = logger('verify');
 
 export async function execProbe(
@@ -24,15 +30,17 @@ export async function execProbe(
   from: string,
   to: string,
   data: string,
+  opts?: { blockTag?: string | number; stateOverride?: StateOverride },
 ): Promise<ProbeOutcome> {
   try {
-    await rpc.callFrom(from, to, data);
+    await rpc.callFrom(from, to, data, '0x0', opts?.blockTag ?? 'latest', opts?.stateOverride);
     return { kind: 'pass' };
   } catch (e) {
     const err = e as { message?: string; info?: { error?: { code?: number; data?: string } }; data?: string };
     const msg = String(err?.message ?? e);
     if (isTransport(msg)) return { kind: 'transport', reason: msg.slice(0, 120) };
-    // ErrorPayload — decode revert reason (0x08c379a0 Error(string))
+    // ErrorPayload — decode revert reason: Error(string), Panic(uint),
+    // or the raw custom-error selector for attribution
     const payload = err?.info?.error?.data ?? err?.data ?? '';
     const reason = decodeRevert(String(payload)) || msg.slice(0, 160);
     return { kind: 'deterministic_revert', reason };
@@ -54,15 +62,31 @@ const isTransport = (m: string) =>
   m.includes('429') || m.includes('timeout') || m.includes('TIMEOUT') ||
   m.includes('ECONNRESET') || m.includes('ETIMEDOUT') || m.includes('rpc_timeout');
 
-function decodeRevert(hex: string): string {
-  if (!hex.startsWith('0x08c379a0')) return '';
-  try {
-    const len = parseInt(hex.slice(74, 138), 16);
-    const strHex = hex.slice(138, 138 + len * 2);
-    return Buffer.from(strHex, 'hex').toString('utf8');
-  } catch {
-    return '';
+const PANIC: Record<string, string> = {
+  '0x00': 'generic compiler panic', '0x01': 'assert(false)',
+  '0x11': 'arithmetic over/underflow', '0x12': 'div or mod by zero',
+  '0x21': 'invalid enum conversion', '0x22': 'corrupt storage byte array',
+  '0x31': 'pop on empty array', '0x32': 'array out-of-bounds',
+  '0x41': 'memory overflow', '0x51': 'call to invalid fn pointer',
+};
+
+/** Revert-payload decoder — Error(string), Panic(uint256), or the raw
+ *  4-byte selector of a custom error (kept for attribution forensics). */
+export function decodeRevert(hex: string): string {
+  if (!hex || hex === '0x') return 'empty revert';
+  if (hex.startsWith('0x08c379a0')) {
+    try {
+      const len = parseInt(hex.slice(74, 138), 16);
+      const strHex = hex.slice(138, 138 + len * 2);
+      return Buffer.from(strHex, 'hex').toString('utf8');
+    } catch { /* fall through */ }
   }
+  if (hex.startsWith('0x4e487b71') && hex.length >= 74) {
+    const code = `0x${hex.slice(72, 74)}`;
+    return `Panic(${code} ${PANIC[code] ?? 'unknown'})`;
+  }
+  if (hex.length >= 10) return `custom error ${hex.slice(0, 10)}`;
+  return '';
 }
 
 /** EIP-1559 circuit breaker — dormant above MAX_BASE_FEE_GWEI (Item #1). */

@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 import { chainConfig } from '../../src/config/index.js';
 import { logger } from '../../src/config/logger.js';
 import { categorize } from './forkDiagnostics.js';
+import { decodeRevert } from '../../src/exec/verify.js';
 
 /**
  * Alchemy-fork simulation tier — the two named skills, as runnable code.
@@ -65,22 +66,52 @@ export async function fork_live_chain_state(opts: {
   return { rpc, block, kill: () => anvil.kill() };
 }
 
+export interface ForkDryRunResult {
+  status: 'PASS' | 'REVERT' | 'OOG';
+  gasUsed: bigint;
+  gasVariancePct?: number;
+  /** decoded revert payload — Error(string) / Panic(code) / custom
+   *  selector; undefined when the failure left no retrievable payload */
+  revertReason?: string;
+}
+
+const revertDataOf = (e: unknown): string => {
+  const err = e as { info?: { error?: { data?: string } }; data?: string };
+  return String(err?.info?.error?.data ?? err?.data ?? '');
+};
+
 export async function execute_fork_dry_run(fork: ForkHandle, tx: {
   impersonate: string;    // any address — permissions granted locally
   to: string;
   data: string;
   valueWei?: bigint;
-}): Promise<{ status: 'PASS' | 'REVERT' | 'OOG'; gasUsed: bigint; gasVariancePct?: number }> {
+}): Promise<ForkDryRunResult> {
   await fork.rpc.send('anvil_impersonateAccount', [tx.impersonate]);
+  // forensic state edit — the impersonated identity may hold ~0 native
+  // on this chain's fork; gas payment is an environment artifact, not
+  // the exploit surface. Funding it keeps REVERT = the PLAN reverted.
+  await fork.rpc.send('anvil_setBalance', [tx.impersonate, '0x56BC75E2D63100000']).catch(() => undefined); // 100 native
+  const callArgs = { from: tx.impersonate, to: tx.to, data: tx.data, value: ethers.toBeHex(tx.valueWei ?? 0n) };
   try {
-    // remote-vs-fork gas variance: estimate BEFORE send on the same state
-    const est = await fork.rpc.estimateGas({ from: tx.impersonate, to: tx.to, data: tx.data, value: tx.valueWei ?? 0n }).catch(() => 0n);
-    const hash = await fork.rpc.send('eth_sendTransaction', [{
-      from: tx.impersonate, to: tx.to, data: tx.data, value: ethers.toBeHex(tx.valueWei ?? 0n),
-    }]);
+    // crime-scene replay BEFORE spending the tx: eth_call on identical
+    // state captures the revert payload a mined receipt discards
+    let preReason: string | undefined;
+    await fork.rpc.send('eth_call', [callArgs, 'latest']).catch((e) => { preReason = decodeRevert(revertDataOf(e)); });
+    // remote-vs-fork gas variance: estimate on the same state
+    const est = await fork.rpc.estimateGas(callArgs).catch(() => 0n);
+    const hash = await fork.rpc.send('eth_sendTransaction', [callArgs]);
     const receipt = await fork.rpc.waitForTransaction(hash);
     if (!receipt || receipt.status === 0) {
-      return { status: receipt && receipt.gasUsed >= 29_900_000n ? 'OOG' : 'REVERT', gasUsed: receipt?.gasUsed ?? 0n };
+      // post-mortem: replay the exact tx at its own block for the reason
+      if (!preReason && receipt) {
+        await fork.rpc.send('eth_call', [callArgs, ethers.toBeHex(receipt.blockNumber)])
+          .catch((e) => { preReason = decodeRevert(revertDataOf(e)); });
+      }
+      return {
+        status: receipt && receipt.gasUsed >= 29_900_000n ? 'OOG' : 'REVERT',
+        gasUsed: receipt?.gasUsed ?? 0n,
+        revertReason: preReason,
+      };
     }
     const variance = est > 0n ? Number(((receipt.gasUsed - est) * 100n) / est) : undefined;
     return { status: 'PASS', gasUsed: receipt.gasUsed, gasVariancePct: variance };

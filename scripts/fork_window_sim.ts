@@ -12,6 +12,9 @@ import { classifyMarketRegime } from '../src/engine/marketRegime.js';
 import { nextVariant } from '../src/engine/strategyRouter.js';
 import { emitSignal } from '../src/telemetry/signalSink.js';
 import { metrics } from '../src/telemetry/metrics.js';
+import { buildPlan } from '../src/exec/planBuilder.js';
+import { pickFlashSource, flashPremium } from '../src/exec/flashVenues.js';
+import { execute_fork_dry_run } from '../test/anvil/forkSim.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 /**
@@ -47,6 +50,24 @@ const MAJORS: Record<string, string[]> = {
     '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
     '0xdAC17F958D2ee523a2206206994597C13D831ec7', // USDT
     '0x6B175474E89094C44Da98b954EedeAC495271d0F', // DAI
+    '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', // WBTC
+    '0x514910771AF9Ca656af840dff83E8264EcF986CA', // LINK
+  ],
+  bsc: [
+    '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
+    '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', // USDC
+    '0x55d398326f99059fF775485246999027B3197955', // USDT
+    '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', // BTCB
+    '0x2170Ed0880ac9A755fd29B2688956BD959F933F8', // ETH
+    '0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82', // CAKE
+  ],
+  poly: [
+    '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', // WPOL/WMATIC
+    '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', // USDC (native)
+    '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', // USDC.e
+    '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', // USDT
+    '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', // WETH
+    '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', // WBTC
   ],
 };
 
@@ -55,7 +76,38 @@ const TOKEN_USD: Record<string, number> = {
   '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 1,
   '0xdac17f958d2ee523a2206206994597c13d831ec7': 1,
   '0x6b175474e89094c44da98b954eedeac495271d0f': 1,
+  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': 67_000,  // WBTC
+  '0x514910771af9ca656af840dff83e8264ecf986ca': 12,      // LINK
+  '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 600,     // WBNB
+  '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d': 1,       // USDC.bsc
+  '0x55d398326f99059ff775485246999027b3197955': 1,       // USDT.bsc
+  '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c': 67_000, // BTCB
+  '0x2170ed0880ac9a755fd29b2688956bd959f933f8': cfg.NATIVE_USD, // ETH.bsc
+  '0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82': 2,       // CAKE
+  '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': 0.30,    // WPOL
+  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': 1,       // USDC.poly
+  '0x2791bca1f2de4661ed88a30c99a7a9449aa84174': 1,       // USDC.e
+  '0xc2132d05d31c914a87c6611c10748aeb04b58e8f': 1,       // USDT.poly
+  '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': cfg.NATIVE_USD, // WETH.poly
+  '0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': 67_000,  // WBTC.poly
 };
+
+/** Wrapped-native per chain — gas is priced in THIS chain's native USD. */
+const WNATIVE: Record<string, string> = {
+  eth: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  bsc: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c',
+  poly: '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270',
+  arb: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  op: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  base: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  linea: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  scroll: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  blast: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2',
+  avax: '0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7',
+};
+const nativeUsdFor = (key: string): number =>
+  (WNATIVE[key] && TOKEN_USD[WNATIVE[key]]) || cfg.NATIVE_USD;
+const topPoolQuery = (key: string) => (key === 'bsc' ? 'WBNB' : key === 'poly' ? 'WMATIC' : 'WETH');
 
 const PROJ_FILE = 'data/projections.json';
 function writeProjection(p: object) {
@@ -64,7 +116,7 @@ function writeProjection(p: object) {
 }
 
 async function main() {
-  const chainKey = (process.env.FORK_CHAIN ?? 'eth') as 'eth';
+  const chainKey = process.env.FORK_CHAIN ?? 'eth';
   const chain = chainConfig(chainKey);
 
   log.info(`fork_window_sim: ${chainKey} — ${WINDOW_SECS}s window starting`);
@@ -97,7 +149,7 @@ async function main() {
   for (const ref of await poolsForTokens(chainKey, crawlTokens)) {
     if (!breaker.isConvicted(chainKey, ref.address)) registry.upsert(ref);
   }
-  for (const ref of await topPools(chainKey, 'WETH')) {
+  for (const ref of await topPools(chainKey, topPoolQuery(chainKey))) {
     if (!breaker.isConvicted(chainKey, ref.address)) registry.upsert(ref);
   }
   let tracked = registry.all(chainKey);
@@ -110,12 +162,42 @@ async function main() {
 
   // first refresh on the fork — prune pools with no readable on-chain
   // state (aggregators/routers DexScreener lists that never expose
-  // getReserves/slot0) so the solver only sees evaluable venues
+  // getReserves/slot0) so the solver only sees evaluable venues.
+  // Two passes: the cold pass under the upstream CU throttle loses
+  // transient subcalls; the retry hits anvil's cache + only fetches
+  // missing slots, recovering pools that failed transport, not state.
   await refreshPools(rpc, tracked).catch((e) => log.warn('initial refresh', e));
-  tracked = tracked.filter((p) => p.reserve0 !== undefined || p.sqrtPriceX96 !== undefined);
+  const stale = tracked.filter((p) => p.reserve0 === undefined && p.sqrtPriceX96 === undefined);
+  if (stale.length) {
+    await refreshPools(rpc, stale).catch((e) => log.warn('refresh retry', e));
+  }
+  // prune from the REGISTRY not just the tracked list — the regime
+  // classifier reads registry.all(); pools left registered-but-stateless
+  // count as 'stale' forever and pin illiquidFrac > 0.5 → ILLIQUID_CRASH
+  // for the entire window regardless of the real tape.
+  for (const p of tracked) {
+    if (p.reserve0 === undefined && p.sqrtPriceX96 === undefined) {
+      registry.remove(`${chainKey}:${p.address.toLowerCase()}`);
+    }
+  }
+  tracked = registry.all(chainKey).filter((p) => p.reserve0 !== undefined || p.sqrtPriceX96 !== undefined);
   log.info(`post-refresh: ${tracked.length} evaluable pools on fork state`);
 
   const startedAt = Date.now();
+  // per-run gate deltas — counters persist across runs in
+  // metrics_counters.json, so snapshot at boot and report deltas only
+  const gateBase = {
+    detected: metrics.counterSum('total_detected_opportunities'),
+    bait: metrics.counterSum('rejected_by_forensic_bait'),
+    margin: metrics.counterSum('rejected_by_profit_margin'),
+    probe: metrics.counterSum('passed_to_simulation_probe'),
+  };
+  const gateDeltas = () => ({
+    total_detected_opportunities: metrics.counterSum('total_detected_opportunities') - gateBase.detected,
+    rejected_by_forensic_bait: metrics.counterSum('rejected_by_forensic_bait') - gateBase.bait,
+    rejected_by_profit_margin: metrics.counterSum('rejected_by_profit_margin') - gateBase.margin,
+    passed_to_simulation_probe: metrics.counterSum('passed_to_simulation_probe') - gateBase.probe,
+  });
   let cycles = 0, profitable = 0, accruedNetUsd = 0;
   const variantHits = new Map<string, number>();
   const variantNet = new Map<string, number>();
@@ -124,6 +206,11 @@ async function main() {
   // predictive = variant-scheduled solver lane; whale = whale-alert lane
   // (fork state has no live mempool — whale count is an honest zero)
   const laneCounts = { predictive: 0, whale: 0 };
+  // execution truth gate: top winners go through a REAL exec() dry-run on
+  // the fork — impersonated owner, live Balancer/flash state, minOut and
+  // minProfit enforced by the contract. PASS = execution-ready, proven.
+  let execAttempts = 0, execReady = 0;
+  const execGate: Record<string, number> = {};
 
   const tick = async () => {
     cycles++;
@@ -135,6 +222,8 @@ async function main() {
 
       const baseFeeWei = (await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false])
         .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n)).catch(() => 0n)) ?? 0n;
+      const livePrio = await rpc.call<string>('eth_maxPriorityFeePerGas', [])
+        .then((h) => BigInt(h)).catch(() => 0n);
 
       const candidates = solve(forkChain, variant, {
         gasUnits: 450_000n,
@@ -148,6 +237,8 @@ async function main() {
           const px = TOKEN_USD[token.toLowerCase()] ?? 1;
           return (BigInt(Math.floor((cfg.FLASH_BORROW_USD / px) * 1e6)) * 10n ** BigInt(dec)) / 10n ** 6n;
         },
+        nativeUsd: nativeUsdFor(chainKey),
+        priorityFeeWei: livePrio > 0n ? livePrio : BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
       });
 
       const winners = candidates.filter((c) => c.netUsd > 0);
@@ -166,6 +257,33 @@ async function main() {
         });
       }
 
+      // EXECUTION TRUTH GATE — top-3 winners run the real exec() payload
+      // on the fork: impersonated smart-account owner -> executor contract
+      // -> live flash venue + pools at the pinned block. PASS means the
+      // candidate is execution-READY (proven, not asserted). All fork-local.
+      for (const c of winners.slice(0, 3)) {
+        if (!chain.executor) break;
+        execAttempts++;
+        const source = pickFlashSource(chainKey, c.borrowToken);
+        const { execData } = buildPlan(c, {
+          source, premium: flashPremium(source, c.borrowAmount), minProfit: c.minProfitToken,
+        });
+        const res = await execute_fork_dry_run(fork, {
+          impersonate: cfg.SMART_ACCOUNT_ADDRESS, to: chain.executor, data: execData,
+        });
+        execGate[res.status] = (execGate[res.status] ?? 0) + 1;
+        if (res.revertReason) {
+          const rk = `${res.status}:${res.revertReason.slice(0, 60)}`;
+          execGate[rk] = (execGate[rk] ?? 0) + 1;
+        }
+        if (res.status === 'PASS') {
+          execReady++;
+          log.info(`EXEC-READY ${c.strategy} ${c.variant.id} net=$${c.netUsd.toFixed(2)} gas=${res.gasUsed}`);
+        } else {
+          log.warn(`exec-gate ${res.status} ${c.strategy} ${c.variant.id} net=$${c.netUsd.toFixed(2)} reason=${res.revertReason ?? 'n/a'}`);
+        }
+      }
+
       const elapsed = (Date.now() - startedAt) / 1000;
       const simPerHourUsd = elapsed > 0 ? accruedNetUsd * (3600 / elapsed) : 0;
       const prodPerHourUsd = simPerHourUsd * LAND_RATE * SLIPPAGE_FACTOR;
@@ -179,12 +297,8 @@ async function main() {
         variantHits: Object.fromEntries(variantHits),
         variantNetUsd: Object.fromEntries([...variantNet].map(([k, v]) => [k, Number(v.toFixed(4))])),
         lanes: { ...laneCounts },
-        forensicGates: {
-          total_detected_opportunities: metrics.counterSum('total_detected_opportunities'),
-          rejected_by_forensic_bait: metrics.counterSum('rejected_by_forensic_bait'),
-          rejected_by_profit_margin: metrics.counterSum('rejected_by_profit_margin'),
-          passed_to_simulation_probe: metrics.counterSum('passed_to_simulation_probe'),
-        },
+        execGate: { attempts: execAttempts, ready: execReady, ...execGate },
+        forensicGates: gateDeltas(),
       });
       if (cycles % 5 === 0 || winners.length) {
         log.info(`cycle ${cycles} · ${tracked.length} pools · regime=${snap.regime} · winners=${winners.length} · net=$${accruedNetUsd.toFixed(2)} · sim/hr=$${simPerHourUsd.toFixed(2)} · prod/hr=$${prodPerHourUsd.toFixed(2)}`);
@@ -214,12 +328,8 @@ async function main() {
   console.log('strategy hits:', Object.fromEntries(strategyHits));
   console.log('strategy net $:', Object.fromEntries([...strategyNet].map(([k, v]) => [k, v.toFixed(4)])));
   console.log('lanes — predictive:', laneCounts.predictive, ' whale:', laneCounts.whale, '(fork has no live mempool)');
-  console.log('forensic gates:', {
-    detected: metrics.counterSum('total_detected_opportunities'),
-    bait_rejected: metrics.counterSum('rejected_by_forensic_bait'),
-    margin_rejected: metrics.counterSum('rejected_by_profit_margin'),
-    passed_probe: metrics.counterSum('passed_to_simulation_probe'),
-  });
+  console.log('exec gate — attempts:', execAttempts, ' READY(PASS):', execReady, ' breakdown:', execGate);
+  console.log('forensic gates (this run):', gateDeltas());
   console.log('════════════════════════════════════');
   process.exit(0);
 }
