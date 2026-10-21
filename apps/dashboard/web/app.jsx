@@ -31,6 +31,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) 
         {open && right && <span className="ml-auto">{right}</span>}
       </header>
       {open && (
+        <div className="max-h-[60vh] overflow-x-auto overflow-y-auto">
         <table className="w-max max-w-none text-left text-[11px]">
           <thead>
             <tr className="hairline-b dim text-[9px] uppercase tracking-widest">
@@ -52,6 +53,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) 
             </tfoot>
           )}
         </table>
+        </div>
       )}
     </section>
   );
@@ -514,65 +516,84 @@ function App() {
         </div>
       </nav>
 
-      <main className="ml-36 pb-10 pt-14">
-        {/* fixed top control panel — persistent telemetry + timekeepers */}
-        <header className="metallic fixed left-36 right-0 top-0 z-40 flex h-12 items-center gap-4 overflow-x-auto border-b border-slate-700/50 px-4 whitespace-nowrap">
-          <span className="flex items-center gap-2">
-            <img src="./logo.svg" className="h-5 w-auto" alt="AllBright" />
-            <span className="text-[10px] tracking-widest text-white">BANBOT COCKPIT v1.0</span>
-          </span>
-          <span className="hairline flex text-[9px] tracking-widest">
-            {['usd', 'eth'].map((u) => (
-              <button key={u} onClick={() => { setUnit(u); saveStored('ab_unit', u); }}
-                className={`px-2 py-0.5 ${unit === u ? 'bg-[#1e4fd8] text-white' : 'dim hover:text-white'}`}>{u.toUpperCase()}</button>
-            ))}
-          </span>
-          <span className="flex items-center gap-1.5 text-[10px]">
-            <span className="dim uppercase tracking-widest">Profit</span>
-            <Tip text={profitSpan === 'day' ? 'Settled Net — Trailing 24h' : 'Settled Net — Lifetime Since Deployment'}>
-              <span className={profitShown >= 0 ? 'acc text-[12px]' : 'bad text-[12px]'}>{val(profitShown)}</span>
-            </Tip>
-            <select value={profitSpan} onChange={(e) => setProfitSpan(e.target.value)}
-              className="hairline bg-transparent px-1 py-0.5 text-[9px] dim">
-              <option value="day" className="bg-black">Per Day</option>
-              <option value="lifetime" className="bg-black">Lifetime</option>
-            </select>
-          </span>
-          <span className="flex items-center gap-1.5 text-[10px]">
-            <span className="dim uppercase tracking-widest">Profit Pulse</span>
-            <Tip text={`Aggregate Of ${accounts.length} Tracked Account${accounts.length === 1 ? '' : 's'} — Live EIP-1193 Balances × Native Prices`}>
-              <span className="acc text-[12px]">{accounts.length ? val(pulseUsd) : '—'}</span>
-            </Tip>
-          </span>
-          <DigitalWatch />
-          <select onChange={(e) => setWindowMs(Number(e.target.value))} defaultValue={Infinity}
-            className="hairline bg-transparent px-1.5 py-0.5 text-[9px] dim" title="Unified Time Filter — Settled Records Window">
-            {TIME_WINDOWS.map(([k, v]) => <option key={k} value={v} className="bg-black">{k}</option>)}
-          </select>
-          <button onClick={killSwitch}
-            className="hairline px-3 py-1 text-[9px] tracking-widest text-[#F87171] hover:border-[#FF4444] hover:bg-[#2a0a0a]"
-            title="Emergency Kill Switch — Stops The Runner Immediately">
-            ▣ Emergency Kill
-          </button>
-          <span className="ml-auto flex items-center gap-3">
-            <span className="text-[11px] tracking-widest">{page.toUpperCase()}</span>
-            <span className={`text-[10px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
+      <main className="ml-36 pb-28 pt-52">
+        {/* fixed top control panel — persistent telemetry + timekeepers (4× height) */}
+        <header className="metallic fixed left-36 right-0 top-0 z-40 flex h-48 flex-col overflow-x-auto overflow-y-hidden border-b border-slate-700/50 px-6 py-3 whitespace-nowrap">
+          {/* row 1 — brand + valuation + watch */}
+          <div className="flex items-center gap-6 border-b border-[#1A1A1A] pb-3">
+            <span className="flex items-center gap-3">
+              <img src="./logo.svg" className="h-9 w-auto" alt="AllBright" />
+              <span className="flex flex-col">
+                <span className="text-[14px] tracking-widest text-white">ALLBRIGHT</span>
+                <span className="dim text-[9px] tracking-[0.3em]">BANBOT COCKPIT v1.0</span>
+              </span>
+            </span>
+            <span className="hairline flex text-[10px] tracking-widest">
+              {['usd', 'eth'].map((u) => (
+                <button key={u} onClick={() => { setUnit(u); saveStored('ab_unit', u); }}
+                  className={`px-3 py-1 ${unit === u ? 'bg-[#1e4fd8] text-white' : 'dim hover:text-white'}`}>{u.toUpperCase()}</button>
+              ))}
+            </span>
+            <span className="ml-auto"><DigitalWatch /></span>
+          </div>
+          {/* row 2 — profit + pulse + time filter */}
+          <div className="flex items-center gap-8 border-b border-[#1A1A1A] py-3">
+            <span className="flex items-center gap-2 text-[11px]">
+              <span className="dim uppercase tracking-widest">Profit</span>
+              <Tip text={profitSpan === 'day' ? 'Settled Net — Trailing 24h' : 'Settled Net — Lifetime Since Deployment'}>
+                <span className={profitShown >= 0 ? 'acc text-lg' : 'bad text-lg'}>{val(profitShown)}</span>
+              </Tip>
+              <select value={profitSpan} onChange={(e) => setProfitSpan(e.target.value)}
+                className="hairline bg-transparent px-1.5 py-1 text-[10px] dim">
+                <option value="day" className="bg-black">Per Day</option>
+                <option value="lifetime" className="bg-black">Lifetime</option>
+              </select>
+            </span>
+            <span className="flex items-center gap-2 text-[11px]">
+              <span className="dim uppercase tracking-widest">Profit Pulse</span>
+              <Tip text={`Aggregate Of ${accounts.length} Tracked Account${accounts.length === 1 ? '' : 's'} — Live EIP-1193 Balances × Native Prices`}>
+                <span className="acc text-lg">{accounts.length ? val(pulseUsd) : '—'}</span>
+              </Tip>
+            </span>
+            <span className="flex items-center gap-2 text-[11px]">
+              <span className="dim uppercase tracking-widest">Window</span>
+              <select onChange={(e) => setWindowMs(Number(e.target.value))} defaultValue={Infinity}
+                className="hairline bg-transparent px-2 py-1 text-[10px] dim" title="Unified Time Filter — Settled Records Window">
+                {TIME_WINDOWS.map(([k, v]) => <option key={k} value={v} className="bg-black">{k}</option>)}
+              </select>
+            </span>
+          </div>
+          {/* row 3 — controls + mode */}
+          <div className="flex items-center gap-6 pt-3">
+            <button onClick={killSwitch}
+              className="hairline px-4 py-1.5 text-[10px] tracking-widest text-[#F87171] hover:border-[#FF4444] hover:bg-[#2a0a0a]"
+              title="Emergency Kill Switch — Stops The Runner Immediately">
+              ▣ Emergency Kill
+            </button>
+            <span className="text-[12px] tracking-[0.25em] text-white">{page.toUpperCase()}</span>
+            <span className={`ml-auto text-[11px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
               {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
             </span>
-          </span>
+          </div>
         </header>
         <div className="flex flex-col space-y-6 w-full">{pageBody}</div>
       </main>
 
-      <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-7 items-center gap-5 border-t border-slate-700/50 px-4 text-[10px]">
+      {/* status ribbon — 50% of the 192px control panel */}
+      <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-24 flex-col justify-center gap-2 overflow-x-auto border-t border-slate-700/50 px-6 text-[11px] whitespace-nowrap">
         {(() => {
           const rps = Object.values(ops.providers ?? {}).filter((p) => !/^SUSPENDED/.test(p.status ?? '')).reduce((s, p) => s + (p.safe_rps ?? 0), 0);
           return (<>
-            <span className="tt" data-tt="Fleet"><span className="dim">Fleet</span> <span className="num">~{rps.toFixed(1)} Req/S</span></span>
-            <span className="tt" data-tt="Lanes"><span className="dim">Lanes</span> <span className="num">{lanes.length}</span></span>
-            <span className="tt" data-tt="Daemon"><span className="dim">Sync</span> <span className="text-white">{trunc(ops.daemon?.lastLine, 30)}</span></span>
-            <span className="tt" data-tt="Engine"><span className="dim">Engine</span> <span className="num">{ops.engine?.running ? `PID ${ops.engine.pid}` : 'Off'}</span></span>
-            <span className="ml-auto dim">AllBright © 2026</span>
+            <div className="flex items-center gap-6">
+              <span className="tt" data-tt="Fleet"><span className="dim">Fleet</span> <span className="num">~{rps.toFixed(1)} Req/S</span></span>
+              <span className="tt" data-tt="Lanes"><span className="dim">Lanes</span> <span className="num">{lanes.length}</span></span>
+              <span className="tt" data-tt="Engine"><span className="dim">Engine</span> <span className="num">{ops.engine?.running ? `PID ${ops.engine.pid}` : 'Off'}</span></span>
+              <span className="tt" data-tt="Signals"><span className="dim">Signals</span> <span className="num">{Object.values(ops.signals ?? {}).reduce((s, x) => s + x.records, 0)}</span></span>
+            </div>
+            <div className="flex items-center gap-6">
+              <span className="tt" data-tt="Daemon"><span className="dim">Sync</span> <span className="text-white">{trunc(ops.daemon?.lastLine, 60)}</span></span>
+              <span className="ml-auto dim">AllBright © 2026</span>
+            </div>
           </>);
         })()}
       </footer>
