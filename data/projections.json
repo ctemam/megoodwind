@@ -1,7 +1,7 @@
 {
   "chain": "eth",
-  "forkBlock": 26241543,
-  "windowSec": 300,
+  "forkBlock": 26241601,
+  "windowSec": 301,
   "cycles": 26,
   "profitableCandidates": 0,
   "accruedNetUsd": 0,
@@ -11,5 +11,5 @@
   "slippageFactor": 0.85,
   "regime": "LOW_VOL_MEAN_REVERTING",
   "pools": 97,
-  "ts": 1792592918274
+  "ts": 1792593614393
 }

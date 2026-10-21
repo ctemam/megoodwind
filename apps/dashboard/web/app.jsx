@@ -358,7 +358,22 @@ function Configuration({ m, ops }) {
   const rows = Object.entries(ops.configuration ?? {}).map(([k, v]) => [
     <span className="dim">{k}</span>, String(v),
   ]);
+  const pj = m.projections;
+  const liveRows = pj ? [
+    [<span className="dim">Active Variant</span>, <span className="val">{pj.activeVariant ?? '—'}</span>],
+    [<span className="dim">Market Regime</span>, <span className="val">{pj.regime ?? '—'}</span>],
+    [<span className="dim">Fork Block</span>, <span className="val">{pj.forkBlock ?? '—'}</span>],
+    [<span className="dim">Pools Evaluated</span>, <span className="val">{pj.pools ?? '—'}</span>],
+    [<span className="dim">Cycles</span>, <span className="val">{pj.cycles ?? '—'}</span>],
+    [<span className="dim">Sim Per Hour</span>, <span className="val">${(pj.simPerHourUsd ?? 0).toFixed(2)}</span>],
+    [<span className="dim">Prod Per Hour</span>, <span className="val">${(pj.prodPerHourUsd ?? 0).toFixed(2)}</span>],
+  ] : [];
   return (<>
+    {liveRows.length ? (
+      <Fold title="Live Simulation State" cols={['Metric', 'Value']} defaultOpen
+        rollups={[['Window', `${pj.windowSec}s`], ['Profitable', pj.profitableCandidates ?? 0]]}
+        rows={liveRows} />
+    ) : null}
     <Fold title="Runtime Parameters" cols={['Key', 'Value']} defaultOpen
       rollups={[['Params', rows.length], ['Mode', m.config?.autoExecute ? 'Live' : 'Shadow']]}
       rows={rows} />

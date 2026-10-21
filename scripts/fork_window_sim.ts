@@ -155,7 +155,7 @@ async function main() {
         chain: chainKey, forkBlock: fork.block, windowSec: Math.round(elapsed),
         cycles, profitableCandidates: profitable, accruedNetUsd,
         simPerHourUsd, prodPerHourUsd, landRate: LAND_RATE, slippageFactor: SLIPPAGE_FACTOR,
-        regime: snap.regime, pools: tracked.length, ts: Date.now(),
+        regime: snap.regime, pools: tracked.length, activeVariant: variant.id, ts: Date.now(),
       });
       if (cycles % 5 === 0 || winners.length) {
         log.info(`cycle ${cycles} · ${tracked.length} pools · regime=${snap.regime} · winners=${winners.length} · net=$${accruedNetUsd.toFixed(2)} · sim/hr=$${simPerHourUsd.toFixed(2)} · prod/hr=$${prodPerHourUsd.toFixed(2)}`);
