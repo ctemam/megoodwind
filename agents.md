@@ -2,7 +2,10 @@
 
 The Scout Agent coordinates the autonomous loop. Path priority:
 targets assets heavily pooled inside the Balancer Vault first
-(0% flash fee = primary capital engine), Aave V3 second.
+(0% flash fee = primary capital engine), then the zero-fee bench —
+Morpho Blue and Maker DssFlash (ERC-3156, DAI/eth) — Aave V3 (0.09%)
+only as paid-capital last resort. `src/exec/flashVenues.ts` is the
+single venue truth; `pickFlashSource` prefers 0% sources.
 
 ## Agents
 
@@ -34,7 +37,7 @@ logs, or token-list streams + on-chain metadata.
 | Cross-chain telemetry | metrics API + Banbot cockpit (subgraph feeds reserved) | `src/telemetry/*` |
 | Multicall3 batching | `aggregate3` on canonical `0xcA11bde05977b3631167028862bE2a173976CA11` — N view calls collapse into ONE eth_call (~200× request-rate reduction on discovery + sim refresh). Contract-level aggregation — immune to JSON-RPC envelope batch caps (dRPC's 3-item limit does not apply). `MULTICALL3_ADDR` env override; auto-fallback to per-call if the aggregate errors | `src/providers/multicall.ts` |
 | L1 data-fee oracle | OP-Stack predeploy `0x4200…000F`; `getL1Fee(calldata)` + scalar reads via ONE aggregate3; dual-gas = L2 exec + L1 blob fee flows into `netUsd`; OP_STACK={base,op,blast}; scalars land on cockpit Chains/Configuration pages | `src/providers/l1Fee.ts`, `src/math/profit.ts`, `src/runner/arbRunner.ts` |
-| Deploy address registry | `VENUES` = Balancer/Aave ctor args per chain (`address(0)` = verified boundary); `DEX_ROUTERS` = documented router/quoter/factory coords; all EIP-55 checksummed (10-chain dry-run sweep clean) | `scripts/deploy.ts` |
+| Deploy address registry | `VENUES = FLASH_VENUES` — Balancer/Morpho/ERC3156/Aave coords per chain (`address(0)` = verified boundary); `DEX_ROUTERS` = documented router/quoter/factory coords; all EIP-55 checksummed (10-chain dry-run sweep clean) | `scripts/deploy.ts` + `src/exec/flashVenues.ts` |
 | Private provider universe | keyed expansion per chain from `*_API_KEY` — dRPC, Alchemy, Ankr, NodeFlare, Chainstack (`mt_` multichain token = one key every chain), 1RPC (TEE relay reserve lane) templates verified against provider docs (2026-10-20); each account key is a distinct quota pool; explicit `<CHAIN>_RPC_URLS` keep precedence, deduped | `src/providers/providerCatalog.ts` + `src/config/index.ts` |
 | Account budget scheduler | quota binds per ACCOUNT KEY not per URL — one token bucket per provider account sized `doc_rps × 0.9` (10% reserve never ordinary workload); pick = lowest EWMA among cooled-in + budget-live members; when all drained, wait earliest refill — never hot-loop | `src/providers/rpcPool.ts` |
 | Routing config overlay | `rpc_pool_config.json` = live source of truth for provider STATUS + chain whitelists; mtime-reload (~30s) hot-picks edits. `SUSPENDED*` emits ZERO endpoints (no connect/probe/retry); `supported_chains` whitelist narrows the slug map — Alchemy emits `eth` only while `LIVE_RESTRICTED_L1_ONLY`. Pool applies the same gates to explicit env URLs as last-line defense | `src/providers/rpcPoolConfig.ts` + `rpc_pool_config.json` |

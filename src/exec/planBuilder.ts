@@ -1,10 +1,11 @@
 import { ethers } from 'ethers';
 import { Candidate } from '../strategies/solver.js';
+import { FLASH_SOURCE_ENUM, FlashSourceKey } from './flashVenues.js';
 
 /**
  * Encodes the executor contract's `exec(bytes)` calldata.
  * ArbPlan ABI must mirror contracts/AllBrightExecutor.sol exactly:
- *   enum FlashSource { BALANCER, AAVE }
+ *   enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }
  *   enum DexKind { V2_PAIR, V3_ROUTER }
  *   struct Hop { uint8 kind; address venue; address tokenIn; address tokenOut; uint24 fee; uint16 feeBps }
  *   struct ArbPlan { uint8 source; address borrowToken; uint256 borrowAmount;
@@ -27,7 +28,7 @@ const PLAN_TUPLE =
 const coder = ethers.AbiCoder.defaultAbiCoder();
 
 export interface PlanOpts {
-  source: 'BALANCER' | 'AAVE';
+  source: FlashSourceKey;
   /** flash premium in borrowToken units (AAVE: amount*9/10000; BALANCER: 0) */
   premium: bigint;
   /** minProfit in borrowToken units derived from MIN_PROFIT_USD at quote time */
@@ -45,11 +46,13 @@ export function buildPlan(c: Candidate, o: PlanOpts): { planBytes: string; execD
   }));
 
   // Verify-before-submit rule: last-hop minOut = flash amount (+premium).
-  // A decayed spread reverts rather than loses money.
-  const minOut = c.borrowAmount + o.premium;
+  // A decayed spread reverts rather than loses money. Whale-lane plans
+  // bind minOut to repay + floor — a thin-margin fill never clears the
+  // $25 lane bar anyway, so revert beats a dust-profit settle.
+  const minOut = c.borrowAmount + o.premium + (c.lane === 'whale' ? o.minProfit : 0n);
 
   const plan = {
-    source: o.source === 'BALANCER' ? 0 : 1,
+    source: FLASH_SOURCE_ENUM[o.source],
     borrowToken: c.borrowToken,
     borrowAmount: c.borrowAmount,
     hops,

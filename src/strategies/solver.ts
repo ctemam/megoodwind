@@ -34,6 +34,7 @@ export interface Candidate {
   spreadPct: number;
   netUsd: number;
   variant: Variant;
+  lane: Lane;
 }
 
 const log = logger('solver');
@@ -141,7 +142,7 @@ function emit(
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
   metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: n.netUsd, floorUsd });
-  return { strategy, chain, legs, borrowToken, borrowAmount, simOut: out, spreadPct: sp, netUsd: n.netUsd, variant: v };
+  return { strategy, chain, legs, borrowToken, borrowAmount, simOut: out, spreadPct: sp, netUsd: n.netUsd, variant: v, lane };
 }
 
 /** Enumerate candidates for a chain on current registry state. */

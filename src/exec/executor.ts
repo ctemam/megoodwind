@@ -3,6 +3,7 @@ import { logger } from '../config/logger.js';
 import { RpcPool } from '../providers/rpcPool.js';
 import { Candidate } from '../strategies/solver.js';
 import { buildPlan } from './planBuilder.js';
+import { pickFlashSource, flashPremium } from './flashVenues.js';
 import { baseFeeOk, execProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
 import { sendUserOpViaFlashbots } from './privateRoute.js';
@@ -52,9 +53,11 @@ export async function executeCandidate(
     return;
   }
 
-  // 3. build plan + exec-probe from smart account
-  const premium = 0n; // Balancer primary; Aave plan builder sets premium
-  const { execData } = buildPlan(cand, { source: 'BALANCER', premium, minProfit: 0n });
+  // 3. build plan + exec-probe from smart account — fee-free capital
+  //    preferred: Balancer > Morpho > Maker(DAI) > Aave (0.09% last resort)
+  const source = pickFlashSource(chain.key, cand.borrowToken);
+  const premium = flashPremium(source, cand.borrowAmount);
+  const { execData } = buildPlan(cand, { source, premium, minProfit: 0n });
   const probe = await execProbe(rpc, cfg.SMART_ACCOUNT_ADDRESS, chain.executor!, execData);
   scheduler.recordLatency(cand.variant, performance.now() - t0);
 

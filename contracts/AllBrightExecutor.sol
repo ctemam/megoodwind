@@ -6,7 +6,16 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-import {IBalancerVault, IFlashLoanRecipient, IAavePool, IFlashLoanSimpleReceiver} from "./interfaces/IFlash.sol";
+import {
+    IBalancerVault,
+    IFlashLoanRecipient,
+    IAavePool,
+    IFlashLoanSimpleReceiver,
+    IMorphoFlash,
+    IMorphoFlashCallback,
+    IERC3156FlashBorrower,
+    IERC3156FlashLender
+} from "./interfaces/IFlash.sol";
 import {ISwapRouter, IUniswapV2Pair} from "./interfaces/IDex.sol";
 
 /// @title AllBrightExecutor — flash-loan arbitrage executor.
@@ -16,10 +25,11 @@ import {ISwapRouter, IUniswapV2Pair} from "./interfaces/IDex.sol";
 ///         the whole loop succeeds or the whole tx reverts. Last-hop minOut is
 ///         the repay amount so a decayed spread reverts instead of losing money.
 ///         Owner = ERC-4337 smart account (Kernel); entries arrive via UserOp.
-contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, ReentrancyGuard, Ownable {
+contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMorphoFlashCallback, IERC3156FlashBorrower, ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
-    enum FlashSource { BALANCER, AAVE }
+    /// Fee ladder: BALANCER 0% | MORPHO 0% | ERC3156 0% (Maker DssFlash) | AAVE 0.09%
+    enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }
     enum DexKind { V2_PAIR, V3_ROUTER }
 
     struct Hop {
@@ -42,10 +52,13 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, Ree
 
     address public balancerVault;   // 0 on chains without Balancer V2 (e.g. BSC)
     address public aavePool;        // Aave V3 Pool
+    address public morpho;          // Morpho Blue — 0% fee, pull-repay
+    address public erc3156Lender;   // Maker DssFlash — 0% fee, DAI only (eth)
     bool private _inFlash;
 
     event ArbSettled(address indexed borrowToken, uint256 borrowed, uint256 profit);
     event VenuesUpdated(address balancerVault, address aavePool);
+    event ZeroFeeVenuesUpdated(address morpho, address erc3156Lender);
     event Swept(address indexed token, address indexed to, uint256 amount);
 
     error NotFlashProvider();
@@ -64,6 +77,14 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, Ree
         emit VenuesUpdated(_balancerVault, _aavePool);
     }
 
+    /// Zero-fee venue wiring — post-construction so existing deployments
+    /// upgrade without redeploying the whole contract.
+    function setZeroFeeVenues(address _morpho, address _erc3156Lender) external onlyOwner {
+        morpho = _morpho;
+        erc3156Lender = _erc3156Lender;
+        emit ZeroFeeVenuesUpdated(_morpho, _erc3156Lender);
+    }
+
     /// @notice Owner entry — decode plan and pull capital from the chosen engine.
     function exec(bytes calldata planBytes) external onlyOwner nonReentrant {
         ArbPlan memory plan = abi.decode(planBytes, (ArbPlan));
@@ -78,6 +99,17 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, Ree
             t[0] = plan.borrowToken;
             a[0] = plan.borrowAmount;
             IBalancerVault(balancerVault).flashLoan(address(this), t, a, planBytes);
+        } else if (plan.source == FlashSource.MORPHO) {
+            if (morpho == address(0)) revert VenueUnset(plan.source);
+            IMorphoFlash(morpho).flashLoan(plan.borrowToken, plan.borrowAmount, planBytes);
+        } else if (plan.source == FlashSource.ERC3156) {
+            if (erc3156Lender == address(0)) revert VenueUnset(plan.source);
+            IERC3156FlashLender(erc3156Lender).flashLoan(
+                IERC3156FlashBorrower(address(this)),
+                plan.borrowToken,
+                plan.borrowAmount,
+                planBytes
+            );
         } else {
             if (aavePool == address(0)) revert VenueUnset(plan.source);
             IAavePool(aavePool).flashLoanSimple(address(this), plan.borrowToken, plan.borrowAmount, planBytes, 0);
@@ -116,6 +148,35 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, Ree
         IERC20(asset).forceApprove(aavePool, amount + premium);
         _checkProfitAfterPull(plan, pre, amount + premium);
         return true;
+    }
+
+    /// Morpho Blue callback — 0% fee. Morpho pulls repay via allowance
+    /// after this returns; identical accounting shape to the Aave path.
+    function onMorphoFlashLoan(uint256 assets, bytes calldata data) external override {
+        if (msg.sender != morpho || !_inFlash) revert NotFlashProvider();
+        ArbPlan memory plan = abi.decode(data, (ArbPlan));
+        uint256 pre = IERC20(plan.borrowToken).balanceOf(address(this)) - assets;
+        _runHops(plan);
+        IERC20(plan.borrowToken).forceApprove(morpho, assets);
+        _checkProfitAfterPull(plan, pre, assets);
+    }
+
+    /// ERC-3156 callback — Maker DssFlash (0% fee, DAI). Lender pulls
+    /// amount+fee via allowance; return magic confirms the callback.
+    function onFlashLoan(
+        address initiator,
+        address token,
+        uint256 amount,
+        uint256 fee,
+        bytes calldata data
+    ) external override returns (bytes32) {
+        if (msg.sender != erc3156Lender || initiator != address(this) || !_inFlash) revert NotFlashProvider();
+        ArbPlan memory plan = abi.decode(data, (ArbPlan));
+        uint256 pre = IERC20(token).balanceOf(address(this)) - amount;
+        _runHops(plan);
+        IERC20(token).forceApprove(erc3156Lender, amount + fee);
+        _checkProfitAfterPull(plan, pre, amount + fee);
+        return keccak256("ERC3156FlashBorrower.onFlashLoan");
     }
 
     function _runHops(ArbPlan memory plan) internal {

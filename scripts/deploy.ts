@@ -2,14 +2,16 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { activeChainConfigs, ChainConfig, cfg } from '../src/config/index.js';
 import { logger } from '../src/config/logger.js';
+import { FLASH_VENUES } from '../src/exec/flashVenues.js';
 
 /**
  * Deployment lane — executor rollout via CREATE2 through the Kernel
  * smart account (sponsored UserOp, gasless) matching the fleet pattern:
  * same CREATE2 address on every chain, owner = smart account.
  *
- * Venues per chain (Balancer V2 Vault / Aave V3 Pool):
- *   BSC has no Balancer V2 -> vault = address(0), AAVE path only.
+ * Venues per chain (single source: src/exec/flashVenues.ts):
+ *   BALANCER 0% primary | MORPHO 0% | ERC3156 Maker DssFlash 0% (eth/DAI)
+ *   | AAVE 0.09% fallback.  BSC has no Balancer V2 -> vault = address(0).
  *
  * ── Base network contract registry (chainId 8453) ─────────────────
  *  Balancer V2 Vault   0xBA12222222228d8Ba445958a75a0704d566BF2C8
@@ -33,18 +35,7 @@ import { logger } from '../src/config/logger.js';
 
 const log = logger('deploy');
 
-const VENUES: Record<string, { balancer: string; aave: string }> = {
-  eth:  { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2' },
-  poly: { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
-  arb:  { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
-  op:   { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
-  base: { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0xa238dd80C259A72E81D7E4664A74715939677AC0' },
-  avax: { balancer: '0xBA12222222228d8Ba445958a75a0704d566BF2C8', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD' },
-  bsc:  { balancer: '0x0000000000000000000000000000000000000000', aave: '0x6807dc923806fE8Fd134338EABCA509979a7e0cB' },
-  linea:{ balancer: '0x0000000000000000000000000000000000000000', aave: '0xc47B8c00b0f69a36fa203fEaeafdB1557614c0E6' },
-  scroll:{ balancer: '0x0000000000000000000000000000000000000000', aave: '0x11fCfe756c05AD438e312a7fd934381537D3cFfe' },
-  blast:{ balancer: '0x0000000000000000000000000000000000000000', aave: '0x0000000000000000000000000000000000000000' },
-};
+const VENUES = FLASH_VENUES;
 
 /**
  * DEX router reference map — documentation surface for ops tooling.
@@ -91,7 +82,7 @@ async function deployChain(chain: ChainConfig, bytecode: string) {
   // NOTE: live deployment is gated — run with DEPLOY=1 and AUTO_EXECUTE funded.
   if (process.env.DEPLOY !== '1') {
     log.info(`${chain.key}: dry-run — initCode ${initCode.slice(0, 66)}… salt ${salt}`);
-    log.info(`${chain.key}: venues balancer=${v.balancer} aave=${v.aave}`);
+    log.info(`${chain.key}: venues balancer=${v.balancer} aave=${v.aave} morpho=${v.morpho} erc3156=${v.erc3156}`);
     for (const [name, addr] of Object.entries(DEX_ROUTERS[chain.key] ?? {})) {
       log.info(`${chain.key}: router ${name}=${addr}`);
     }

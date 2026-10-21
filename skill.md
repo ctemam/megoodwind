@@ -16,7 +16,7 @@
 net_usd = gross_token_usd
         - (gasUnits * (baseFee + priorityFee) + l1DataFeeWei) / 1e18 * native_usd
         #                  ^ EIP-1559 execution      ^ OP-Stack L1 data availability (dual-gas)
-        - flashPremium_usd                                          # Balancer 0, Aave 0.09%
+        - flashPremium_usd                             # Balancer/Morpho/Maker 0, Aave 0.09%
         - auction_bribe_usd                                         # AUCTION_CHAINS only
 ```
 
@@ -107,10 +107,28 @@ l1BaseFee / blobBaseFee / baseFeeScalar / blobBaseFeeScalar in ONE
 aggregate3 for cockpit telemetry. Non-OP chains and transport faults
 return 0 — the profit floor remains the gate.
 
+## Flash-loan venue ladder (`src/exec/flashVenues.ts`)
+
+`enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }` — fee ladder:
+
+| Source | Fee | Venue | Notes |
+|---|---|---|---|
+| BALANCER | 0% | Balancer V2 Vault `0xBA12…F2C8` (canonical all chains) | primary; `receiveFlashLoan` callback |
+| MORPHO | 0% | Morpho Blue `0xBBBB…FFCb` (eth/base/arb/op vanity) | pull-repay via allowance |
+| ERC3156 | 0% | Maker DssFlash `0x6074…4d45` | DAI only, eth only, ~500M ceiling |
+| AAVE | 0.09% | Aave V3 Pool | last resort — paid capital |
+
+`pickFlashSource(chain, token)` prefers fee-free capital; `flashPremium`
+returns 0 for all non-Aave sources. Selection is by chain availability —
+a venue that can't cover the borrow fails deterministically inside
+exec-probe (recorded, zero capital at risk). Whale-lane plans bind
+`minOut = repay + premium + minProfit` so a thin-margin fill reverts.
+
 ## Deploy address registry (`scripts/deploy.ts`)
 
-`VENUES` = flash-source ctor args per chain (Balancer Vault / Aave Pool,
-`address(0)` = verified boundary where a venue doesn't exist).
+`VENUES = FLASH_VENUES` — the same table the executor picks from
+(Balancer/Morpho/ERC3156/Aave per chain; `address(0)` = verified
+boundary where a venue doesn't exist).
 `DEX_ROUTERS` = documented router/quoter/factory coords (base + eth) —
 ops reference only; the executor swaps directly on pool contracts.
 All addresses pass EIP-55 checksum validation (sweep verified
