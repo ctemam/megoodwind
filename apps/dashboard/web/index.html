@@ -13,29 +13,48 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    /* Obsidian terminal system — zero gradients, zero shadows, 1px hairlines */
-    :root { --bg:#050505; --line:#1A1A1A; --fg:#FFFFFF; --dim:#888888; --acc:#00FF66; --warn:#FFB224; --bad:#FF4444; }
-    * { box-shadow:none !important; border-radius:0 !important; }
+    /* Metallic cockpit — gunmetal/silver industrial grade + glow values */
+    :root { --bg:#050505; --line:#334155; --hair:#1A1A1A; --fg:#FFFFFF; --dim:#94A3B8; --acc:#34D399; --cyan:#22D3EE; --warn:#FFB224; --bad:#F87171; }
+    * { border-radius:0 !important; }
     html,body { background:var(--bg); color:var(--fg); font-family:'JetBrains Mono',ui-monospace,monospace; }
-    .hairline { border:1px solid var(--line); }
-    .hairline-b { border-bottom:1px solid var(--line); }
+    .hairline { border:1px solid var(--hair); }
+    .hairline-b { border-bottom:1px solid var(--hair); }
     .dim { color:var(--dim); }
-    .acc { color:var(--acc); }
     .warn { color:var(--warn); }
-    .bad { color:var(--bad); }
+    /* brushed-metal surfaces — sidebar, ribbon, fold headers */
+    .metallic {
+      background: linear-gradient(180deg, #1E293B 0%, #0F172A 55%, #000000 100%);
+      border-right: 1px solid rgba(51,65,85,.5);
+      box-shadow: inset 0 1px 0 rgba(148,163,184,.12), inset 0 -1px 0 rgba(0,0,0,.6);
+    }
+    .metallic-head {
+      background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%);
+      box-shadow: inset 0 1px 0 rgba(148,163,184,.15);
+      border-bottom: 1px solid var(--hair);
+    }
+    /* zebra striping on every table body */
+    table tbody tr:nth-child(odd) { background: rgba(15,23,42,.55); }
+    table tbody tr:nth-child(even) { background: rgba(30,41,59,.28); }
+    table tbody tr:hover { background: rgba(51,65,85,.35); }
+    /* eye-catching value fonts — glow per semantic weight */
+    .acc { color:var(--acc); font-weight:800; letter-spacing:.05em; text-shadow:0 0 6px rgba(52,211,153,.35); }
+    .bad { color:var(--bad); font-weight:800; letter-spacing:.05em; text-shadow:0 0 6px rgba(248,113,113,.35); }
+    .num { color:var(--cyan); font-weight:800; letter-spacing:.05em; text-shadow:0 0 6px rgba(34,211,238,.3); }
     /* micro-dot status */
     .dot { display:inline-block; width:6px; height:6px; border-radius:50%; }
-    .dot.live { background:var(--acc); } .dot.dead { background:var(--bad); } .dot.armed { background:var(--warn); }
+    .dot.live { background:var(--acc); box-shadow:0 0 6px rgba(52,211,153,.7); }
+    .dot.dead { background:var(--bad); box-shadow:0 0 6px rgba(248,113,113,.7); }
+    .dot.armed { background:var(--warn); box-shadow:0 0 6px rgba(255,178,36,.7); }
     /* tooltip — heavy metadata lives here, never in the layout */
     .tt { position:relative; cursor:default; }
     .tt:hover::after {
       content:attr(data-tt); position:absolute; left:0; top:100%; z-index:50;
-      background:#0A0A0B; border:1px solid var(--line); color:var(--dim);
+      background:#0F172A; border:1px solid var(--line); color:var(--dim);
       padding:6px 8px; font-size:10px; line-height:1.5; white-space:pre;
-      min-width:180px; pointer-events:none;
+      min-width:180px; pointer-events:none; font-weight:400; letter-spacing:0; text-shadow:none;
     }
     ::-webkit-scrollbar { width:6px; height:6px; } ::-webkit-scrollbar-thumb { background:var(--line); }
-    ::selection { background:var(--acc); color:#000; }
+    ::selection { background:var(--cyan); color:#000; }
   </style>
 </head>
 <body>

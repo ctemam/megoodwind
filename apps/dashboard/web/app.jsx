@@ -22,7 +22,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="hairline mb-px">
-      <header className="flex h-8 items-center gap-2 bg-[#0A0A0B] px-2 text-[10px] uppercase tracking-widest dim">
+      <header className="metallic-head flex h-8 items-center gap-2 px-2 text-[10px] uppercase tracking-widest dim">
         <button onClick={() => setOpen(!open)} className="w-4 text-left text-white hover:text-[#00FF66]" title={open ? 'Collapse' : 'Expand'}>
           {open ? '▼' : '▶'}
         </button>
@@ -64,7 +64,7 @@ function ProfitMetrics({ m }) {
   ];
   return (<>
     <div className="grid grid-cols-4 gap-px bg-[#1A1A1A] mb-px">
-      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#050505] p-3"><div className="text-[9px] uppercase tracking-widest dim">{k}</div><div className={`mt-1 text-lg font-semibold ${t ?? ''}`}>{v}</div></div>)}
+      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#050505] p-3"><div className="text-[9px] uppercase tracking-widest dim">{k}</div><div className={`mt-1 text-lg ${t ?? 'num'}`}>{v}</div></div>)}
     </div>
     <Fold title="Settled Records" cols={['Time', 'Chain', 'Strategy', 'Spread %', 'Net', 'Tx Hash']} defaultOpen
       rollups={[['Total', fmt$(net)], ['Trades', recs.length], ['Avg', m.settled_count ? fmt$(net / m.settled_count) : '—']]}
@@ -103,7 +103,7 @@ function Chains({ m, ops }) {
   const chainRows = Object.keys({ ...(m.pools ?? {}), ...(ops.regimes ?? {}) }).map((c) => {
     const cl = lanes.filter((l) => l.chain === c);
     return [c, m.pools?.[c] ?? 0, m.convicted?.[c] ?? 0, cl.length,
-      cl.length ? `${Math.round(cl.reduce((s, l) => s + l.p50Ms, 0) / cl.length)}ms` : '—',
+      cl.length ? <span className="num">{Math.round(cl.reduce((s, l) => s + l.p50Ms, 0) / cl.length)}ms</span> : '—',
       ops.regimes?.[c]?.regime?.replace(/_/g, ' ') ?? '—'];
   });
   return <Fold title="Chain Status Boards" cols={['Chain', 'Pools', 'Convicted', 'Lanes', 'P50', 'Regime']} defaultOpen
@@ -124,7 +124,7 @@ function Wallet({ ops }) {
       rows={(ops.simLedger ?? []).map((r) => [
         new Date(r.ts).toLocaleTimeString(), r.chain, r.candidate?.strategy, (r.candidate?.legs ?? []).length,
         <span className={r.sim?.status === 'PASS' ? 'acc' : r.sim?.status ? 'bad' : 'dim'}>{r.sim?.status ?? r.sim?.sim_gate ?? '—'}</span>,
-        r.sim?.gasUsed ? Number(r.sim.gasUsed).toLocaleString() : '—',
+        r.sim?.gasUsed ? <span className="num">{Number(r.sim.gasUsed).toLocaleString()}</span> : '—',
       ])} />
   </>);
 }
@@ -140,7 +140,7 @@ function Infra({ ops }) {
         const p50 = pl.length ? `${Math.round(pl.reduce((s, l) => s + l.p50Ms, 0) / pl.length)}ms` : '—';
         const tt = [`Status: ${p.status}`, `Safe Rps: ${p.safe_rps}`, `Daily Budget: ${(p.daily_budget ?? 0).toLocaleString()}`, `Chains: ${(p.supported_chains ?? []).join(',')}`,
           pl.length ? `P95: ${Math.round(pl.reduce((s, l) => s + l.p95Ms, 0) / pl.length)}ms` : 'No Benchmark Yet'].join('\n');
-        return [<Dot s={p.status} />, <Tip text={tt}>{id}</Tip>, p50, (p.supported_chains ?? []).join(', ')];
+        return [<Dot s={p.status} />, <Tip text={tt}>{id}</Tip>, <span className="num">{p50}</span>, (p.supported_chains ?? []).join(', ')];
       })} />
     <Fold title="Daemon Loops" cols={['Daemon', 'Last Line', 'Cycles']} defaultOpen
       rows={[['Sync Rpc Status (60s)', <span className="dim">{trunc(ops.daemon?.lastLine, 60)}</span>, ops.daemon?.lines ?? '—']]} />
@@ -211,7 +211,7 @@ function Report({ m, ops }) {
       rows={Object.entries(m.counters ?? {}).map(([k, v]) => { const [n, l] = k.split('|'); return [n, <span className="dim">{l}</span>, v]; })} />
     <Fold title="Benchmark History" cols={['Chain', 'Provider', 'P50', 'P95', 'Ok']} 
       rollups={[['Lanes', lanes.length], ['Best P50', lanes.length ? `${Math.min(...lanes.map((l) => l.p50Ms))}ms` : '—']]}
-      rows={lanes.map((l) => [l.chain, l.provider, `${l.p50Ms}ms`, `${l.p95Ms}ms`, `${l.ok}/${l.ok + l.fail}`])} />
+      rows={lanes.map((l) => [l.chain, l.provider, <span className="num">{l.p50Ms}ms</span>, <span className="num">{l.p95Ms}ms</span>, `${l.ok}/${l.ok + l.fail}`])} />
   </>);
 }
 
@@ -266,14 +266,14 @@ function App() {
 
   return (
     <div className="min-h-screen">
-      <nav className="fixed left-0 top-0 z-40 flex h-screen w-36 flex-col border-r border-[#1A1A1A] bg-[#050505]">
+      <nav className="metallic fixed left-0 top-0 z-40 flex h-screen w-36 flex-col">
         <div className="flex h-11 items-center gap-2 border-b border-[#1A1A1A] px-3">
           <img src="./logo.svg" className="h-5 w-5" alt="A" />
           <span className="text-[10px] font-bold tracking-widest">BANBOT</span>
         </div>
         {PAGES.map((p) => (
           <button key={p} onClick={() => setPage(p)}
-            className={`flex h-9 items-center gap-2 border-b border-[#1A1A1A] px-3 text-left text-[10px] tracking-wide ${page === p ? 'text-[#00FF66] bg-[#0A0A0B]' : 'dim hover:text-white'}`}>
+            className={`flex h-9 items-center gap-2 border-b border-[#1A1A1A] px-3 text-left text-[10px] tracking-wide ${page === p ? 'acc bg-[#0F172A]' : 'dim hover:text-white'}`}>
             <span>{PAGE_ICON[p]}</span><span>{p}</span>
           </button>
         ))}
@@ -292,14 +292,14 @@ function App() {
         <div className="p-px">{pageBody}</div>
       </main>
 
-      <footer className="fixed bottom-0 left-36 right-0 z-40 flex h-7 items-center gap-5 border-t border-[#1A1A1A] bg-[#050505] px-4 text-[10px]">
+      <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-7 items-center gap-5 border-t border-slate-700/50 px-4 text-[10px]">
         {(() => {
           const rps = Object.values(ops.providers ?? {}).filter((p) => !/^SUSPENDED/.test(p.status ?? '')).reduce((s, p) => s + (p.safe_rps ?? 0), 0);
           return (<>
-            <span className="tt" data-tt="Fleet"><span className="dim">Fleet</span> <span className="text-white">~{rps.toFixed(1)} Req/S</span></span>
-            <span className="tt" data-tt="Lanes"><span className="dim">Lanes</span> <span className="text-white">{lanes.length}</span></span>
+            <span className="tt" data-tt="Fleet"><span className="dim">Fleet</span> <span className="num">~{rps.toFixed(1)} Req/S</span></span>
+            <span className="tt" data-tt="Lanes"><span className="dim">Lanes</span> <span className="num">{lanes.length}</span></span>
             <span className="tt" data-tt="Daemon"><span className="dim">Sync</span> <span className="text-white">{trunc(ops.daemon?.lastLine, 30)}</span></span>
-            <span className="tt" data-tt="Engine"><span className="dim">Engine</span> <span className="text-white">{ops.engine?.running ? `PID ${ops.engine.pid}` : 'Off'}</span></span>
+            <span className="tt" data-tt="Engine"><span className="dim">Engine</span> <span className="num">{ops.engine?.running ? `PID ${ops.engine.pid}` : 'Off'}</span></span>
             <span className="ml-auto dim">AllBright © 2026</span>
           </>);
         })()}
