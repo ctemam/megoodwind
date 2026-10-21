@@ -128,3 +128,4 @@ headroom for bulk reads. WSS subscriptions are separate stream capacity
 - Last-hop `minOut = flash_amount + premium` — decayed spread reverts.
 - Transport faults (429/timeout) never convict; ErrorPayload reverts always convict.
 - Manual pool or token registration is strictly forbidden — on-chain factory and token-list discovery only.
+- Deployment region: Frankfurt (`DEPLOY_REGION=fra1`, eu-central) — hosts RPC-adjacent workloads close to EU provider PoPs.
