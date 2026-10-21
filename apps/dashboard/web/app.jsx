@@ -18,7 +18,7 @@ const REGIME_HINT = {
 
 /* ── Foldable table: ▶/▼ arrow is the ONLY collapse trigger.
  *   Collapsing renders sum roll-ups of numeric columns on the header row. */
-function Fold({ title, cols, rows, rollups, defaultOpen = false, right }) {
+function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="hairline mb-px">
@@ -44,6 +44,13 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right }) {
               </tr>
             )) : <tr><td className="px-2 py-2 dim text-[10px]" colSpan={cols.length}>No Records — Awaiting Live Data</td></tr>}
           </tbody>
+          {foot && (
+            <tfoot>
+              <tr className="border-t border-[#334155] bg-[#0F172A]">
+                {foot.map((c, j) => <td key={j} className="px-2 py-1.5 whitespace-nowrap">{c}</td>)}
+              </tr>
+            </tfoot>
+          )}
         </table>
       )}
     </section>
@@ -52,14 +59,80 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right }) {
 
 const Tip = ({ text, children }) => <span className="tt" data-tt={text}>{children}</span>;
 
+/* ── chain + valuation helpers ─────────────────────────────────── */
+const CHAIN_NAME = {
+  '0x1': 'eth', '0x38': 'bsc', '0x89': 'poly', '0xa4b1': 'arb', '0xa': 'op',
+  '0xa86a': 'avax', '0x2105': 'base', '0xe708': 'linea', '0x82750': 'scroll', '0x13e31': 'blast',
+};
+/* native-token price feed handles (DexScreener token endpoints, wrapped natives) */
+const NATIVE_PRICE_TOKEN = {
+  '0x38': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', // WBNB
+  '0x89': '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', // WPOL
+  '0xa86a': '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', // WAVAX
+};
+const WETH = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
+const fmtEth = (n) => `${Number(n ?? 0).toFixed(5)} Ξ`;
+
+const useTicker = (ms) => {
+  const [t, setT] = useState(Date.now());
+  useEffect(() => { const i = setInterval(() => setT(Date.now()), ms); return () => clearInterval(i); }, [ms]);
+  return t;
+};
+
+const loadStored = (k, dflt) => { try { return JSON.parse(localStorage.getItem(k)) ?? dflt; } catch { return dflt; } };
+const saveStored = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } };
+
+const TIME_WINDOWS = [
+  ['1 Min', 60e3], ['15 Min', 900e3], ['30 Min', 1800e3], ['1 Hour', 3600e3],
+  ['3 Hours', 10800e3], ['6 Hours', 21600e3], ['12 Hours', 43200e3],
+  ['1 Day', 86400e3], ['7 Days', 604800e3], ['Months', Infinity],
+];
+
+/* ── Digital Watch — HH:MM:SS + gear settings modal ─────────────── */
+function DigitalWatch() {
+  const [cfg, setCfg] = useState(() => loadStored('ab_watch', { hour12: false, seconds: true, offsetMin: null }));
+  const [open, setOpen] = useState(false);
+  const t = useTicker(1000);
+  const d = new Date(cfg.offsetMin == null ? t : t + (cfg.offsetMin - new Date().getTimezoneOffset()) * 60000);
+  const h24 = d.getHours();
+  const hh = String(cfg.hour12 ? (h24 % 12 || 12) : h24).padStart(2, '0');
+  const tz = cfg.offsetMin == null
+    ? (Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'Local')
+    : `UTC${cfg.offsetMin >= 0 ? '+' : ''}${(cfg.offsetMin / 60).toFixed(cfg.offsetMin % 60 ? 2 : 0)}`;
+  const set = (patch) => { const n = { ...cfg, ...patch }; setCfg(n); saveStored('ab_watch', n); };
+  return (
+    <span className="relative inline-flex items-center gap-1">
+      <span className="num text-[12px]" title={tz}>
+        {hh}:{String(d.getMinutes()).padStart(2, '0')}{cfg.seconds ? `:${String(d.getSeconds()).padStart(2, '0')}` : ''}
+        {cfg.hour12 ? <span className="dim ml-1">{h24 >= 12 ? 'PM' : 'AM'}</span> : null}
+        <span className="dim ml-1 text-[9px]">{tz}</span>
+      </span>
+      <button onClick={() => setOpen(!open)} className="dim hover:text-white" title="Watch Settings">⚙</button>
+      {open && (
+        <div className="hairline absolute right-0 top-6 z-50 w-48 bg-[#0A0A0B] p-3 text-[10px]">
+          <div className="mb-2 uppercase tracking-widest dim">Watch Settings</div>
+          <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.hour12} onChange={(e) => set({ hour12: e.target.checked })} /> 12h Format</label>
+          <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.seconds} onChange={(e) => set({ seconds: e.target.checked })} /> Show Seconds</label>
+          <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.offsetMin != null} onChange={(e) => set({ offsetMin: e.target.checked ? 0 : null })} /> Custom Offset</label>
+          {cfg.offsetMin != null && (
+            <input type="number" step="30" value={cfg.offsetMin} onChange={(e) => set({ offsetMin: Number(e.target.value) })}
+              className="hairline mt-1 w-full bg-transparent px-2 py-1 text-white" placeholder="Offset Minutes" />
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 /* ── pages ─────────────────────────────────────────────────────── */
-function ProfitMetrics({ m }) {
-  const recs = m.settled_records ?? [];
-  const net = m.arb_settled_net_usd ?? 0;
+function ProfitMetrics({ m, windowMs = Infinity }) {
+  const allRecs = m.settled_records ?? [];
+  const recs = Number.isFinite(windowMs) ? allRecs.filter((r) => r.ts >= Date.now() - windowMs) : allRecs;
+  const net = recs.reduce((s, r) => s + (r.netUsd ?? 0), 0);
   const kpis = [
     ['Settled Net P/L', fmt$(net), net >= 0 ? 'acc' : 'bad'],
-    ['Settled Trades', m.settled_count ?? 0],
-    ['Avg Net / Trade', m.settled_count ? fmt$(net / m.settled_count) : '—'],
+    ['Settled Trades', recs.length],
+    ['Avg Net / Trade', recs.length ? fmt$(net / recs.length) : '—'],
     ['Best Trade', fmt$(Math.max(0, ...recs.map((r) => r.netUsd)))],
   ];
   return (<>
@@ -68,7 +141,7 @@ function ProfitMetrics({ m }) {
     </div>
     <Fold title="Settled Records" cols={['Time', 'Chain', 'Strategy', 'Spread %', 'Net', 'Tx Hash']} defaultOpen
       rollups={[['Total', fmt$(net)], ['Trades', recs.length], ['Avg', m.settled_count ? fmt$(net / m.settled_count) : '—']]}
-      rows={recs.slice(-20).reverse().map((r) => [
+      rows={recs.slice(-20).reverse().map((r) => [ 
         new Date(r.ts).toLocaleTimeString(), r.chain, r.strategy, r.spreadPct.toFixed(2),
         <span className={r.netUsd >= 0 ? 'acc' : 'bad'}>{fmt$(r.netUsd)}</span>,
         <Tip text={r.txHash}><span className="dim cursor-pointer" onClick={() => copy(r.txHash)}>{trunc(r.txHash)} ⧉</span></Tip>,
@@ -111,14 +184,114 @@ function Chains({ m, ops }) {
     rows={chainRows} />;
 }
 
-function Wallet({ ops }) {
+/* ── EIP-1193 injection probe — balance + nonce for any tracked address ── */
+async function probeAccount(addr) {
+  const eth = window.ethereum;
+  if (!eth) return { chain: '—', balanceWei: null, nonce: null };
+  try {
+    const [chainId, balHex, nonceHex] = await Promise.all([
+      eth.request({ method: 'eth_chainId' }),
+      eth.request({ method: 'eth_getBalance', params: [addr, 'latest'] }),
+      eth.request({ method: 'eth_getTransactionCount', params: [addr, 'latest'] }),
+    ]);
+    return {
+      chain: CHAIN_NAME[chainId] ?? chainId, chainId,
+      balanceWei: BigInt(balHex), nonce: parseInt(nonceHex, 16),
+    };
+  } catch { return { chain: '—', balanceWei: null, nonce: null }; }
+}
+
+function Wallet({ ops, accounts, setAccounts, prices }) {
   const w = ops.wallet ?? {};
-  const row = (label, addr) => [
+  const [manual, setManual] = useState('');
+  const [probeErr, setProbeErr] = useState(null);
+  const hasEth = typeof window !== 'undefined' && !!window.ethereum;
+
+  const refresh = async (list) => {
+    const out = await Promise.all((list ?? accounts).map(async (a) => ({ ...a, ...(await probeAccount(a.address)) })));
+    setAccounts(out);
+  };
+  useEffect(() => {
+    if (!accounts.length || !hasEth) return;
+    refresh();
+    const i = setInterval(() => refresh(), 15000);
+    return () => clearInterval(i);
+  }, [accounts.length, hasEth]);
+
+  const detect = async () => {
+    setProbeErr(null);
+    try {
+      const addrs = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const known = new Set(accounts.map((a) => a.address.toLowerCase()));
+      const fresh = addrs.filter((a) => !known.has(a.toLowerCase()))
+        .map((a) => ({ address: a, source: 'Injected', addedAt: Date.now(), chain: '…', balanceWei: null, nonce: null }));
+      const next = [...accounts, ...fresh];
+      setAccounts(next);
+      await refresh(next);
+    } catch (e) { setProbeErr(e?.message ?? 'Request Rejected'); }
+  };
+
+  const addManual = () => {
+    const a = manual.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) { setProbeErr('Invalid 0x Address'); return; }
+    if (accounts.some((x) => x.address.toLowerCase() === a.toLowerCase())) { setProbeErr('Already Tracked'); return; }
+    setProbeErr(null); setManual('');
+    const next = [...accounts, { address: a, source: 'Manual', addedAt: Date.now(), chain: '…', balanceWei: null, nonce: null }];
+    setAccounts(next);
+    refresh(next);
+  };
+
+  const usdOf = (a) => a.balanceWei != null
+    ? Number(a.balanceWei) / 1e18 * (prices?.[a.chain] ?? NaN) : NaN;
+  const ethOf = (a) => a.balanceWei != null ? Number(a.balanceWei) / 1e18 : NaN;
+  const totalUsd = accounts.reduce((s, a) => s + (usdOf(a) || 0), 0);
+  const totalNative = accounts.reduce((s, a) => s + (ethOf(a) || 0), 0);
+  const priced = accounts.some((a) => Number.isFinite(usdOf(a)));
+
+  const idRow = (label, addr) => [
     label,
     addr ? <><span className="dim">{addr}</span> <button className="text-white hover:text-[#00FF66] ml-2" onClick={() => copy(addr)} title="Copy">⧉</button></> : <span className="dim">Not Configured</span>,
   ];
+
   return (<>
-    <Fold title="Account Identities" cols={['Identity', 'Address']} defaultOpen rows={[row('Smart Account', w.smartAccount), row('Profit Wallet', w.profitWallet)]} />
+    <div className="hairline flex flex-col gap-2 p-3 w-full">
+      <div className="flex items-center gap-2">
+        <button onClick={detect} disabled={!hasEth}
+          className="hairline metallic px-4 py-2 text-[11px] tracking-widest text-white hover:border-[#4f8ff7] hover:text-[#4f8ff7] disabled:opacity-30">
+          {hasEth ? '⛁ Detect Wallet & Connect' : 'No EIP-1193 Provider Detected'}
+        </button>
+        {probeErr && <span className="bad text-[10px]">{probeErr}</span>}
+      </div>
+      <div className="flex items-center gap-2">
+        <input value={manual} onChange={(e) => setManual(e.target.value)} placeholder="0x… Add Account Manually"
+          className="hairline w-96 bg-transparent px-2 py-1 text-[11px] text-white placeholder:text-[#555]" />
+        <button onClick={addManual} className="hairline px-3 py-1 text-[10px] tracking-widest dim hover:text-white">+ Add</button>
+      </div>
+    </div>
+
+    <Fold title="Tracked Accounts" cols={['Time', 'Chain', 'Account Address', 'Native Gas Balance', 'Token Reserves', 'Nonce Sequence']} defaultOpen
+      rollups={[['Accounts', accounts.length], ['Σ Native', fmtEth(totalNative)], [priced ? 'Σ Est Usd' : 'Σ Usd', priced ? fmt$(totalUsd) : '—']]}
+      foot={[
+        <span className="dim uppercase tracking-widest text-[9px]">Total</span>,
+        `${accounts.length} Acct`,
+        <span className="dim">All Networks</span>,
+        <span className="acc text-[12px]">{fmtEth(totalNative)}{priced ? ` · ${fmt$(totalUsd)}` : ''}</span>,
+        <span className="dim">—</span>,
+        <span className="num">{accounts.reduce((s, a) => s + (a.nonce ?? 0), 0)}</span>,
+      ]}
+      rows={accounts.map((a) => [
+        new Date(a.addedAt).toLocaleTimeString(),
+        a.chain,
+        <Tip text={a.address}><span className="dim cursor-pointer" onClick={() => copy(a.address)}>{trunc(a.address, 18)} ⧉</span></Tip>,
+        a.balanceWei != null
+          ? <span className="num">{fmtEth(ethOf(a))}{Number.isFinite(usdOf(a)) ? <span className="dim"> ≈{fmt$(usdOf(a))}</span> : null}</span>
+          : <span className="dim">—</span>,
+        <Tip text="Token enumeration requires indexer feed — native balance live via EIP-1193"><span className="dim">—</span></Tip>,
+        a.nonce != null ? <span className="num">{a.nonce}</span> : <span className="dim">—</span>,
+      ])} />
+
+    <Fold title="Account Identities" cols={['Identity', 'Address']} defaultOpen
+      rows={[idRow('Smart Account', w.smartAccount), idRow('Profit Wallet', w.profitWallet)]} />
     <Fold title="Impersonation Ledger — Fork Dry-Runs" cols={['Time', 'Chain', 'Strategy', 'Legs', 'Sim Status', 'Gas']}
       rollups={[['Dry-Runs', (ops.simLedger ?? []).length], ['Pass', (ops.simLedger ?? []).filter((r) => r.sim?.status === 'PASS').length]]}
       rows={(ops.simLedger ?? []).map((r) => [
@@ -216,12 +389,47 @@ function Report({ m, ops }) {
 
 /* ── shell ─────────────────────────────────────────────────────── */
 function App() {
-  const [page, setPage] = useState('Profit Metrics');
+  const [page, setPage] = useState(() => {
+    const h = decodeURIComponent(location.hash.slice(1));
+    return PAGES.includes(h) ? h : 'Profit Metrics';
+  });
   const [m, setM] = useState(null);
   const [ops, setOps] = useState({});
   const [wsUp, setWsUp] = useState(false);
   const [err, setErr] = useState(null);
+  const [unit, setUnit] = useState(() => loadStored('ab_unit', 'usd'));
+  const [profitSpan, setProfitSpan] = useState('lifetime');
+  const [windowMs, setWindowMs] = useState(Infinity);
+  const [accounts, setAccounts] = useState(() => loadStored('ab_accounts', []));
+  const [prices, setPrices] = useState({});
   const wsRef = useRef(null);
+
+  // persist tracked accounts (strip live probe fields)
+  useEffect(() => {
+    saveStored('ab_accounts', accounts.map(({ address, source, addedAt }) => ({ address, source, addedAt, chain: '…', balanceWei: null, nonce: null })));
+  }, [accounts]);
+
+  // native-token prices via DexScreener (same feed family the engine uses)
+  useEffect(() => {
+    const fetchPrices = async () => {
+      const map = {};
+      const pull = async (token, keys) => {
+        try {
+          const j = await (await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`)).json();
+          const p = Number(j.pairs?.[0]?.priceUsd ?? NaN);
+          if (Number.isFinite(p)) keys.forEach((k) => { map[k] = p; });
+        } catch { }
+      };
+      await pull(WETH, ['eth', 'arb', 'op', 'base', 'linea', 'scroll', 'blast']);
+      await pull(NATIVE_PRICE_TOKEN['0x38'], ['bsc']);
+      await pull(NATIVE_PRICE_TOKEN['0x89'], ['poly']);
+      await pull(NATIVE_PRICE_TOKEN['0xa86a'], ['avax']);
+      setPrices(map);
+    };
+    fetchPrices();
+    const i = setInterval(fetchPrices, 60000);
+    return () => clearInterval(i);
+  }, []);
 
   const pull = async () => {
     // independent fetches — /api/ops is served locally (authoritative for the
@@ -252,12 +460,36 @@ function App() {
   if (err) return <div className="p-8 bad">Dashboard Api Unreachable: {err}</div>;
   const metrics = m ?? {};
 
+  // valuation conversion — usd is native; eth = usd / ethUsd
+  const ethUsd = prices.eth;
+  const val = (usd) => {
+    if (unit === 'eth') {
+      return Number.isFinite(ethUsd) ? `${(usd / ethUsd).toFixed(5)} Ξ` : '—';
+    }
+    return fmt$(usd);
+  };
+
+  // profit pulse — aggregate of all injected/tracked accounts
+  const pulseUsd = accounts.reduce((s, a) => {
+    const p = prices[a.chain];
+    return s + (a.balanceWei != null && Number.isFinite(p) ? Number(a.balanceWei) / 1e18 * p : 0);
+  }, 0);
+  const recs = metrics.settled_records ?? [];
+  const dayNet = recs.filter((r) => r.ts >= Date.now() - 86400e3).reduce((s, r) => s + (r.netUsd ?? 0), 0);
+  const profitShown = profitSpan === 'day' ? dayNet : (metrics.arb_settled_net_usd ?? 0);
+
+  const killSwitch = async () => {
+    if (!window.confirm('Emergency Kill — Stop Runner?')) return;
+    await fetch('/api/engine', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop' }) }).catch(() => undefined);
+    pull();
+  };
+
   const lanes = ops.lanes ?? [];
   const pageBody = {
-    'Profit Metrics': <ProfitMetrics m={metrics} />,
+    'Profit Metrics': <ProfitMetrics m={metrics} windowMs={windowMs} />,
     Strategy: <Strategy m={metrics} ops={ops} />,
     Chains: <Chains m={metrics} ops={ops} />,
-    Wallet: <Wallet ops={ops} />,
+    Wallet: <Wallet ops={ops} accounts={accounts} setAccounts={setAccounts} prices={prices} />,
     Infra: <Infra ops={ops} />,
     Deployment: <Deployment ops={ops} />,
     Configuration: <Configuration m={metrics} ops={ops} />,
@@ -272,7 +504,7 @@ function App() {
           <img src="./logo.svg" className="h-8 w-auto" alt="AllBright" />
         </div>
         {PAGES.map((p) => (
-          <button key={p} onClick={() => setPage(p)}
+          <button key={p} onClick={() => { setPage(p); location.hash = p; }}
             className={`flex h-9 items-center gap-2 border-b border-[#1A1A1A] px-3 text-left text-[10px] tracking-wide ${page === p ? 'acc bg-[#0F172A]' : 'dim hover:text-white'}`}>
             <span>{PAGE_ICON[p]}</span><span>{p}</span>
           </button>
@@ -282,11 +514,51 @@ function App() {
         </div>
       </nav>
 
-      <main className="ml-36 pb-10">
-        <header className="flex h-11 items-center justify-between border-b border-[#1A1A1A] px-4">
-          <span className="text-[11px] tracking-widest">{page.toUpperCase()}</span>
-          <span className={`text-[10px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
-            {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
+      <main className="ml-36 pb-10 pt-14">
+        {/* fixed top control panel — persistent telemetry + timekeepers */}
+        <header className="metallic fixed left-36 right-0 top-0 z-40 flex h-12 items-center gap-4 overflow-x-auto border-b border-slate-700/50 px-4 whitespace-nowrap">
+          <span className="flex items-center gap-2">
+            <img src="./logo.svg" className="h-5 w-auto" alt="AllBright" />
+            <span className="text-[10px] tracking-widest text-white">BANBOT COCKPIT v1.0</span>
+          </span>
+          <span className="hairline flex text-[9px] tracking-widest">
+            {['usd', 'eth'].map((u) => (
+              <button key={u} onClick={() => { setUnit(u); saveStored('ab_unit', u); }}
+                className={`px-2 py-0.5 ${unit === u ? 'bg-[#1e4fd8] text-white' : 'dim hover:text-white'}`}>{u.toUpperCase()}</button>
+            ))}
+          </span>
+          <span className="flex items-center gap-1.5 text-[10px]">
+            <span className="dim uppercase tracking-widest">Profit</span>
+            <Tip text={profitSpan === 'day' ? 'Settled Net — Trailing 24h' : 'Settled Net — Lifetime Since Deployment'}>
+              <span className={profitShown >= 0 ? 'acc text-[12px]' : 'bad text-[12px]'}>{val(profitShown)}</span>
+            </Tip>
+            <select value={profitSpan} onChange={(e) => setProfitSpan(e.target.value)}
+              className="hairline bg-transparent px-1 py-0.5 text-[9px] dim">
+              <option value="day" className="bg-black">Per Day</option>
+              <option value="lifetime" className="bg-black">Lifetime</option>
+            </select>
+          </span>
+          <span className="flex items-center gap-1.5 text-[10px]">
+            <span className="dim uppercase tracking-widest">Profit Pulse</span>
+            <Tip text={`Aggregate Of ${accounts.length} Tracked Account${accounts.length === 1 ? '' : 's'} — Live EIP-1193 Balances × Native Prices`}>
+              <span className="acc text-[12px]">{accounts.length ? val(pulseUsd) : '—'}</span>
+            </Tip>
+          </span>
+          <DigitalWatch />
+          <select onChange={(e) => setWindowMs(Number(e.target.value))} defaultValue={Infinity}
+            className="hairline bg-transparent px-1.5 py-0.5 text-[9px] dim" title="Unified Time Filter — Settled Records Window">
+            {TIME_WINDOWS.map(([k, v]) => <option key={k} value={v} className="bg-black">{k}</option>)}
+          </select>
+          <button onClick={killSwitch}
+            className="hairline px-3 py-1 text-[9px] tracking-widest text-[#F87171] hover:border-[#FF4444] hover:bg-[#2a0a0a]"
+            title="Emergency Kill Switch — Stops The Runner Immediately">
+            ▣ Emergency Kill
+          </button>
+          <span className="ml-auto flex items-center gap-3">
+            <span className="text-[11px] tracking-widest">{page.toUpperCase()}</span>
+            <span className={`text-[10px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
+              {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
+            </span>
           </span>
         </header>
         <div className="flex flex-col space-y-6 w-full">{pageBody}</div>
