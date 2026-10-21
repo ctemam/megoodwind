@@ -225,10 +225,12 @@ function App() {
   const wsRef = useRef(null);
 
   const pull = async () => {
-    try {
-      const [mr, or] = await Promise.all([fetch('/api/metrics'), fetch('/api/ops')]);
-      setM(await mr.json()); setOps(await or.json()); setErr(null);
-    } catch (e) { setErr(String(e)); }
+    // independent fetches — /api/ops is served locally (authoritative for the
+    // shell); /api/metrics proxies :3001 and may be down — never fatal.
+    try { setOps(await (await fetch('/api/ops')).json()); setErr(null); }
+    catch (e) { setErr(String(e)); }
+    try { setM(await (await fetch('/api/metrics')).json()); }
+    catch { /* metrics api offline — ops shell still renders */ }
   };
 
   useEffect(() => {
@@ -248,20 +250,20 @@ function App() {
     return () => { clearInterval(t); ws.close(); };
   }, []);
 
-  if (err) return <div className="p-8 bad">Metrics Api Unreachable: {err}</div>;
-  if (!m) return <div className="p-8 dim">Loading…</div>;
+  if (err) return <div className="p-8 bad">Dashboard Api Unreachable: {err}</div>;
+  const metrics = m ?? {};
 
   const lanes = ops.lanes ?? [];
   const pageBody = {
-    'Profit Metrics': <ProfitMetrics m={m} />,
-    Strategy: <Strategy m={m} ops={ops} />,
-    Chains: <Chains m={m} ops={ops} />,
+    'Profit Metrics': <ProfitMetrics m={metrics} />,
+    Strategy: <Strategy m={metrics} ops={ops} />,
+    Chains: <Chains m={metrics} ops={ops} />,
     Wallet: <Wallet ops={ops} />,
     Infra: <Infra ops={ops} />,
     Deployment: <Deployment ops={ops} />,
-    Configuration: <Configuration m={m} ops={ops} />,
-    Engine: <Engine m={m} ops={ops} refresh={pull} />,
-    Report: <Report m={m} ops={ops} />,
+    Configuration: <Configuration m={metrics} ops={ops} />,
+    Engine: <Engine m={metrics} ops={ops} refresh={pull} />,
+    Report: <Report m={metrics} ops={ops} />,
   }[page];
 
   return (
@@ -284,8 +286,8 @@ function App() {
       <main className="ml-36 pb-10">
         <header className="flex h-11 items-center justify-between border-b border-[#1A1A1A] px-4">
           <span className="text-[11px] tracking-widest">{page.toUpperCase()}</span>
-          <span className={`text-[10px] tracking-widest ${m.config?.autoExecute ? 'acc' : 'warn'}`}>
-            {m.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
+          <span className={`text-[10px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
+            {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
           </span>
         </header>
         <div className="p-px">{pageBody}</div>
