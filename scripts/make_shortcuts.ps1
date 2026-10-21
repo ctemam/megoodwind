@@ -1,6 +1,6 @@
 $ws = New-Object -ComObject WScript.Shell
 $target = 'C:\Users\op\Desktop\MyAllBright\scripts\AllBright Cockpit.cmd'
-$icon = 'C:\Users\op\Desktop\MyAllBright\apps\dashboard\web\allbright-icon.ico'
+$icon = 'C:\Users\op\Desktop\MyAllBright\apps\dashboard\web\allbright-logo.ico'
 $dirs = @(
   "$env:USERPROFILE\Desktop",
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
