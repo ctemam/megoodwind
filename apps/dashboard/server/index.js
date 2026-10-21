@@ -11,6 +11,10 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const ts = require('typescript');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB = join(__dirname, '..', 'web');
@@ -134,6 +138,24 @@ app.use(
   }),
 );
 app.use('/health', (_req, res) => res.json({ ok: true, api: API, ws: true }));
+
+// Compiled app bundle — JSX transpiled server-side on every request so
+// the browser never needs a runtime transform (babel-standalone CDN was
+// the black-screen failure mode). Always fresh, zero build state.
+app.get('/app.js', (_req, res) => {
+  try {
+    const src = readFileSync(join(WEB, 'app.jsx'), 'utf8');
+    const out = ts.transpileModule(src, {
+      compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
+      fileName: 'app.jsx',
+    });
+    res.type('application/javascript').send(out.outputText);
+  } catch (e) {
+    res.status(500).type('application/javascript')
+      .send(`document.body.innerHTML='<pre style="color:#F87171;padding:2rem">compile fault: ${String(e.message ?? e).replace(/</g, '&lt;')}</pre>'`);
+  }
+});
+
 app.use(express.static(WEB));
 
 // ---- HTTP + WebSocket server ----
