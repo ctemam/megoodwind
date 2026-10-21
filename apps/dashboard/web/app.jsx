@@ -63,8 +63,8 @@ function ProfitMetrics({ m }) {
     ['Best Trade', fmt$(Math.max(0, ...recs.map((r) => r.netUsd)))],
   ];
   return (<>
-    <div className="grid grid-cols-4 gap-px bg-[#1A1A1A] mb-px">
-      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#050505] p-3"><div className="text-[9px] uppercase tracking-widest dim">{k}</div><div className={`mt-1 text-lg ${t ?? 'num'}`}>{v}</div></div>)}
+    <div className="flex flex-col w-full">
+      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#050505] p-3 border-b border-[#1A1A1A] w-full"><div className="text-[9px] uppercase tracking-widest dim">{k}</div><div className={`mt-1 text-lg ${t ?? 'num'}`}>{v}</div></div>)}
     </div>
     <Fold title="Settled Records" cols={['Time', 'Chain', 'Strategy', 'Spread %', 'Net', 'Tx Hash']} defaultOpen
       rollups={[['Total', fmt$(net)], ['Trades', recs.length], ['Avg', m.settled_count ? fmt$(net / m.settled_count) : '—']]}
@@ -79,7 +79,7 @@ function ProfitMetrics({ m }) {
 function Strategy({ m, ops }) {
   const variants = Object.entries(m.variants ?? {});
   return (<>
-    <div className="flex gap-3 p-3 text-[11px] border-b border-[#1A1A1A]">
+    <div className="flex flex-col gap-1 p-3 text-[11px] border-b border-[#1A1A1A] w-full">
       {Object.entries(ops.regimes ?? {}).map(([c, r]) => (
         <Tip key={c} text={`${c}: ${REGIME_HINT[r.regime] ?? ''}\nVol ${r.volBps?.toFixed(1)}bps · Trend ${r.trendScore?.toFixed(2)} · Illiq ${(r.illiquidFrac * 100).toFixed(0)}%`}>
           <span className={r.regime === 'BALANCED' ? 'dim' : r.regime === 'ILLIQUID_CRASH' ? 'bad' : 'acc'}>{c} · {r.regime?.replace(/_/g, ' ')}</span>
@@ -183,12 +183,11 @@ function Engine({ m, ops, refresh }) {
   const running = ops.engine?.running;
   return (
     <div className="p-4">
-      <div className="mb-4 flex items-center gap-3 text-[11px]">
-        <Dot s={running} /> <span>{running ? `Runner Active — PID ${ops.engine?.pid}` : 'Runner Stopped'}</span>
-        <span className="dim">·</span>
+      <div className="mb-4 flex flex-col gap-1 text-[11px]">
+        <span><Dot s={running} /> {running ? `Runner Active — PID ${ops.engine?.pid}` : 'Runner Stopped'}</span>
         <span className="warn">AUTO_EXECUTE Forced False — Shadow Only From UI</span>
       </div>
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 w-full">
         <button disabled={busy || running} onClick={() => act('start')}
           className="hairline px-4 py-2 text-[11px] tracking-widest text-white hover:border-[#00FF66] hover:text-[#00FF66] disabled:opacity-30">▶ START</button>
         <button disabled={busy || !running} onClick={() => act('stop')}
@@ -290,7 +289,7 @@ function App() {
             {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
           </span>
         </header>
-        <div className="p-px">{pageBody}</div>
+        <div className="flex flex-col space-y-6 w-full">{pageBody}</div>
       </main>
 
       <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-7 items-center gap-5 border-t border-slate-700/50 px-4 text-[10px]">
