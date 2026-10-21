@@ -44,6 +44,10 @@ export async function fork_live_chain_state(opts: {
     '--fork-url', forkUrl,
     '--port', String(port),
     '--compute-units-per-second', String(opts.upstreamCups ?? 60), // upstream budget — keeps free tier unthrottled
+    // aggregate3 chunks carry hundreds of subcalls — the default block gas
+    // cap rejects them as a single eth_call, silently degrading multicall
+    // to the per-call fallback (300+ revert-failures per refresh)
+    '--disable-block-gas-limit',
     '--silent',
   ];
   if (opts.blockNumber) args.push('--fork-block-number', String(opts.blockNumber));

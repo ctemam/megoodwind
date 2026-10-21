@@ -3,8 +3,15 @@
 // no fake variants. The dashboard renders structure, not theater.
 //   node scripts/metrics_stub.mjs   (listens :3001)
 import http from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
 
 const PORT = Number(process.env.PORT ?? 3001);
+
+// fork-window projections written by scripts/fork_window_sim.ts
+const projections = () => {
+  if (!existsSync('data/projections.json')) return null;
+  try { return JSON.parse(readFileSync('data/projections.json', 'utf8')); } catch { return null; }
+};
 
 const metrics = () => ({
   arb_settled_net_usd: 0,
@@ -15,6 +22,7 @@ const metrics = () => ({
   pools: {},
   convicted: {},
   variants: {},
+  projections: projections(),
   config: {
     autoExecute: false,
     minProfitUsd: Number(process.env.MIN_PROFIT_USD ?? 5),

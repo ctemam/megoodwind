@@ -1,4 +1,5 @@
 import express from 'express';
+import { readFileSync, existsSync } from 'node:fs';
 import { cfg, activeChainConfigs } from '../config/index.js';
 import { metrics } from './metrics.js';
 import { registry } from '../pools/registry.js';
@@ -17,8 +18,15 @@ export function startMetricsServer(schedulerSnapshot: () => unknown): void {
   app.get('/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
   app.get('/api/metrics', (_req, res) => {
+    // fork-window projections live on disk — written by fork_window_sim,
+    // merged here so the dashboard surfaces both run-rates live
+    let projections = null;
+    if (existsSync('data/projections.json')) {
+      try { projections = JSON.parse(readFileSync('data/projections.json', 'utf8')); } catch { }
+    }
     res.json({
       ...metrics.snapshot(),
+      projections,
       pools: Object.fromEntries(
         activeChainConfigs().map((c) => [c.key, registry.all(c.key).length]),
       ),

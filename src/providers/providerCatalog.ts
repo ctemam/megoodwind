@@ -46,6 +46,16 @@ export interface ProviderSpec {
 
 export const PRIVATE_PROVIDERS: ProviderSpec[] = [
   {
+    id: 'local',
+    envKey: '__LOCAL_FORK__',      // never resolves — local lanes enter via explicit URLs only
+    slugs: {},
+    http: () => 'http://127.0.0.1:8545',
+    rps: 500,                      // anvil/hardhat — local process, no remote quota
+    cuPerMonth: Infinity,
+    cuCost: { default: 0 },
+    notes: 'Anvil/Hardhat fork lanes — uncapped bucket, zero remote quota burn',
+  },
+  {
     id: 'drpc',
     envKey: 'DRPC_API_KEY',
     slugs: {
@@ -205,6 +215,7 @@ export function providerOf(url: string): { id: string; account: string } {
     else if (h === '1rpc.io' || h.endsWith('.1rpc.io')) id = 'onerpc';
     else if (h === 'api.blockscout.com') id = 'blockscout';
     else if (h.endsWith('infura.io')) id = 'infura';
+    else if (h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]') id = 'local';
     const spec = PRIVATE_PROVIDERS.find((p) => p.id === id);
     // account token: dkey/apikey query / last path segment / v2 token —
     // 1rpc is the exception: key is the FIRST path segment (/key/slug)

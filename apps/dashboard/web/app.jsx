@@ -145,11 +145,15 @@ function ProfitMetrics({ m, windowMs = Infinity }) {
   const allRecs = m.settled_records ?? [];
   const recs = Number.isFinite(windowMs) ? allRecs.filter((r) => r.ts >= Date.now() - windowMs) : allRecs;
   const net = recs.reduce((s, r) => s + (r.netUsd ?? 0), 0);
+  const pj = m.projections;
   const kpis = [
     ['Settled Net P/L', fmt$(net), net >= 0 ? 'acc' : 'bad'],
     ['Settled Trades', recs.length],
     ['Avg Net / Trade', recs.length ? fmt$(net / recs.length) : '—'],
     ['Best Trade', fmt$(Math.max(0, ...recs.map((r) => r.netUsd)))],
+    ['Projected /Hr (Simulation)', pj ? fmt$(pj.simPerHourUsd) : '—', pj ? 'acc' : 'dim'],
+    ['Projected /Hr (Production)', pj ? fmt$(pj.prodPerHourUsd) : '—', pj ? 'acc' : 'dim'],
+    ['Fork Window', pj ? `${Math.round(pj.windowSec / 60)}min · ${pj.cycles} Cycles · ${pj.profitableCandidates} Winners` : '—', 'dim'],
   ];
   return (<>
     <div className="flex flex-col w-full">

@@ -80,13 +80,23 @@ async function dsFetch<T>(path: string): Promise<T | null> {
   }
 }
 
-/** Batch token->pairs lookup: up to 30 token addresses per call. */
+/** Token->pairs lookup. /tokens/v1 collapsed to 1 pair per token;
+ *  /token-pairs/v1 returns the full pool list (≤30) per token — one
+ *  call per token, deduped by pairAddress. */
 export async function poolsForTokens(chain: ChainKey, tokenAddrs: string[]): Promise<PoolRef[]> {
+  const seen = new Set<string>();
   const out: PoolRef[] = [];
-  for (let i = 0; i < tokenAddrs.length; i += 30) {
-    const chunk = tokenAddrs.slice(i, i + 30).join(',');
-    const data = await dsFetch<{ pairs?: DSPair[] }>(`/tokens/v1/${dsChain(chain)}/${chunk}`);
-    for (const p of data?.pairs ?? []) out.push(toPoolRef(chain, p));
+  for (const addr of tokenAddrs) {
+    const data = await dsFetch<DSPair[] | { pairs?: DSPair[] }>(`/token-pairs/v1/${dsChain(chain)}/${addr}`);
+    const pairs = Array.isArray(data) ? data : data?.pairs ?? [];
+    for (const p of pairs) {
+      const k = p.pairAddress?.toLowerCase();
+      // DS lists vault-style pools whose "pairAddress" is a bytes32 pool
+      // ID, not an EVM contract — drop them, they can never answer calls
+      if (!k || !/^0x[0-9a-f]{40}$/.test(k) || seen.has(k)) continue;
+      seen.add(k);
+      out.push(toPoolRef(chain, p));
+    }
   }
   return out;
 }
@@ -97,6 +107,6 @@ export async function topPools(chain: ChainKey, query: string): Promise<PoolRef[
     `/latest/dex/search?q=${encodeURIComponent(query)}`,
   );
   return (data?.pairs ?? [])
-    .filter((p) => p.chainId === dsChain(chain))
+    .filter((p) => p.chainId === dsChain(chain) && /^0x[0-9a-fA-F]{40}$/.test(p.pairAddress ?? ''))
     .map((p) => toPoolRef(chain, p));
 }
