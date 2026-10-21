@@ -35,6 +35,17 @@ interface LedgerDisk {
   peakProfitUsd: number;
 }
 
+/** Live dynamic-slippage state per chain — the bound the solver is
+ *  enforcing right now plus the last measured path impact. */
+export interface SlippageState {
+  regime: string;
+  whale: boolean;
+  boundBps: number;
+  volBps: number;
+  lastImpactBps: number;
+  at: number;
+}
+
 class Metrics {
   private counters = new Map<string, number>();
   private settled: SettledRecord[] = [];
@@ -46,6 +57,7 @@ class Metrics {
   private variants = new Map<string, Omit<VariantLedgerRow, 'variant'>>();
   private laneProfitUsd: Record<Lane, number> = { predictive: 0, whale: 0 };
   private peakProfitUsd = 0;
+  private slippage = new Map<string, SlippageState>();
 
   constructor() {
     this.load();
@@ -141,6 +153,17 @@ class Metrics {
     this.ledgerDirty = true;
   }
 
+  /** Record the dynamic bound the solver enforced this cycle. */
+  setSlippage(chain: string, s: Omit<SlippageState, 'at'>) {
+    this.slippage.set(chain, { ...s, at: Date.now() });
+  }
+
+  /** Last measured path impact — written per evaluated candidate. */
+  notePathImpact(chain: string, impactBps: number) {
+    const s = this.slippage.get(chain);
+    if (s) s.lastImpactBps = impactBps;
+  }
+
   get analytics() {
     const total = this.laneProfitUsd.predictive + this.laneProfitUsd.whale;
     return {
@@ -175,6 +198,7 @@ class Metrics {
         passed_to_simulation_probe: this.counterSum('passed_to_simulation_probe'),
       },
       analytics: this.analytics,
+      slippage: Object.fromEntries(this.slippage),
       ts: Date.now(),
     };
   }

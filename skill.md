@@ -107,6 +107,22 @@ l1BaseFee / blobBaseFee / baseFeeScalar / blobBaseFeeScalar in ONE
 aggregate3 for cockpit telemetry. Non-OP chains and transport faults
 return 0 — the profit floor remains the gate.
 
+## Dynamic slippage engine (`solver.ts` + `predictiveEngine.ts` + `profit.ts`)
+
+- `priceImpactBps(pool, amountIn, tokenIn)` — constant-product impact per
+  leg: `a_eff/(rIn+a_eff)` on real v2 reserves; v3 substitutes virtual
+  reserves `L·2⁹⁶/√P` (x→y) / `L·√P/2⁹⁶` (y→x). Accumulated per path in
+  `emit()` during the sim pass — no extra loop.
+- `dynamicSlippageBps(variant, {regime, whale, volBps})` scales the static
+  per-variant `slippageBps`: LOW_VOL_MEAN_REVERTING → `SLIPPAGE_LOW_VOL_BPS`
+  (10 = 0.1%), whale window → ≥`WHALE_SLIPPAGE_BPS` (150), vol floor at
+  1.25× observed move, absolute cap `SLIPPAGE_CEILING_BPS` (200).
+- Rejects: `impactBps > bound` → `rejected_by_profit_margin{price_impact}`.
+- On-chain binding: `Candidate.minProfitToken` = lane floor in borrow
+  units → plan `minProfit`; whale lane also folds it into `minOut`.
+- Telemetry: `metrics.slippage[chain]` → `/api/metrics.slippage` →
+  cockpit "Dynamic Slippage" panels (Strategy + Configuration).
+
 ## Flash-loan venue ladder (`src/exec/flashVenues.ts`)
 
 `enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }` — fee ladder:

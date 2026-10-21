@@ -57,7 +57,10 @@ export async function executeCandidate(
   //    preferred: Balancer > Morpho > Maker(DAI) > Aave (0.09% last resort)
   const source = pickFlashSource(chain.key, cand.borrowToken);
   const premium = flashPremium(source, cand.borrowAmount);
-  const { execData } = buildPlan(cand, { source, premium, minProfit: 0n });
+  // minProfit binds the lane floor on-chain (whale plans also fold it
+  // into last-hop minOut) — a decayed fill reverts instead of settling
+  // below the floor that qualified the candidate.
+  const { execData } = buildPlan(cand, { source, premium, minProfit: cand.minProfitToken });
   const probe = await execProbe(rpc, cfg.SMART_ACCOUNT_ADDRESS, chain.executor!, execData);
   scheduler.recordLatency(cand.variant, performance.now() - t0);
 

@@ -112,3 +112,33 @@ export function effectiveGuards(v: Variant) {
     tickDist: cfg.MAX_TICK_DISTANCE,
   };
 }
+
+export interface SlippageCtx {
+  regime?: string;   // MarketRegime label
+  whale?: boolean;   // inside the 30s whale-alpha window
+  volBps?: number;   // live median pool move/cycle (bps)
+}
+
+/**
+ * Dynamic slippage bound — the variant's static guardrail scaled by live
+ * tape conditions instead of frozen:
+ *   LOW_VOL_MEAN_REVERTING → clamp to SLIPPAGE_LOW_VOL_BPS (0.1%,
+ *                            protective — dead tape can't absorb size)
+ *   HIGH_VOL_TRENDING      → ×1.5 widening (trend legs need room)
+ *   whale-alpha window     → widen to ≥WHALE_SLIPPAGE_BPS (transient
+ *                            cross-venue spreads need slack)
+ *   volBps floor           → never tighter than ~125% of observed
+ *                            per-block move — a bound below the tape
+ *                            rejects honest quotes as over-slip
+ *   SLIPPAGE_CEILING_BPS   → absolute cap, always
+ */
+export function dynamicSlippageBps(v: Variant, ctx: SlippageCtx): number {
+  let bps = effectiveGuards(v).slippageBps;
+  if (ctx.regime === 'LOW_VOL_MEAN_REVERTING') bps = Math.min(bps, cfg.SLIPPAGE_LOW_VOL_BPS);
+  if (ctx.regime === 'HIGH_VOL_TRENDING') bps = Math.min(bps * 1.5, cfg.SLIPPAGE_CEILING_BPS);
+  if (ctx.whale) bps = Math.max(bps, cfg.WHALE_SLIPPAGE_BPS);
+  if (ctx.volBps !== undefined && Number.isFinite(ctx.volBps) && ctx.volBps > 0) {
+    bps = Math.max(bps, Math.ceil(ctx.volBps * 1.25));
+  }
+  return Math.min(Math.max(Math.round(bps), 1), cfg.SLIPPAGE_CEILING_BPS);
+}

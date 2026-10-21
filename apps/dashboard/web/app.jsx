@@ -197,6 +197,25 @@ function GateAudit({ m }) {
   );
 }
 
+function SlipAudit({ m }) {
+  const s = Object.entries(m.slippage ?? {});
+  return (
+    <div className="metallic border hairline flex flex-col w-full">
+      <div className="metallic-head px-3 py-2 text-[10px] tracking-widest dim">Dynamic Slippage State</div>
+      <div className="flex flex-col w-full">
+        {s.length ? s.map(([chain, st]) => (
+          <div key={chain} className="flex items-center justify-between px-3 py-2 border-b border-[#1A1A1A] last:border-b-0 w-full">
+            <span className="text-[11px] dim">{tc(chain)} · {tc(st.regime)}{st.whale ? ' · Whale' : ''}</span>
+            <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)] text-[13px]">
+              Bound {st.boundBps}bps · Impact {st.lastImpactBps?.toFixed(1)}bps · Vol {st.volBps?.toFixed(1)}bps
+            </span>
+          </div>
+        )) : <div className="px-3 py-2 text-[10px] dim">No Slippage State — Runner Idle</div>}
+      </div>
+    </div>
+  );
+}
+
 function Strategy({ m, ops }) {
   const variants = Object.entries(m.variants ?? {});
   const pj = m.projections;
@@ -204,6 +223,7 @@ function Strategy({ m, ops }) {
   const varSplit = pj?.variantHits ? Object.entries(pj.variantHits) : [];
   return (<>
     <GateAudit m={m} />
+    <SlipAudit m={m} />
     {(m.analytics?.variant_performance_ledger?.length ?? 0) ? (
       <Fold title="Variant Performance Ledger" cols={['Variant', 'Lane', 'Hits', 'Misses', 'Floor', 'Max Profit', 'Net']} defaultOpen
         rollups={[['Variants', m.analytics.variant_performance_ledger.length], ['Hits', m.analytics.variant_performance_ledger.reduce((s, r) => s + r.hits, 0)], ['Net', fmt$(m.analytics.variant_performance_ledger.reduce((s, r) => s + r.netUsd, 0))]]}
@@ -447,6 +467,15 @@ function Configuration({ m, ops }) {
         rollups={[['Window', `${pj.windowSec}s`], ['Profitable', pj.profitableCandidates ?? 0]]}
         rows={liveRows} />
     ) : null}
+    <Fold title="Dynamic Slippage" cols={['Chain', 'Regime', 'Slip Bound', 'Last Impact', 'Whale']} defaultOpen
+      rollups={[['Chains', Object.keys(m.slippage ?? {}).length]]}
+      rows={Object.entries(m.slippage ?? {}).map(([chain, st]) => [
+        <span className="acc">{tc(chain)}</span>,
+        <span className="dim">{tc(st.regime)}</span>,
+        <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{st.boundBps} bps</span>,
+        <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{st.lastImpactBps?.toFixed(1)} bps</span>,
+        <span className={st.whale ? 'acc' : 'dim'}>{st.whale ? 'Window Open' : 'Closed'}</span>,
+      ])} />
     <Fold title="Runtime Parameters" cols={['Key', 'Value']} defaultOpen
       rollups={[['Params', rows.length], ['Mode', m.config?.autoExecute ? 'Live' : 'Shadow']]}
       rows={rows} />

@@ -55,6 +55,10 @@ const envSchema = z.object({
   MAX_BASE_FEE_GWEI: z.coerce.number().default(300),
   PRIORITY_FEE_GWEI: z.coerce.number().default(5),
   SLIPPAGE_BPS: z.coerce.number().default(15),
+  // dynamic slippage auto-tuning — bounds, not a static wall
+  SLIPPAGE_LOW_VOL_BPS: z.coerce.number().default(10),    // 0.1% protective on dead tape
+  WHALE_SLIPPAGE_BPS: z.coerce.number().default(150),     // alpha-window width (transient spreads)
+  SLIPPAGE_CEILING_BPS: z.coerce.number().default(200),   // absolute cap — never beyond
   FOT_BLACKLIST_PATH: z.string().default('tools/fot_blacklist.json'),
   PEND_THROTTLE_MS: z.coerce.number().default(100),
   EV_CHAINS: z.string().default(''),

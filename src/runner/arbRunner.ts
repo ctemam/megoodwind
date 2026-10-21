@@ -144,6 +144,8 @@ async function cycle(
     baseFeeWei,
     l1DataFeeWei: l1Fee,
     lane: (whaleUntil.get(chain.key) ?? 0) > Date.now() ? 'whale' : 'predictive',
+    regime: snap.regime,
+    volBps: snap.volBps,
     tokenUsd: new Map(Object.entries(TOKEN_USD)),
     sizeOf: () => SIZE_TABLE.default,
   });

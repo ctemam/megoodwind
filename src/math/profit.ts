@@ -55,6 +55,37 @@ export function netUsd(i: CostInput): NetResult {
   };
 }
 
+/**
+ * Constant-product price impact (bps) — the fraction of a pool's
+ * input-side depth a trade consumes: impact = a_eff / (rIn + a_eff),
+ * a_eff = amountIn·(1-fee). v2 uses real reserves; v3 substitutes the
+ * equivalent virtual reserves (x→y: L·2⁹⁶/√P, y→x: L·√P/2⁹⁶ — raw
+ * units, so amountIn stays native). Screening approximation: all
+ * in-range liquidity treated as concentrated at the current tick.
+ */
+export function priceImpactBps(
+  pool: {
+    kind: string; token0: string; feeBps: number;
+    reserve0?: bigint; reserve1?: bigint;
+    sqrtPriceX96?: bigint; liquidity?: bigint;
+  },
+  amountIn: bigint,
+  tokenIn: string,
+): number {
+  const inIs0 = tokenIn.toLowerCase() === pool.token0.toLowerCase();
+  const aEff = Number(amountIn) * (1 - pool.feeBps / 10_000);
+  let vIn: number;
+  if (pool.kind === 'v2') {
+    vIn = Number(inIs0 ? pool.reserve0 : pool.reserve1);
+  } else {
+    if (!pool.sqrtPriceX96 || !pool.liquidity) return 0;
+    const s = Number(pool.sqrtPriceX96) / 2 ** 96;
+    vIn = inIs0 ? Number(pool.liquidity) / s : Number(pool.liquidity) * s;
+  }
+  if (!vIn || !Number.isFinite(vIn)) return 0;
+  return (aEff / (vIn + aEff)) * 10_000;
+}
+
 /** Credibility ceiling (operating discipline): spreads above ~2% on
  *  top-liquidity pairs are fake — the pool is lying about reserves. */
 export const CREDIBILITY_CEILING_PCT = 2.0;

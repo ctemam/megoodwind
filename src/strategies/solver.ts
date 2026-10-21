@@ -2,9 +2,10 @@ import { ChainConfig, cfg } from '../config/index.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { v2AmountOut } from '../math/univ2.js';
 import { v3SpotPrice, tickDistanceOk } from '../math/univ3.js';
-import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT } from '../math/profit.js';
+import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
-import { Variant, effectiveGuards } from '../engine/predictiveEngine.js';
+import { Variant, effectiveGuards, dynamicSlippageBps } from '../engine/predictiveEngine.js';
+import { MarketRegime } from '../engine/marketRegime.js';
 import { logger } from '../config/logger.js';
 import { metrics, Lane } from '../telemetry/metrics.js';
 import { buildEdges, findCycles } from './graph.js';
@@ -35,6 +36,12 @@ export interface Candidate {
   netUsd: number;
   variant: Variant;
   lane: Lane;
+  /** cumulative constant-product price impact across legs (bps) */
+  impactBps: number;
+  /** the dynamic slippage bound that gated this candidate (bps) */
+  slipBoundBps: number;
+  /** lane floor in borrowToken units — on-chain minProfit enforcement */
+  minProfitToken: bigint;
 }
 
 const log = logger('solver');
@@ -94,10 +101,25 @@ function emit(
   tokenUsd: number,
   l1DataFeeWei: bigint,
   lane: Lane = 'predictive',
+  slipBoundBps = cfg.SLIPPAGE_BPS,
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
-  const out = simulate(legs, borrowAmount);
+  // one pass: simulate legs AND accumulate constant-product price
+  // impact — how much our size shifts each pool before minOut is set
+  let out = borrowAmount;
+  let impactBps = 0;
+  for (const leg of legs) {
+    impactBps += priceImpactBps(leg.pool, out, leg.tokenIn);
+    out = legOut(leg.pool, out, leg.tokenIn);
+    if (out <= 0n) break;
+  }
+  metrics.notePathImpact(chain.key, impactBps);
   if (out <= borrowAmount) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
+  // dynamic slippage gate — path impact vs the regime/whale-tuned bound
+  if (impactBps > slipBoundBps) {
+    metrics.inc('rejected_by_profit_margin', { reason: 'price_impact' });
+    return null;
+  }
   const sp = spreadPct(out, borrowAmount);
   if (sp > CREDIBILITY_CEILING_PCT) {
     metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
@@ -142,19 +164,44 @@ function emit(
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
   metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: n.netUsd, floorUsd });
-  return { strategy, chain, legs, borrowToken, borrowAmount, simOut: out, spreadPct: sp, netUsd: n.netUsd, variant: v, lane };
+  // lane floor in borrowToken units — the executor binds it into the
+  // plan's minProfit (and whale-lane minOut), so the floor is enforced
+  // on-chain, not just at screening.
+  const decIn = legs[0].pool.token0.toLowerCase() === borrowToken.toLowerCase()
+    ? legs[0].pool.dec0 : legs[0].pool.dec1;
+  const minProfitToken = BigInt(Math.floor((floorUsd / tokenUsd) * 10 ** decIn));
+  return {
+    strategy, chain, legs, borrowToken, borrowAmount, simOut: out,
+    spreadPct: sp, netUsd: n.netUsd, variant: v, lane,
+    impactBps, slipBoundBps, minProfitToken,
+  };
 }
 
 /** Enumerate candidates for a chain on current registry state. */
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
   const seenPaths = new Set<string>();
   const strat = new Set(cfg.strategies);
+  // dynamic slippage bound — computed once per solve from live regime
+  // + whale-window state; applies to every emitted candidate
+  const lane = opts.lane ?? 'predictive';
+  const slipBps = dynamicSlippageBps(v, {
+    regime: opts.regime,
+    whale: lane === 'whale',
+    volBps: opts.volBps,
+  });
+  metrics.setSlippage(chain.key, {
+    regime: opts.regime ?? 'BALANCED',
+    whale: lane === 'whale',
+    boundBps: slipBps,
+    volBps: opts.volBps ?? 0,
+    lastImpactBps: 0,
+  });
   const push = (c: Candidate | null) => {
     if (!c) return;
     const sig = c.legs.map((l) => l.pool.address.toLowerCase()).join('>');
@@ -186,7 +233,7 @@ export function solve(
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(legs[0].tokenIn);
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1;
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive'));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
           }
         }
       }
@@ -222,7 +269,7 @@ export function solve(
             ];
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(a);
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive');
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n, lane, slipBps);
             push(cnd);
           }
         }
@@ -240,7 +287,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn);
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive'));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

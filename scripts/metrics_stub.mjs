@@ -50,6 +50,7 @@ const metrics = () => {
     peak_profit_usd: l?.peakProfitUsd ?? 0,
     variant_performance_ledger: Object.entries(l?.variants ?? {}).map(([variant, r]) => ({ variant, ...r })),
   },
+  slippage: {},
   ts: Date.now(),
   pools: {},
   convicted: {},
