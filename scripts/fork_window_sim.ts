@@ -11,6 +11,7 @@ import { breaker } from '../src/forensics/baitPool.js';
 import { classifyMarketRegime } from '../src/engine/marketRegime.js';
 import { nextVariant } from '../src/engine/strategyRouter.js';
 import { emitSignal } from '../src/telemetry/signalSink.js';
+import { metrics } from '../src/telemetry/metrics.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 /**
@@ -117,6 +118,12 @@ async function main() {
   const startedAt = Date.now();
   let cycles = 0, profitable = 0, accruedNetUsd = 0;
   const variantHits = new Map<string, number>();
+  const variantNet = new Map<string, number>();
+  const strategyHits = new Map<string, number>();
+  const strategyNet = new Map<string, number>();
+  // predictive = variant-scheduled solver lane; whale = whale-alert lane
+  // (fork state has no live mempool — whale count is an honest zero)
+  const laneCounts = { predictive: 0, whale: 0 };
 
   const tick = async () => {
     cycles++;
@@ -141,6 +148,10 @@ async function main() {
         profitable++;
         accruedNetUsd += c.netUsd;
         variantHits.set(c.variant.id, (variantHits.get(c.variant.id) ?? 0) + 1);
+        variantNet.set(c.variant.id, (variantNet.get(c.variant.id) ?? 0) + c.netUsd);
+        strategyHits.set(c.strategy, (strategyHits.get(c.strategy) ?? 0) + 1);
+        strategyNet.set(c.strategy, (strategyNet.get(c.strategy) ?? 0) + c.netUsd);
+        laneCounts.predictive++;
         emitSignal(forkChain, {
           kind: 'candidate', strategy: c.strategy, variant: c.variant.id,
           netUsd: c.netUsd, spreadPct: c.spreadPct, legs: c.legs.length,
@@ -156,6 +167,17 @@ async function main() {
         cycles, profitableCandidates: profitable, accruedNetUsd,
         simPerHourUsd, prodPerHourUsd, landRate: LAND_RATE, slippageFactor: SLIPPAGE_FACTOR,
         regime: snap.regime, pools: tracked.length, activeVariant: variant.id, ts: Date.now(),
+        strategyHits: Object.fromEntries(strategyHits),
+        strategyNetUsd: Object.fromEntries([...strategyNet].map(([k, v]) => [k, Number(v.toFixed(4))])),
+        variantHits: Object.fromEntries(variantHits),
+        variantNetUsd: Object.fromEntries([...variantNet].map(([k, v]) => [k, Number(v.toFixed(4))])),
+        lanes: { ...laneCounts },
+        forensicGates: {
+          total_detected_opportunities: metrics.counterSum('total_detected_opportunities'),
+          rejected_by_forensic_bait: metrics.counterSum('rejected_by_forensic_bait'),
+          rejected_by_profit_margin: metrics.counterSum('rejected_by_profit_margin'),
+          passed_to_simulation_probe: metrics.counterSum('passed_to_simulation_probe'),
+        },
       });
       if (cycles % 5 === 0 || winners.length) {
         log.info(`cycle ${cycles} · ${tracked.length} pools · regime=${snap.regime} · winners=${winners.length} · net=$${accruedNetUsd.toFixed(2)} · sim/hr=$${simPerHourUsd.toFixed(2)} · prod/hr=$${prodPerHourUsd.toFixed(2)}`);
@@ -181,6 +203,16 @@ async function main() {
   console.log(`Projected Per-Hour Profit (Simulation Mode): $${simPerHourUsd.toFixed(2)}`);
   console.log(`Projected Per-Hour Profit (Production Mode): $${prodPerHourUsd.toFixed(2)}  (land ${LAND_RATE} × slip ${SLIPPAGE_FACTOR})`);
   console.log('variant hits:', Object.fromEntries(variantHits));
+  console.log('variant net $:', Object.fromEntries([...variantNet].map(([k, v]) => [k, v.toFixed(4)])));
+  console.log('strategy hits:', Object.fromEntries(strategyHits));
+  console.log('strategy net $:', Object.fromEntries([...strategyNet].map(([k, v]) => [k, v.toFixed(4)])));
+  console.log('lanes — predictive:', laneCounts.predictive, ' whale:', laneCounts.whale, '(fork has no live mempool)');
+  console.log('forensic gates:', {
+    detected: metrics.counterSum('total_detected_opportunities'),
+    bait_rejected: metrics.counterSum('rejected_by_forensic_bait'),
+    margin_rejected: metrics.counterSum('rejected_by_profit_margin'),
+    passed_probe: metrics.counterSum('passed_to_simulation_probe'),
+  });
   console.log('════════════════════════════════════');
   process.exit(0);
 }

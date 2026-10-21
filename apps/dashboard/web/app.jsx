@@ -195,8 +195,23 @@ function GateAudit({ m }) {
 
 function Strategy({ m, ops }) {
   const variants = Object.entries(m.variants ?? {});
+  const pj = m.projections;
+  const stratSplit = pj?.strategyHits ? Object.entries(pj.strategyHits) : [];
+  const varSplit = pj?.variantHits ? Object.entries(pj.variantHits) : [];
   return (<>
     <GateAudit m={m} />
+    {pj ? (
+      <Fold title="Simulation Profit Split" cols={['Lane', 'Hits', 'Net']} defaultOpen
+        rollups={[['Predictive', pj.lanes?.predictive ?? 0], ['Whale', pj.lanes?.whale ?? 0], ['Accrued', fmt$(pj.accruedNetUsd ?? 0)]]}
+        rows={[
+          ...stratSplit.map(([s, n]) => [
+            <span className="acc">{s}</span>, n,
+            <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{fmt$(pj.strategyNetUsd?.[s] ?? 0)}</span>]),
+          ...varSplit.map(([v, n]) => [
+            <span className="dim">{v}</span>, n,
+            <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{fmt$(pj.variantNetUsd?.[v] ?? 0)}</span>]),
+        ]} />
+    ) : null}
     <div className="flex flex-col gap-1 p-3 text-[11px] border-b border-[#1A1A1A] w-full">
       {Object.entries(ops.regimes ?? {}).map(([c, r]) => (
         <Tip key={c} text={`${c}: ${REGIME_HINT[r.regime] ?? ''}\nVol ${r.volBps?.toFixed(1)}bps · Trend ${r.trendScore?.toFixed(2)} · Illiq ${(r.illiquidFrac * 100).toFixed(0)}%`}>
@@ -404,6 +419,8 @@ function Configuration({ m, ops }) {
     [<span className="dim">Fork Block</span>, <span className="val">{pj.forkBlock ?? '—'}</span>],
     [<span className="dim">Pools Evaluated</span>, <span className="val">{pj.pools ?? '—'}</span>],
     [<span className="dim">Cycles</span>, <span className="val">{pj.cycles ?? '—'}</span>],
+    [<span className="dim">Lanes Predictive / Whale</span>, <span className="val">{pj.lanes ? `${pj.lanes.predictive} / ${pj.lanes.whale}` : '—'}</span>],
+    [<span className="dim">Gates Detected / Passed</span>, <span className="val">{pj.forensicGates ? `${pj.forensicGates.total_detected_opportunities} / ${pj.forensicGates.passed_to_simulation_probe}` : '—'}</span>],
     [<span className="dim">Sim Per Hour</span>, <span className="val">${(pj.simPerHourUsd ?? 0).toFixed(2)}</span>],
     [<span className="dim">Prod Per Hour</span>, <span className="val">${(pj.prodPerHourUsd ?? 0).toFixed(2)}</span>],
   ] : [];

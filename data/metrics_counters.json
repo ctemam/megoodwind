@@ -1,0 +1,11 @@
+{
+  "total_detected_opportunities|{\"chain\":\"eth\"}": 107116,
+  "rejected_by_profit_margin|{\"reason\":\"no_spread\"}": 77624,
+  "rejected_by_forensic_bait|{\"reason\":\"peer_divergence_399710754197150498816.0x\"}": 20160,
+  "rejected_by_profit_margin|{\"reason\":\"depth\"}": 302518,
+  "rejected_by_forensic_bait|{\"reason\":\"peer_divergence_2508.9x\"}": 18348,
+  "rejected_by_forensic_bait|{\"reason\":\"peer_divergence_2511.7x\"}": 18348,
+  "rejected_by_forensic_bait|{\"reason\":\"peer_divergence_6285220.0x\"}": 12126,
+  "rejected_by_forensic_bait|{\"reason\":\"peer_divergence_11.7x\"}": 14188,
+  "rejected_by_forensic_bait|{\"reason\":\"gap_above_ceiling\"}": 29492
+}

@@ -1,6 +1,6 @@
 {
   "chain": "eth",
-  "forkBlock": 26241601,
+  "forkBlock": 26241967,
   "windowSec": 301,
   "cycles": 26,
   "profitableCandidates": 0,
@@ -10,6 +10,21 @@
   "landRate": 0.3,
   "slippageFactor": 0.85,
   "regime": "LOW_VOL_MEAN_REVERTING",
-  "pools": 97,
-  "ts": 1792593614393
+  "pools": 108,
+  "activeVariant": "V04",
+  "ts": 1792598019339,
+  "strategyHits": {},
+  "strategyNetUsd": {},
+  "variantHits": {},
+  "variantNetUsd": {},
+  "lanes": {
+    "predictive": 0,
+    "whale": 0
+  },
+  "forensicGates": {
+    "total_detected_opportunities": 107116,
+    "rejected_by_forensic_bait": 112662,
+    "rejected_by_profit_margin": 380142,
+    "passed_to_simulation_probe": 0
+  }
 }
