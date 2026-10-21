@@ -1,5 +1,5 @@
-// Banbot telemetry dashboard server (Item #15).
-// Serves the React cockpit from apps/dashboard/web, proxies /api/metrics
+// AllBright telemetry dashboard server (Item #15).
+// Serves the React UI from apps/dashboard/web, proxies /api/metrics
 // to the metrics API (:3001), serves /api/ops ops-telemetry aggregates,
 // broadcasts a live snapshot over WebSocket /ws every 2s, and exposes
 // /api/engine start/stop control for the arb-runner process.
@@ -159,5 +159,5 @@ setInterval(async () => {
 }, 2_000);
 
 server.listen(PORT, () => {
-  console.log(`banbot dashboard on :${PORT} -> api ${API} (ws /ws)`);
+  console.log(`allbright dashboard on :${PORT} -> api ${API} (ws /ws)`);
 });
