@@ -142,7 +142,12 @@ async function main() {
         regime: snap.regime,
         volBps: snap.volBps,
         tokenUsd: new Map(Object.entries(TOKEN_USD)),
-        sizeOf: () => 10n ** 18n,
+        // USD-target sizing in the token's own decimals (1e18 raw units of
+        // a 6-dec borrow = $1e12 notional — auto-dead at the impact gate)
+        sizeOf: (token: string, dec: number) => {
+          const px = TOKEN_USD[token.toLowerCase()] ?? 1;
+          return (BigInt(Math.floor((cfg.FLASH_BORROW_USD / px) * 1e6)) * 10n ** BigInt(dec)) / 10n ** 6n;
+        },
       });
 
       const winners = candidates.filter((c) => c.netUsd > 0);

@@ -34,6 +34,9 @@ const envSchema = z.object({
   // execution
   AUTO_EXECUTE: z.coerce.boolean().default(false),
   MIN_PROFIT_USD: z.coerce.number().default(5),
+  // USD-target flash borrow before per-path right-sizing (emit() shrinks
+  // it to the slippage bound and the variant's sizeCapUsd)
+  FLASH_BORROW_USD: z.coerce.number().default(10_000),
   // lane-specific floors — a whale-triggered path must clear a higher bar
   // (competition is fiercest right after a big transfer reprices a venue)
   PREDICTIVE_MIN_PROFIT_USD: z.coerce.number().default(2.5),

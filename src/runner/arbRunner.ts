@@ -35,9 +35,13 @@ const log = logger('runner');
 const whaleUntil = new Map<string, number>();
 const WHALE_LANE_MS = 30_000;
 
-// deterministic borrow sizing per asset class (borrowToken -> units)
-const SIZE_TABLE: Record<string, bigint> = {
-  default: 10n ** 18n, // 1 whole token — net check does the real gating
+// deterministic borrow sizing — USD target converted to token units with
+// the borrow token's own decimals (1e18 raw USDC = $1e12: raw-unit sizing
+// auto-killed every stable-anchored path on impact/no_spread). emit()
+// further right-sizes to the dynamic slippage bound and sizeCapUsd.
+const sizeOf = (token: string, dec: number): bigint => {
+  const px = TOKEN_USD[token.toLowerCase()] ?? 1;
+  return (BigInt(Math.floor((cfg.FLASH_BORROW_USD / px) * 1e6)) * 10n ** BigInt(dec)) / 10n ** 6n;
 };
 
 const MAJORS: Record<string, string[]> = {
@@ -147,7 +151,7 @@ async function cycle(
     regime: snap.regime,
     volBps: snap.volBps,
     tokenUsd: new Map(Object.entries(TOKEN_USD)),
-    sizeOf: () => SIZE_TABLE.default,
+    sizeOf,
   });
   if (!candidates.length) return;
 

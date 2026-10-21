@@ -8,7 +8,7 @@ import { baseFeeOk, execProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
 import { sendUserOpViaFlashbots } from './privateRoute.js';
 import { flashbotsAvailable } from './flashbots.js';
-import { breaker } from '../forensics/baitPool.js';
+import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { metrics } from '../telemetry/metrics.js';
 import { VariantScheduler } from '../engine/predictiveEngine.js';
 import { refreshPools } from '../feed/refresh.js';
@@ -34,6 +34,8 @@ export async function executeCandidate(
 ): Promise<void> {
   const t0 = performance.now();
   metrics.inc('arb_eval_total', { chain: chain.key, strategy: cand.strategy });
+  scheduler.recordEmit(cand.variant); // scheduler evidence — unlocks the
+  // emitted>=5 settled-score pick (was never called: permanent round-robin)
 
   // 1. merged refresh of just the legs' pools (fresh state at real size)
   await refreshPools(rpc, cand.legs.map((l) => l.pool));
@@ -67,7 +69,16 @@ export async function executeCandidate(
   if (probe.kind === 'deterministic_revert') {
     scheduler.recordRevert(cand.variant);
     metrics.inc('arb_probe_revert_total', { chain: chain.key });
-    for (const l of cand.legs) breaker.recordProbe(chain.key, l.pool.address, true);
+    // attribute the revert: stats on every leg, but convict ONLY legs
+    // divergent from same-pair peers — a blanket all-leg conviction
+    // permanently bans honest co-leg pools that routed through the liar.
+    // Non-attributed reverts still convict via recordProbe 3-strikes.
+    for (const l of cand.legs) {
+      breaker.recordProbe(chain.key, l.pool.address, true);
+      if (peerDivergence(chain.key, l.pool) > 3) {
+        breaker.convict(chain.key, l.pool.address, 'exec_probe_revert_divergent');
+      }
+    }
     return;
   }
   if (probe.kind === 'transport') {

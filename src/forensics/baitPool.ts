@@ -88,7 +88,12 @@ export class TokenCircuitBreaker {
     s.probes++;
     if (reverted) { s.reverts++; s.lastFail = Date.now(); }
     this.poolStats.set(k, s);
-    if (reverted) this.convict(chain, pool, 'exec_probe_revert_errorpayload');
+    // 3-strikes: a pool whose EVERY probe reverts is a deterministic fake;
+    // a single plan revert may be unrelated to this leg. The caller
+    // additionally convicts peer-divergent legs immediately.
+    if (reverted && s.probes >= 3 && s.reverts === s.probes) {
+      this.convict(chain, pool, 'exec_probe_revert_errorpayload');
+    }
   }
 
   /** Async explorer-reputation check — fire-and-forget from discovery.
@@ -140,9 +145,14 @@ export class TokenCircuitBreaker {
       return { ok: false, reason: `fee_outside_sane_tiers:${p.feeBps}` };
     }
 
-    // peer divergence: >3x vs median of tracked same-pair pools
+    // peer divergence: >3x vs median of tracked same-pair pools.
+    // Physically-impossible divergence (>=1000x) is corrupt state, not a
+    // depeg — convict permanently instead of re-screening it every cycle.
     const div = peerDivergence(chain, p);
-    if (div > 3) return { ok: false, reason: `peer_divergence_${div.toFixed(1)}x` };
+    if (div > 3) {
+      if (div >= 1000) this.convict(chain, p.address, `corrupt_price_state_${div.toExponential(1)}x`);
+      return { ok: false, reason: `peer_divergence_${div.toFixed(1)}x` };
+    }
     return { ok: true };
   }
 
@@ -170,7 +180,10 @@ export function poolPrice(p: PoolState): number {
   if (p.kind === 'v3' && p.sqrtPriceX96) {
     return v3SpotPrice(p.sqrtPriceX96, p.dec0, p.dec1);
   }
-  return p.priceUsd ?? 0;
+  // no on-chain state — never fall back to priceUsd: it is USD-per-token
+  // while peers quote reserve RATIOS; mixing units produced e+23x
+  // divergences and false convictions on pools that merely missed a refresh
+  return 0;
 }
 
 export const breaker = new TokenCircuitBreaker();

@@ -17,6 +17,7 @@ export interface CostInput {
   grossOutToken: bigint;
   borrowInToken: bigint;
   tokenUsd: number;
+  tokenDec: number;              // borrow-token decimals — raw units scale
   nativeUsd: number;
   chain: string;
 }
@@ -34,10 +35,10 @@ export function netUsd(i: CostInput): NetResult {
   // dual-gas on OP-Stack: L2 execution + L1 data availability (blob market)
   const gasNative = Number(i.gasUnits * (i.baseFeeWei + i.priorityFeeWei) + (i.l1DataFeeWei ?? 0n)) / 1e18;
   const gasUsd = gasNative * i.nativeUsd;
-  const dec = 1; // tokenUsd already expressed per whole token
+  const unit = 10 ** i.tokenDec; // raw->whole-token scale (borrow decimals, not always 18)
   const grossUsd =
-    ((Number(i.grossOutToken) - Number(i.borrowInToken)) / 1e18) * i.tokenUsd * dec;
-  const premiumUsd = (Number(i.flashPremiumToken) / 1e18) * i.tokenUsd;
+    ((Number(i.grossOutToken) - Number(i.borrowInToken)) / unit) * i.tokenUsd;
+  const premiumUsd = (Number(i.flashPremiumToken) / unit) * i.tokenUsd;
 
   let bribeUsd = 0;
   if (cfg.auctionChains.includes(i.chain)) {
@@ -63,6 +64,25 @@ export function netUsd(i: CostInput): NetResult {
  * units, so amountIn stays native). Screening approximation: all
  * in-range liquidity treated as concentrated at the current tick.
  */
+/** Input-side depth in raw token units — v2 real reserve, v3 virtual
+ *  reserve (all in-range liquidity treated as concentrated at the tick). */
+export function inputVirtualReserveRaw(
+  pool: {
+    kind: string; token0: string;
+    reserve0?: bigint; reserve1?: bigint;
+    sqrtPriceX96?: bigint; liquidity?: bigint;
+  },
+  tokenIn: string,
+): number {
+  const inIs0 = tokenIn.toLowerCase() === pool.token0.toLowerCase();
+  if (pool.kind === 'v2') {
+    return Number(inIs0 ? pool.reserve0 : pool.reserve1);
+  }
+  if (!pool.sqrtPriceX96 || !pool.liquidity) return 0;
+  const s = Number(pool.sqrtPriceX96) / 2 ** 96;
+  return inIs0 ? Number(pool.liquidity) / s : Number(pool.liquidity) * s;
+}
+
 export function priceImpactBps(
   pool: {
     kind: string; token0: string; feeBps: number;
@@ -72,18 +92,35 @@ export function priceImpactBps(
   amountIn: bigint,
   tokenIn: string,
 ): number {
-  const inIs0 = tokenIn.toLowerCase() === pool.token0.toLowerCase();
   const aEff = Number(amountIn) * (1 - pool.feeBps / 10_000);
-  let vIn: number;
-  if (pool.kind === 'v2') {
-    vIn = Number(inIs0 ? pool.reserve0 : pool.reserve1);
-  } else {
-    if (!pool.sqrtPriceX96 || !pool.liquidity) return 0;
-    const s = Number(pool.sqrtPriceX96) / 2 ** 96;
-    vIn = inIs0 ? Number(pool.liquidity) / s : Number(pool.liquidity) * s;
-  }
+  const vIn = inputVirtualReserveRaw(pool, tokenIn);
   if (!vIn || !Number.isFinite(vIn)) return 0;
   return (aEff / (vIn + aEff)) * 10_000;
+}
+
+/** Depth gate value in USD — feed liquidityUsd when the feed supplied it,
+ *  otherwise derived from ON-CHAIN state: 2x the USD value of whichever
+ *  side carries a known price. Factory-discovered pools start with
+ *  liquidityUsd=0; without this fallback the entire on-chain-discovered
+ *  universe is depth-rejected no matter how deep it really is. */
+export function poolDepthUsd(
+  pool: {
+    kind: string; token0: string; token1: string;
+    dec0: number; dec1: number; liquidityUsd: number;
+    reserve0?: bigint; reserve1?: bigint;
+    sqrtPriceX96?: bigint; liquidity?: bigint;
+  },
+  tokenUsd: Map<string, number>,
+): number {
+  if (pool.liquidityUsd > 0) return pool.liquidityUsd;
+  for (const tok of [pool.token0, pool.token1]) {
+    const px = tokenUsd.get(tok.toLowerCase());
+    if (px === undefined) continue;
+    const raw = inputVirtualReserveRaw(pool, tok);
+    const dec = tok.toLowerCase() === pool.token0.toLowerCase() ? pool.dec0 : pool.dec1;
+    if (raw > 0 && dec >= 0) return (raw / 10 ** dec) * px * 2;
+  }
+  return 0;
 }
 
 /** Credibility ceiling (operating discipline): spreads above ~2% on

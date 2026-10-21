@@ -2,7 +2,7 @@ import { ChainConfig, cfg } from '../config/index.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { v2AmountOut } from '../math/univ2.js';
 import { v3SpotPrice, tickDistanceOk } from '../math/univ3.js';
-import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps } from '../math/profit.js';
+import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps, poolDepthUsd, inputVirtualReserveRaw } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards, dynamicSlippageBps } from '../engine/predictiveEngine.js';
 import { MarketRegime } from '../engine/marketRegime.js';
@@ -69,12 +69,19 @@ export function legOut(pool: PoolState, amountIn: bigint, tokenIn: string): bigi
   return BigInt(Math.floor(outAdj * 10 ** (inIs0 ? pool.dec1 : pool.dec0)));
 }
 
-function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant): boolean {
+/** decimals of `token` as recorded on `pool` (token0/token1 side). */
+const decOf = (pool: PoolState, token: string): number =>
+  pool.token0.toLowerCase() === token.toLowerCase() ? pool.dec0 : pool.dec1;
+
+function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant, tokenUsd: Map<string, number>): boolean {
   const g = effectiveGuards(v);
   for (const { pool } of legs) {
     const s = breaker.screen(chain.key, pool);
     if (!s.ok) { metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' }); return false; }
-    if (pool.liquidityUsd < g.minDepthUsd) { metrics.inc('rejected_by_profit_margin', { reason: 'depth' }); return false; }
+    // depth = feed liquidity when present, else on-chain priced-side
+    // value — discovered pools carry liquidityUsd=0 and must not be
+    // blanket-rejected (they are the primary discovery product)
+    if (poolDepthUsd(pool, tokenUsd) < g.minDepthUsd) { metrics.inc('rejected_by_profit_margin', { reason: 'depth' }); return false; }
   }
   return true;
 }
@@ -104,9 +111,29 @@ function emit(
   slipBoundBps = cfg.SLIPPAGE_BPS,
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
+  const decBorrow = decOf(legs[0].pool, borrowToken);
+  // Right-size the borrow to the slippage bound: largest first-leg input
+  // keeping impact ≤ its per-leg share of slipBoundBps (a_eff ≤
+  // b/(1−b)·vIn). A raw 1e18 borrow is a trillion-unit clip on 6-dec
+  // tokens — instead of letting it die at the impact gate, shrink to
+  // what the pool can absorb; the profit floor decides if it's enough.
+  let borrow = borrowAmount;
+  const vIn = inputVirtualReserveRaw(legs[0].pool, borrowToken);
+  if (vIn > 0 && slipBoundBps > 0) {
+    const b = slipBoundBps / legs.length / 10_000;
+    const maxIn = (vIn * b) / (1 - b) / (1 - legs[0].pool.feeBps / 10_000);
+    if (Number.isFinite(maxIn) && maxIn > 0 && maxIn < Number(borrow)) borrow = BigInt(Math.floor(maxIn));
+  }
+  // sizeCapUsd — the variant's borrow ceiling (was declared, never wired)
+  const capUsd = effectiveGuards(v).sizeCapUsd;
+  if (tokenUsd > 0 && capUsd > 0) {
+    const cap = BigInt(Math.floor((capUsd / tokenUsd) * 10 ** decBorrow));
+    if (cap > 0n && cap < borrow) borrow = cap;
+  }
+  if (borrow <= 0n) { metrics.inc('rejected_by_profit_margin', { reason: 'size_zero' }); return null; }
   // one pass: simulate legs AND accumulate constant-product price
   // impact — how much our size shifts each pool before minOut is set
-  let out = borrowAmount;
+  let out = borrow;
   let impactBps = 0;
   for (const leg of legs) {
     impactBps += priceImpactBps(leg.pool, out, leg.tokenIn);
@@ -114,13 +141,13 @@ function emit(
     if (out <= 0n) break;
   }
   metrics.notePathImpact(chain.key, impactBps);
-  if (out <= borrowAmount) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
+  if (out <= borrow) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
   // dynamic slippage gate — path impact vs the regime/whale-tuned bound
   if (impactBps > slipBoundBps) {
     metrics.inc('rejected_by_profit_margin', { reason: 'price_impact' });
     return null;
   }
-  const sp = spreadPct(out, borrowAmount);
+  const sp = spreadPct(out, borrow);
   if (sp > CREDIBILITY_CEILING_PCT) {
     metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
     // >~2% = a pool in the path is lying about reserves. Convict ONLY the
@@ -145,8 +172,9 @@ function emit(
     priorityFeeWei: BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
     flashPremiumToken: 0n, // Balancer primary = 0%; Aave premium priced at plan build
     grossOutToken: out,
-    borrowInToken: borrowAmount,
+    borrowInToken: borrow,
     tokenUsd,
+    tokenDec: decBorrow,
     nativeUsd: cfg.NATIVE_USD,
     chain: chain.key,
   });
@@ -167,11 +195,9 @@ function emit(
   // lane floor in borrowToken units — the executor binds it into the
   // plan's minProfit (and whale-lane minOut), so the floor is enforced
   // on-chain, not just at screening.
-  const decIn = legs[0].pool.token0.toLowerCase() === borrowToken.toLowerCase()
-    ? legs[0].pool.dec0 : legs[0].pool.dec1;
-  const minProfitToken = BigInt(Math.floor((floorUsd / tokenUsd) * 10 ** decIn));
+  const minProfitToken = BigInt(Math.floor((floorUsd / tokenUsd) * 10 ** decBorrow));
   return {
-    strategy, chain, legs, borrowToken, borrowAmount, simOut: out,
+    strategy, chain, legs, borrowToken, borrowAmount: borrow, simOut: out,
     spreadPct: sp, netUsd: n.netUsd, variant: v, lane,
     impactBps, slipBoundBps, minProfitToken,
   };
@@ -181,7 +207,7 @@ function emit(
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
@@ -230,9 +256,10 @@ export function solve(
             { pool: b, tokenIn: a.token0, tokenOut: a.token1 },
           ];
           for (const legs of [legsAB, legsBA]) {
-            if (!pathScreen(chain, legs, v)) continue;
-            const borrow = opts.sizeOf(legs[0].tokenIn);
-            const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1;
+            if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
+            const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
+            if (usd === undefined) continue; // unpriced borrow = dishonest net
+            const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
             push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
           }
         }
@@ -267,9 +294,11 @@ export function solve(
               { pool: p2, tokenIn: b, tokenOut: c },
               { pool: p3, tokenIn: c, tokenOut: a },
             ];
-            if (!pathScreen(chain, legs, v)) continue;
-            const borrow = opts.sizeOf(a);
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n, lane, slipBps);
+            if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
+            const usdA = opts.tokenUsd.get(a);
+            if (usdA === undefined) continue; // unpriced borrow = dishonest net
+            const borrow = opts.sizeOf(a, decOf(p1, a));
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps);
             push(cnd);
           }
         }
@@ -283,10 +312,10 @@ export function solve(
   for (const legs of findCycles(edges)) {
     const label = legs.length <= 2 ? 'P01' : 'P02';
     if (!strat.has(label)) continue;
-    if (!pathScreen(chain, legs, v)) continue;
+    if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
-    const borrow = opts.sizeOf(legs[0].tokenIn);
+    const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
     push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps));
   }
 

@@ -133,8 +133,10 @@ async function cycle(rt: ChainRuntime): Promise<void> {
   const cands = solve(rt.chain, VARIANTS[0], {
     gasUnits: 350_000n,
     baseFeeWei: await baseFeeWei(rt.rpc),
-    tokenUsd: new Map(),
-    sizeOf: (t) => sizeOf(t, pools),
+    // structural monitor: $1 sentinel prices so unpriced-borrow skips don't
+    // blind it — it proves exec STRUCTURE (minProfit=0 dry-runs), never USD
+    tokenUsd: new Map(pools.flatMap((p) => [p.token0, p.token1]).map((t) => [t.toLowerCase(), 1])),
+    sizeOf: (t: string, _dec: number) => sizeOf(t, pools),
   });
 
   const rec: Record<string, unknown> = {
