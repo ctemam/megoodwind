@@ -1,6 +1,7 @@
 const { useEffect, useState, useRef } = React;
 
 const fmt$ = (n) => `$${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const tc = (s) => String(s ?? '').replace(/_/g, ' ').toLowerCase().replace(/\w/g, (c) => c.toUpperCase());
 const trunc = (a, max = 16) => (a && a.length > max ? `${a.slice(0, Math.floor(max / 2))}…${a.slice(-Math.floor(max / 2))}` : a ?? '—');
 const copy = (t) => navigator.clipboard?.writeText(t);
 
@@ -10,9 +11,9 @@ const PAGE_ICON = { 'Profit Metrics': '◎', Strategy: '⟁', Chains: '⛓', Wal
 const Dot = ({ s }) => <span className={`dot ${s === 'LIVE' || s === 'live' || s === true ? 'live' : /^SUSPENDED|dead|false/.test(String(s)) ? 'dead' : 'armed'}`} />;
 
 const REGIME_HINT = {
-  HIGH_VOL_TRENDING: 'MEAN_REVERSION Suppressed · MOMENTUM+CPV Prioritized',
-  LOW_VOL_MEAN_REVERTING: 'MOMENTUM+CPV Suppressed · MEAN_REV+STAT_ARB Prioritized',
-  ILLIQUID_CRASH: 'STAT_ARB Only · minDepth ≥$250k Floor',
+  HIGH_VOL_TRENDING: 'Mean Reversion Suppressed · Momentum+Cpv Prioritized',
+  LOW_VOL_MEAN_REVERTING: 'Momentum+Cpv Suppressed · Mean Rev+Stat Arb Prioritized',
+  ILLIQUID_CRASH: 'Stat Arb Only · Min Depth ≥$250k Floor',
   BALANCED: 'All 12 Variants Eligible',
 };
 
@@ -22,7 +23,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) 
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="hairline mb-px">
-      <header className="metallic-head flex h-8 items-center gap-2 px-2 text-[10px] uppercase tracking-widest dim">
+      <header className="metallic-head flex h-8 items-center gap-2 px-2 text-[10px] tracking-widest dim">
         <button onClick={() => setOpen(!open)} className="w-4 text-left text-white hover:text-[#00FF66]" title={open ? 'Collapse' : 'Expand'}>
           {open ? '▼' : '▶'}
         </button>
@@ -34,7 +35,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) 
         <div className="max-h-[60vh] overflow-x-auto overflow-y-auto">
         <table className="w-max max-w-none text-left text-[11px]">
           <thead>
-            <tr className="hairline-b dim text-[9px] uppercase tracking-widest">
+            <tr className="hairline-b dim text-[9px] tracking-widest">
               {cols.map((c) => <th key={c} className="px-2 py-1 font-normal whitespace-nowrap">{c}</th>)}
             </tr>
           </thead>
@@ -47,7 +48,7 @@ function Fold({ title, cols, rows, rollups, defaultOpen = false, right, foot }) 
           </tbody>
           {foot && (
             <tfoot>
-              <tr className="border-t border-[#334155] bg-[#0F172A]">
+              <tr className="border-t border-[#2E2E2E] bg-[#141414]">
                 {foot.map((c, j) => <td key={j} className="px-2 py-1.5 whitespace-nowrap">{c}</td>)}
               </tr>
             </tfoot>
@@ -122,10 +123,10 @@ function DigitalWatch() {
       <button onClick={() => setOpen(!open)} className="dim hover:text-white" title="Watch Settings">⚙</button>
       {open && (
         <div className="hairline absolute right-0 top-6 z-50 w-64 bg-[#0A0A0B] p-3 text-[10px]">
-          <div className="mb-2 uppercase tracking-widest dim">Watch Settings</div>
+          <div className="mb-2 tracking-widest dim">Watch Settings</div>
           <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.hour12} onChange={(e) => set({ hour12: e.target.checked })} /> 12h Format</label>
           <label className="mb-1 flex items-center gap-2"><input type="checkbox" checked={cfg.seconds} onChange={(e) => set({ seconds: e.target.checked })} /> Show Seconds</label>
-          <div className="mb-1 mt-2 dim uppercase tracking-widest">Time Zone</div>
+          <div className="mb-1 mt-2 dim tracking-widest">Time Zone</div>
           <input value={tzFilter} onChange={(e) => setTzFilter(e.target.value)} aria-label="Filter Time Zones"
             className="hairline mb-1 w-full bg-transparent px-2 py-1 text-white" />
           <select value={cfg.tz ?? '__local__'} onChange={(e) => set({ tz: e.target.value === '__local__' ? null : e.target.value })}
@@ -152,7 +153,7 @@ function ProfitMetrics({ m, windowMs = Infinity }) {
   ];
   return (<>
     <div className="flex flex-col w-full">
-      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#050505] p-3 border-b border-[#1A1A1A] w-full"><div className="text-[9px] uppercase tracking-widest dim">{k}</div><div className={`mt-1 text-lg ${t ?? 'num'}`}>{v}</div></div>)}
+      {kpis.map(([k, v, t]) => <div key={k} className="bg-[#000000] p-3 border-b border-[#1A1A1A] w-full"><div className="text-[9px] tracking-widest dim">{k}</div><div className={`mt-1 text-lg ${t ?? 'num'}`}>{v}</div></div>)}
     </div>
     <Fold title="Settled Records" cols={['Time', 'Chain', 'Strategy', 'Spread %', 'Net', 'Tx Hash']} defaultOpen
       rollups={[['Total', fmt$(net)], ['Trades', recs.length], ['Avg', m.settled_count ? fmt$(net / m.settled_count) : '—']]}
@@ -170,7 +171,7 @@ function Strategy({ m, ops }) {
     <div className="flex flex-col gap-1 p-3 text-[11px] border-b border-[#1A1A1A] w-full">
       {Object.entries(ops.regimes ?? {}).map(([c, r]) => (
         <Tip key={c} text={`${c}: ${REGIME_HINT[r.regime] ?? ''}\nVol ${r.volBps?.toFixed(1)}bps · Trend ${r.trendScore?.toFixed(2)} · Illiq ${(r.illiquidFrac * 100).toFixed(0)}%`}>
-          <span className={r.regime === 'BALANCED' ? 'dim' : r.regime === 'ILLIQUID_CRASH' ? 'bad' : 'acc'}>{c} · {r.regime?.replace(/_/g, ' ')}</span>
+          <span className={r.regime === 'BALANCED' ? 'dim' : r.regime === 'ILLIQUID_CRASH' ? 'bad' : 'acc'}>{c} · {tc(r.regime)}</span>
         </Tip>
       ))}
       {!Object.keys(ops.regimes ?? {}).length && <span className="dim text-[10px]">No Regime Records — Runner Idle</span>}
@@ -192,7 +193,7 @@ function Chains({ m, ops }) {
     const cl = lanes.filter((l) => l.chain === c);
     return [c, m.pools?.[c] ?? 0, m.convicted?.[c] ?? 0, cl.length,
       cl.length ? <span className="num">{Math.round(cl.reduce((s, l) => s + l.p50Ms, 0) / cl.length)}ms</span> : '—',
-      ops.regimes?.[c]?.regime?.replace(/_/g, ' ') ?? '—'];
+      ops.regimes?.[c]?.regime ? tc(ops.regimes[c].regime) : '—'];
   });
   return <Fold title="Chain Status Boards" cols={['Chain', 'Pools', 'Convicted', 'Lanes', 'P50', 'Regime']} defaultOpen
     rollups={[['Chains', chainRows.length], ['Pools', chainRows.reduce((s, r) => s + r[1], 0)], ['Lanes', chainRows.reduce((s, r) => s + r[3], 0)]]}
@@ -278,7 +279,7 @@ function Wallet({ ops, accounts, setAccounts, prices }) {
         {probeErr && <span className="bad text-[10px]">{probeErr}</span>}
       </div>
       <div className="flex items-center gap-2">
-        <span className="dim text-[10px] uppercase tracking-widest">Add Account Manually</span>
+        <span className="dim text-[10px] tracking-widest">Add Account Manually</span>
         <input value={manual} onChange={(e) => setManual(e.target.value)} aria-label="Add Account Manually"
           className="hairline w-96 bg-transparent px-2 py-1 text-[11px] text-white" />
         <button onClick={addManual} className="hairline px-3 py-1 text-[10px] tracking-widest dim hover:text-white">+ Add</button>
@@ -288,7 +289,7 @@ function Wallet({ ops, accounts, setAccounts, prices }) {
     <Fold title="Tracked Accounts" cols={['Time', 'Chain', 'Account Address', 'Native Gas Balance', 'Token Reserves', 'Nonce Sequence']} defaultOpen
       rollups={[['Accounts', accounts.length], ['Σ Native', fmtEth(totalNative)], [priced ? 'Σ Est Usd' : 'Σ Usd', priced ? fmt$(totalUsd) : '—']]}
       foot={[
-        <span className="dim uppercase tracking-widest text-[9px]">Total</span>,
+        <span className="dim tracking-widest text-[9px]">Total</span>,
         `${accounts.length} Acct`,
         <span className="dim">All Networks</span>,
         <span className="acc text-[12px]">{fmtEth(totalNative)}{priced ? ` · ${fmt$(totalUsd)}` : ''}</span>,
@@ -355,7 +356,7 @@ function Configuration({ m, ops }) {
   ]);
   return (<>
     <Fold title="Runtime Parameters" cols={['Key', 'Value']} defaultOpen
-      rollups={[['Params', rows.length], ['Mode', m.config?.autoExecute ? 'LIVE' : 'SHADOW']]}
+      rollups={[['Params', rows.length], ['Mode', m.config?.autoExecute ? 'Live' : 'Shadow']]}
       rows={rows} />
     <div className="p-2 text-[10px] dim">API Keys & Secrets Deliberately Excluded From This Surface.</div>
   </>);
@@ -374,7 +375,7 @@ function Engine({ m, ops, refresh }) {
     <div className="p-4">
       <div className="mb-4 flex flex-col gap-1 text-[11px]">
         <span><Dot s={running} /> {running ? `Runner Active — PID ${ops.engine?.pid}` : 'Runner Stopped'}</span>
-        <span className="warn">AUTO_EXECUTE Forced False — Shadow Only From UI</span>
+        <span className="warn">Auto-Execute Forced False — Shadow Only From UI</span>
       </div>
       <div className="flex flex-col gap-2 w-full">
         <button disabled={busy || running} onClick={() => act('start')}
@@ -527,7 +528,7 @@ function App() {
         </div>
         {PAGES.map((p) => (
           <button key={p} onClick={() => { setPage(p); location.hash = p; }}
-            className={`flex h-9 items-center gap-2 border-b border-[#1A1A1A] px-3 text-left text-[10px] tracking-wide ${page === p ? 'acc bg-[#0F172A]' : 'dim hover:text-white'}`}>
+            className={`flex h-9 items-center gap-2 border-b border-[#1A1A1A] px-3 text-left text-[10px] tracking-wide ${page === p ? 'acc bg-[#141414]' : 'dim hover:text-white'}`}>
             <span>{PAGE_ICON[p]}</span><span>{p}</span>
           </button>
         ))}
@@ -538,20 +539,20 @@ function App() {
 
       <main className="ml-36 pb-28 pt-52">
         {/* fixed top control panel — persistent telemetry + timekeepers (4× height) */}
-        <header className="metallic fixed left-36 right-0 top-0 z-40 flex h-48 flex-col overflow-x-auto overflow-y-hidden border-b border-slate-700/50 px-6 py-3 whitespace-nowrap">
+        <header className="metallic fixed left-36 right-0 top-0 z-40 flex h-48 flex-col overflow-x-auto overflow-y-hidden border-b border-[#2E2E2E] px-6 py-3 whitespace-nowrap">
           {/* row 1 — brand + valuation + watch */}
           <div className="flex items-center gap-6 border-b border-[#1A1A1A] pb-3">
             <span className="flex items-center gap-3">
               <img src="./logo.svg" className="h-9 w-auto" alt="AllBright" />
               <span className="flex flex-col">
-                <span className="text-[14px] tracking-widest text-white">ALLBRIGHT</span>
-                <span className="dim text-[9px] tracking-[0.3em]">BANBOT COCKPIT v1.0</span>
+                <span className="text-[14px] tracking-widest text-white">AllBright</span>
+                <span className="dim text-[9px] tracking-[0.3em]">Banbot Cockpit V1.0</span>
               </span>
             </span>
             <span className="hairline flex text-[10px] tracking-widest">
               {['usd', 'eth'].map((u) => (
                 <button key={u} onClick={() => { setUnit(u); saveStored('ab_unit', u); }}
-                  className={`px-3 py-1 ${unit === u ? 'bg-[#1e4fd8] text-white' : 'dim hover:text-white'}`}>{u.toUpperCase()}</button>
+                  className={`px-3 py-1 ${unit === u ? 'bg-[#1e4fd8] text-white' : 'dim hover:text-white'}`}>{u === 'usd' ? 'Usd' : 'Eth'}</button>
               ))}
             </span>
             <span className="ml-auto"><DigitalWatch /></span>
@@ -559,7 +560,7 @@ function App() {
           {/* row 2 — profit + pulse + time filter */}
           <div className="flex items-center gap-8 border-b border-[#1A1A1A] py-3">
             <span className="flex items-center gap-2 text-[11px]">
-              <span className="dim uppercase tracking-widest">Profit</span>
+              <span className="dim tracking-widest">Profit</span>
               <Tip text={profitSpan === 'day' ? 'Settled Net — Trailing 24h' : 'Settled Net — Lifetime Since Deployment'}>
                 <span className={profitShown >= 0 ? 'acc text-lg' : 'bad text-lg'}>{val(profitShown)}</span>
               </Tip>
@@ -570,13 +571,13 @@ function App() {
               </select>
             </span>
             <span className="flex items-center gap-2 text-[11px]">
-              <span className="dim uppercase tracking-widest">Profit Pulse</span>
+              <span className="dim tracking-widest">Profit Pulse</span>
               <Tip text={`Aggregate Of ${accounts.length} Tracked Account${accounts.length === 1 ? '' : 's'} — Live EIP-1193 Balances × Native Prices`}>
                 <span className="acc text-lg">{accounts.length ? val(pulseUsd) : '—'}</span>
               </Tip>
             </span>
             <span className="flex items-center gap-2 text-[11px]">
-              <span className="dim uppercase tracking-widest">Window</span>
+              <span className="dim tracking-widest">Window</span>
               <select onChange={(e) => setWindowMs(Number(e.target.value))} defaultValue={Infinity}
                 className="hairline bg-transparent px-2 py-1 text-[10px] dim" title="Unified Time Filter — Settled Records Window">
                 {TIME_WINDOWS.map(([k, v]) => <option key={k} value={v} className="bg-black">{k}</option>)}
@@ -590,14 +591,14 @@ function App() {
               title="Emergency Kill Switch — Stops The Runner Immediately">
               ▣ Emergency Kill
             </button>
-            <span className="text-[12px] tracking-[0.25em] text-white">{page.toUpperCase()}</span>
+            <span className="text-[12px] tracking-[0.25em] text-white">{page}</span>
             <span className="ml-auto flex items-center gap-3">
               <select value={refreshSec} onChange={(e) => { const v = Number(e.target.value); setRefreshSec(v); saveStored('ab_refresh', v); }}
                 className="hairline bg-transparent px-1.5 py-1 text-[10px] dim" title="Refresh Interval" aria-label="Refresh Interval">
                 {[1, 2, 3, 5, 10, 15, 20, 30].map((s) => <option key={s} value={s} className="bg-black">{s}s</option>)}
               </select>
             <span className={`text-[11px] tracking-widest ${metrics.config?.autoExecute ? 'acc' : 'warn'}`}>
-              {!m ? 'METRICS API OFFLINE' : metrics.config?.autoExecute ? 'LIVE EXECUTION' : 'SHADOW MODE'}
+              {!m ? 'Metrics Api Offline' : metrics.config?.autoExecute ? 'Live Execution' : 'Shadow Mode'}
             </span>
             </span>
           </div>
@@ -606,7 +607,7 @@ function App() {
       </main>
 
       {/* status ribbon — 50% of the 192px control panel */}
-      <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-24 flex-col justify-center gap-2 overflow-x-auto border-t border-slate-700/50 px-6 text-[11px] whitespace-nowrap">
+      <footer className="metallic fixed bottom-0 left-36 right-0 z-40 flex h-24 flex-col justify-center gap-2 overflow-x-auto border-t border-[#2E2E2E] px-6 text-[11px] whitespace-nowrap">
         {(() => {
           const rps = Object.values(ops.providers ?? {}).filter((p) => !/^SUSPENDED/.test(p.status ?? '')).reduce((s, p) => s + (p.safe_rps ?? 0), 0);
           return (<>
