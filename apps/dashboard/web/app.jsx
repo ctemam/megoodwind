@@ -267,9 +267,8 @@ function App() {
   return (
     <div className="min-h-screen">
       <nav className="metallic fixed left-0 top-0 z-40 flex h-screen w-36 flex-col">
-        <div className="flex h-11 items-center gap-2 border-b border-[#1A1A1A] px-3">
-          <img src="./logo.svg" className="h-5 w-5" alt="A" />
-          <span className="text-[10px] font-bold tracking-widest">BANBOT</span>
+        <div className="flex h-14 items-center justify-center border-b border-[#1A1A1A] px-3">
+          <img src="./logo.svg" className="h-8 w-auto" alt="AllBright" />
         </div>
         {PAGES.map((p) => (
           <button key={p} onClick={() => setPage(p)}
@@ -308,4 +307,15 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+class ErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  render() {
+    if (this.state.err) {
+      return <div className="p-8 bad">Render Fault: {String(this.state.err?.message ?? this.state.err)}</div>;
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
