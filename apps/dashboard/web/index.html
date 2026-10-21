@@ -54,6 +54,13 @@
     }
     ::-webkit-scrollbar { width:6px; height:6px; } ::-webkit-scrollbar-thumb { background:var(--line); }
     ::selection { background:var(--cyan); color:#000; }
+    /* global +20% font scale — overrides px-based utility classes */
+    #root .text-\[9px\]  { font-size:10.8px !important; }
+    #root .text-\[10px\] { font-size:12px !important; }
+    #root .text-\[11px\] { font-size:13.2px !important; }
+    #root .text-\[12px\] { font-size:14.4px !important; }
+    #root .text-lg       { font-size:21.6px !important; line-height:28.8px !important; }
+    #root button, #root input, #root select { font-size:12px; }
   </style>
 </head>
 <body>
