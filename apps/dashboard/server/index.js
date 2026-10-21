@@ -1,11 +1,16 @@
 // Banbot telemetry dashboard server (Item #15).
-// Serves the React cockpit from apps/dashboard/web and proxies
-// /api/* to the local metrics Express API (default :3001).
+// Serves the React cockpit from apps/dashboard/web, proxies /api/metrics
+// to the metrics API (:3001), serves /api/ops ops-telemetry aggregates,
+// broadcasts a live snapshot over WebSocket /ws every 2s, and exposes
+// /api/engine start/stop control for the arb-runner process.
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
+import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB = join(__dirname, '..', 'web');
@@ -13,49 +18,109 @@ const ROOT = resolve(__dirname, '../../..');
 const PORT = Number(process.env.DASHBOARD_PORT ?? 9205);
 const API = process.env.METRICS_URL ?? `http://localhost:${process.env.PORT ?? 3001}`;
 
-const app = express();
+// ---- .env parsing (public surfaces only — keys never leave this file) ----
+const ENV_PATH = join(ROOT, '.env');
+const envVal = (k) => {
+  try {
+    const m = readFileSync(ENV_PATH, 'utf8').match(new RegExp(`^${k}=(.+)$`, 'm'));
+    return m?.[1]?.trim();
+  } catch { return undefined; }
+};
 
-/** Ops surface for the cockpit — aggregates the on-disk artifacts the
- *  daemons write (benchmark lanes, monitor signals, pool config). The TS
- *  metrics API only exposes settled/counters; ops telemetry lives here. */
-app.get('/api/ops', (_req, res) => {
-  const out = { lanes: [], regimes: {}, providers: {}, daemon: null, signals: {} };
+// ---- ops aggregate — on-disk artifacts the daemons write ----
+function buildOps() {
+  const out = { lanes: [], regimes: {}, providers: {}, daemon: null, signals: {}, simLedger: [], wallet: {}, deployment: {}, engine: { running: !!engineProc } };
   try {
     const cfg = JSON.parse(readFileSync(join(ROOT, 'rpc_pool_config.json'), 'utf8'));
     out.providers = cfg.provider_catalog ?? {};
   } catch { /* config absent */ }
   try {
     const lines = readFileSync(join(ROOT, 'logs/rpc_benchmark.jsonl'), 'utf8').trim().split('\n').filter(Boolean);
-    const latest = new Map(); // chain:provider -> row
-    for (const l of lines) {
-      const r = JSON.parse(l);
-      latest.set(`${r.chain}:${r.provider}`, r);
-    }
+    const latest = new Map();
+    for (const l of lines) { const r = JSON.parse(l); latest.set(`${r.chain}:${r.provider}`, r); }
     out.lanes = [...latest.values()];
   } catch { /* no benchmark yet */ }
   try {
     const dir = join(ROOT, 'data/monitor');
     for (const f of existsSync(dir) ? readdirSync(dir).filter((x) => x.endsWith('_signals.jsonl')) : []) {
-      const recs = readFileSync(join(dir, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => {
-        try { return JSON.parse(l); } catch { return null; }
-      }).filter(Boolean);
+      const recs = readFileSync(join(dir, f), 'utf8').trim().split('\n').filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       const key = f.replace(/_signals\.jsonl$/, '');
       const regimes = recs.filter((r) => r.kind === 'regime');
       if (regimes.length) out.regimes[key] = regimes[regimes.length - 1];
       out.signals[key] = { records: recs.length, whales: recs.filter((r) => r.kind === 'whale_alpha').length };
-      // sim ledger — last candidate dry-runs (impersonation gate outcomes)
       const sims = recs.filter((r) => r.candidate && r.sim).slice(-10);
-      if (!out.simLedger) out.simLedger = [];
       out.simLedger.push(...sims.map((r) => ({ chain: key, ...r })));
     }
-    if (out.simLedger) out.simLedger.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
-    out.simLedger = (out.simLedger ?? []).slice(0, 15);
+    out.simLedger.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+    out.simLedger = out.simLedger.slice(0, 15);
   } catch { /* no signals yet */ }
   try {
     const lines = readFileSync(join(ROOT, 'logs/rpc_sync.log'), 'utf8').trim().split('\n').filter(Boolean);
     out.daemon = { lastLine: lines[lines.length - 1] ?? null, lines: lines.length };
   } catch { /* no sync log */ }
-  res.json(out);
+
+  // wallet — public addresses only (never keys)
+  out.wallet = {
+    smartAccount: envVal('SMART_ACCOUNT_ADDRESS') ?? null,
+    profitWallet: envVal('PROFIT_WALLET') ?? null,
+  };
+
+  // deployment — executor contract addresses per chain + multicall3
+  const deployment = { multicall3: envVal('MULTICALL3_ADDR') ?? '0xcA11bde05977b3631167028862bE2a173976CA11', executors: {} };
+  try {
+    const env = readFileSync(ENV_PATH, 'utf8');
+    for (const m of env.matchAll(/^ALLBRIGHT_EXECUTOR_([A-Z]+)=(0x[0-9a-fA-F]+)/gm)) {
+      deployment.executors[m[1].toLowerCase()] = m[2];
+    }
+  } catch { /* no env */ }
+  out.deployment = deployment;
+
+  // configuration — non-secret runtime params (API keys deliberately excluded)
+  const cfgOut = {};
+  for (const k of ['ACTIVE_CHAINS', 'PREDICTIVE_CHAINS', 'BACKRUN_CHAINS', 'STRATEGIES', 'AUTO_EXECUTE',
+    'MIN_PROFIT_USD', 'SCAN_INTERVAL_SECS', 'MAX_BASE_FEE_GWEI', 'SLIPPAGE_BPS', 'STRICT_PROFIT_FLOOR_GUARD',
+    'DISCOVERY_TOP_TOKENS', 'DISCOVERY_MAX_FACTORIES', 'DISCOVERY_BATCH_SIZE', 'NATIVE_USD',
+    'PROFIT_TRANSFER_MODE', 'PROFIT_TRANSFER_MIN_USD']) {
+    const v = envVal(k);
+    if (v !== undefined) cfgOut[k] = v;
+  }
+  out.configuration = cfgOut;
+  out.engine = { running: !!engineProc, pid: engineProc?.pid ?? null };
+  return out;
+}
+
+// ---- engine control: spawn/stop the arb-runner ----
+let engineProc = null;
+function engineStart() {
+  if (engineProc) return { ok: true, pid: engineProc.pid, already: true };
+  engineProc = spawn('npx', ['tsx', 'src/runner/arbRunner.ts'], {
+    cwd: ROOT, shell: true, detached: false,
+    env: { ...process.env, AUTO_EXECUTE: 'false' }, // shadow-forced — never live from UI
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  engineProc.stdout.on('data', () => undefined);
+  engineProc.stderr.on('data', () => undefined);
+  engineProc.on('exit', () => { engineProc = null; });
+  return { ok: true, pid: engineProc.pid };
+}
+function engineStop() {
+  if (!engineProc) return { ok: true, already: true };
+  try { process.kill(engineProc.pid); } catch { /* gone */ }
+  engineProc = null;
+  return { ok: true };
+}
+
+const app = express();
+app.use(express.json());
+
+app.get('/api/ops', (_req, res) => res.json(buildOps()));
+
+app.post('/api/engine', (req, res) => {
+  const action = String(req.body?.action ?? '');
+  if (action === 'start') return res.json(engineStart());
+  if (action === 'stop') return res.json(engineStop());
+  res.status(400).json({ ok: false, error: 'action must be start|stop' });
 });
 
 app.use(
@@ -68,9 +133,31 @@ app.use(
     pathRewrite: { '^/': '/api/' },
   }),
 );
-app.use('/health', (_req, res) => res.json({ ok: true, api: API }));
+app.use('/health', (_req, res) => res.json({ ok: true, api: API, ws: true }));
 app.use(express.static(WEB));
 
-app.listen(PORT, () => {
-  console.log(`banbot dashboard on :${PORT} -> api ${API}`);
+// ---- HTTP + WebSocket server ----
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+async function snapshot() {
+  let metrics = null;
+  try {
+    const r = await fetch(`${API}/api/metrics`, { signal: AbortSignal.timeout(3_000) });
+    metrics = await r.json();
+  } catch { /* metrics api down — send ops anyway */ }
+  return { ts: Date.now(), metrics, ops: buildOps() };
+}
+
+wss.on('connection', async (ws) => {
+  ws.send(JSON.stringify(await snapshot()));
+});
+setInterval(async () => {
+  if (!wss.clients.size) return;
+  const s = JSON.stringify(await snapshot());
+  for (const c of wss.clients) if (c.readyState === 1) c.send(s);
+}, 2_000);
+
+server.listen(PORT, () => {
+  console.log(`banbot dashboard on :${PORT} -> api ${API} (ws /ws)`);
 });
