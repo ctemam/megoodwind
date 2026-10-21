@@ -14,7 +14,8 @@
 
 ```
 net_usd = gross_token_usd
-        - (gasUnits * (baseFee + priorityFee) / 1e18) * native_usd   # EIP-1559
+        - (gasUnits * (baseFee + priorityFee) + l1DataFeeWei) / 1e18 * native_usd
+        #                  ^ EIP-1559 execution      ^ OP-Stack L1 data availability (dual-gas)
         - flashPremium_usd                                          # Balancer 0, Aave 0.09%
         - auction_bribe_usd                                         # AUCTION_CHAINS only
 ```
@@ -57,7 +58,46 @@ Projected price is discounted by `slippageBps` before profit check.
 ## Credibility ceiling
 
 Simulated spreads > ~2% on top-liquidity pairs are fake (`CREDIBILITY_CEILING_PCT`).
-A candidate over the ceiling convicts every pool in the path.
+A candidate over the ceiling convicts **only the divergent legs** — pools
+whose spot quote diverges >3x from same-pair peers (`peerDivergence`).
+Honest co-leg pools are never blamed for routing through a liar; when no
+leg can be attributed, nothing is convicted (exec-probe reverts remain
+the deterministic fallback for solo fakes).
+
+## Filtration gate counters (`src/telemetry/metrics.ts`)
+
+Four persistent audit counters instrument the solver's hard gates —
+`total_detected_opportunities`, `rejected_by_forensic_bait`,
+`rejected_by_profit_margin`, `passed_to_simulation_probe`. Flushed to
+`data/metrics_counters.json` every 5s, aggregated into `forensicGates`
+on `/api/metrics`, rendered on the cockpit Strategy + Report pages.
+
+## On-chain decimals authority (`src/feed/refresh.ts`)
+
+`resolveTokenDecimals(rpc, pools)` — ONE aggregate3 call resolves
+`decimals()` for every unique token0/token1. Feed metadata (DexScreener)
+omits decimals; wrong 10ᵏ scales corrupt spot prices and used to convict
+legitimate pools. Incremental cache (`chain:token`) makes repeat calls
+free; runs each solver cycle + fork window before refresh.
+
+## L1 data-fee oracle (`src/providers/l1Fee.ts`)
+
+OP-Stack predeploy `0x420000000000000000000000000000000000000F` —
+`getL1Fee(calldata)` prices the L1 data-availability share of an L2 tx.
+`OP_STACK = {base, op, blast}` gates it; `l1DataFeeWei(rpc, byteLen)`
+assumes worst-case all-nonzero bytes; `l1FeeScalars(rpc)` reads
+l1BaseFee / blobBaseFee / baseFeeScalar / blobBaseFeeScalar in ONE
+aggregate3 for cockpit telemetry. Non-OP chains and transport faults
+return 0 — the profit floor remains the gate.
+
+## Deploy address registry (`scripts/deploy.ts`)
+
+`VENUES` = flash-source ctor args per chain (Balancer Vault / Aave Pool,
+`address(0)` = verified boundary where a venue doesn't exist).
+`DEX_ROUTERS` = documented router/quoter/factory coords (base + eth) —
+ops reference only; the executor swaps directly on pool contracts.
+All addresses pass EIP-55 checksum validation (sweep verified
+2026-10-21: 28 unique addresses, 10 chains, zero failures).
 
 ## Provider Key Expansion — one key, every chain (`src/providers/providerCatalog.ts`)
 

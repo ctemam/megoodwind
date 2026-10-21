@@ -91,6 +91,7 @@ function emit(
   gasUnits: bigint,
   baseFeeWei: bigint,
   tokenUsd: number,
+  l1DataFeeWei: bigint,
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
   const out = simulate(legs, borrowAmount);
@@ -116,6 +117,7 @@ function emit(
   const n = netUsd({
     gasUnits,
     baseFeeWei,
+    l1DataFeeWei,
     priorityFeeWei: BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
     flashPremiumToken: 0n, // Balancer primary = 0%; Aave premium priced at plan build
     grossOutToken: out,
@@ -137,7 +139,7 @@ function emit(
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
@@ -174,7 +176,7 @@ export function solve(
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(legs[0].tokenIn);
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1;
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n));
           }
         }
       }
@@ -210,7 +212,7 @@ export function solve(
             ];
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(a);
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1);
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n);
             push(cnd);
           }
         }
@@ -228,7 +230,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn);
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n));
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

@@ -218,18 +218,32 @@ function Strategy({ m, ops }) {
 
 function Chains({ m, ops }) {
   const lanes = ops.lanes ?? [];
-  const chainRows = Object.keys({ ...(m.pools ?? {}), ...(ops.regimes ?? {}) }).map((c) => {
+  const oracle = ops.l1oracle ?? {};
+  const chainRows = Object.keys({ ...(m.pools ?? {}), ...(ops.regimes ?? {}), ...oracle }).map((c) => {
     const cl = lanes.filter((l) => l.chain === c);
+    const o = oracle[c];
     return [c, m.pools?.[c] ?? 0, m.convicted?.[c] ?? 0, cl.length,
       cl.length ? <span className="num">{Math.round(cl.reduce((s, l) => s + l.p50Ms, 0) / cl.length)}ms</span> : '—',
-      ops.regimes?.[c]?.regime ? tc(ops.regimes[c].regime) : '—'];
+      ops.regimes?.[c]?.regime ? tc(ops.regimes[c].regime) : '—',
+      o ? <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{(Number(o.l1DataFeeWei) / 1e18).toExponential(2)}Ξ</span> : <span className="dim">—</span>];
   });
-  return <Fold title="Chain Status Boards" cols={['Chain', 'Pools', 'Convicted', 'Lanes', 'P50', 'Regime']} defaultOpen
+  return (<>
+  <Fold title="Chain Status Boards" cols={['Chain', 'Pools', 'Convicted', 'Lanes', 'P50', 'Regime', 'L1 Data Fee']} defaultOpen
     rollups={[['Chains', chainRows.length], ['Pools', chainRows.reduce((s, r) => s + r[1], 0)], ['Lanes', chainRows.reduce((s, r) => s + r[3], 0)]]}
-    rows={chainRows} />;
+    rows={chainRows} />
+  {Object.keys(oracle).length ? (
+    <Fold title="L1 Data Fee Scalars" cols={['Chain', 'L1 Base Fee', 'Blob Base Fee', 'Base Scalar', 'Blob Scalar']} defaultOpen
+      rollups={[['Oracles', Object.keys(oracle).length]]}
+      rows={Object.entries(oracle).map(([c, o]) => [
+        c,
+        <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{(Number(o.l1BaseFeeWei) / 1e9).toFixed(3)} gwei</span>,
+        <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{(Number(o.blobBaseFeeWei) / 1e9).toFixed(4)} gwei</span>,
+        <span className="num">{o.baseFeeScalar}</span>,
+        <span className="num">{o.blobBaseFeeScalar}</span>,
+      ])} />
+  ) : null}
+  </>);
 }
-
-/* ── EIP-1193 injection probe — balance + nonce for any tracked address ── */
 async function probeAccount(addr) {
   const eth = window.ethereum;
   if (!eth) return { chain: '—', balanceWei: null, nonce: null };

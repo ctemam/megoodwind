@@ -59,6 +59,14 @@ function buildOps() {
     out.simLedger.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
     out.simLedger = out.simLedger.slice(0, 15);
   } catch { /* no signals yet */ }
+  // OP-Stack L1 data-fee oracle scalars — written by arbRunner each cycle
+  try {
+    out.l1oracle = {};
+    for (const f of readdirSync(join(ROOT, 'data')).filter((x) => /^l1_oracle_.+\.json$/.test(x))) {
+      const chain = f.replace(/^l1_oracle_|\.json$/g, '');
+      out.l1oracle[chain] = JSON.parse(readFileSync(join(ROOT, 'data', f), 'utf8'));
+    }
+  } catch { /* no oracle records yet */ }
   try {
     const lines = readFileSync(join(ROOT, 'logs/rpc_sync.log'), 'utf8').trim().split('\n').filter(Boolean);
     out.daemon = { lastLine: lines[lines.length - 1] ?? null, lines: lines.length };

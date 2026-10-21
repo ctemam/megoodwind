@@ -16,6 +16,8 @@ import { Discovery } from '../discovery/discovery.js';
 import { classifyMarketRegime } from '../engine/marketRegime.js';
 import { nextVariant, routeWhaleAlphaSignal } from '../engine/strategyRouter.js';
 import { emitSignal } from '../telemetry/signalSink.js';
+import { isOpStack, l1DataFeeWei, l1FeeScalars } from '../providers/l1Fee.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
 
 /**
  * arb-runner — primary orchestration loop.
@@ -109,9 +111,32 @@ async function cycle(
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
     .catch(() => 0n)) ?? 0n;
 
+  // OP-Stack dual-gas: L2 execution + L1 data availability (blob market).
+  // Executor calldata is ~1.5KB worst-case; the oracle charges per nonzero
+  // byte so this estimate is conservative. Scalars publish to the cockpit.
+  let l1Fee = 0n;
+  if (isOpStack(chain.key)) {
+    l1Fee = await l1DataFeeWei(rpc, 1_536).catch(() => 0n);
+    const sc = await l1FeeScalars(rpc).catch(() => null);
+    if (sc) {
+      try {
+        mkdirSync('data', { recursive: true });
+        writeFileSync(`data/l1_oracle_${chain.key}.json`, JSON.stringify({
+          l1BaseFeeWei: sc.l1BaseFeeWei.toString(),
+          blobBaseFeeWei: sc.blobBaseFeeWei.toString(),
+          baseFeeScalar: sc.baseFeeScalar,
+          blobBaseFeeScalar: sc.blobBaseFeeScalar,
+          l1DataFeeWei: l1Fee.toString(),
+          at: sc.at,
+        }, null, 2));
+      } catch { /* telemetry best-effort */ }
+    }
+  }
+
   const candidates = solve(chain, variant, {
     gasUnits: 450_000n,
     baseFeeWei,
+    l1DataFeeWei: l1Fee,
     tokenUsd: new Map(Object.entries(TOKEN_USD)),
     sizeOf: () => SIZE_TABLE.default,
   });

@@ -12,6 +12,7 @@ export interface CostInput {
   gasUnits: bigint;
   baseFeeWei: bigint;
   priorityFeeWei: bigint;
+  l1DataFeeWei?: bigint;         // OP-Stack only: GasPriceOracle getL1Fee(calldata)
   flashPremiumToken: bigint;     // 0 for Balancer
   grossOutToken: bigint;
   borrowInToken: bigint;
@@ -30,7 +31,8 @@ export interface NetResult {
 }
 
 export function netUsd(i: CostInput): NetResult {
-  const gasNative = Number(i.gasUnits * (i.baseFeeWei + i.priorityFeeWei)) / 1e18;
+  // dual-gas on OP-Stack: L2 execution + L1 data availability (blob market)
+  const gasNative = Number(i.gasUnits * (i.baseFeeWei + i.priorityFeeWei) + (i.l1DataFeeWei ?? 0n)) / 1e18;
   const gasUsd = gasNative * i.nativeUsd;
   const dec = 1; // tokenUsd already expressed per whole token
   const grossUsd =
