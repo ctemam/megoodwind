@@ -72,6 +72,23 @@ Four persistent audit counters instrument the solver's hard gates —
 `data/metrics_counters.json` every 5s, aggregated into `forensicGates`
 on `/api/metrics`, rendered on the cockpit Strategy + Report pages.
 
+## Performance analytics ledger (`src/telemetry/metrics.ts`)
+
+`recordVariantOutcome(variantId, lane, {hit, netUsd, floorUsd})` — one
+ledger row per `variant@lane`: hits, misses, `minProfitFloorUsd`,
+`maxProfitUsd` (peak simulated yield), accrued `netUsd`. Lane profit
+sums produce `profit_ratio_predictive` / `profit_ratio_whale` share
+percentages and `peak_profit_usd` (session max). Persisted to
+`data/variant_ledger.json` on the same 5s flush; surfaced as
+`analytics` on `/api/metrics` and the cockpit ledger fold.
+
+**Lane floors** — effective floor per candidate =
+`max(MIN_PROFIT_USD, lane floor)`: `PREDICTIVE_MIN_PROFIT_USD` ($2.50)
+for scheduled variant lanes, `WHALE_MIN_PROFIT_USD` ($25) inside a
+30s whale-alpha window (`whaleUntil` in arbRunner — a whale transfer
+marks the chain's next solves as whale lane). STRICT_PROFIT_FLOOR_GUARD
+governs both; floor misses count as ledger `misses`.
+
 ## On-chain decimals authority (`src/feed/refresh.ts`)
 
 `resolveTokenDecimals(rpc, pools)` — ONE aggregate3 call resolves

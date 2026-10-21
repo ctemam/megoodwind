@@ -29,6 +29,12 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 
 const log = logger('runner');
 
+// whale lane attribution: a whale-alpha event marks the chain 'whale'
+// for a short window — candidates emitted inside it carry lane='whale'
+// and the higher profit floor ($25 default vs $2.50 predictive)
+const whaleUntil = new Map<string, number>();
+const WHALE_LANE_MS = 30_000;
+
 // deterministic borrow sizing per asset class (borrowToken -> units)
 const SIZE_TABLE: Record<string, bigint> = {
   default: 10n ** 18n, // 1 whole token — net check does the real gating
@@ -137,6 +143,7 @@ async function cycle(
     gasUnits: 450_000n,
     baseFeeWei,
     l1DataFeeWei: l1Fee,
+    lane: (whaleUntil.get(chain.key) ?? 0) > Date.now() ? 'whale' : 'predictive',
     tokenUsd: new Map(Object.entries(TOKEN_USD)),
     sizeOf: () => SIZE_TABLE.default,
   });
@@ -170,6 +177,7 @@ async function main() {
     const { direct, correlation } = routeWhaleAlphaSignal(chain, _token, usd);
     const refreshSet = [...direct, ...correlation];
     if (refreshSet.length) await refreshPools(rpcs.get(chain.key)!, refreshSet);
+    whaleUntil.set(chain.key, Date.now() + WHALE_LANE_MS);
   });
 
   await scout.start();

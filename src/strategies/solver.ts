@@ -6,7 +6,7 @@ import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards } from '../engine/predictiveEngine.js';
 import { logger } from '../config/logger.js';
-import { metrics } from '../telemetry/metrics.js';
+import { metrics, Lane } from '../telemetry/metrics.js';
 import { buildEdges, findCycles } from './graph.js';
 
 /**
@@ -92,6 +92,7 @@ function emit(
   baseFeeWei: bigint,
   tokenUsd: number,
   l1DataFeeWei: bigint,
+  lane: Lane = 'predictive',
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
   const out = simulate(legs, borrowAmount);
@@ -126,12 +127,20 @@ function emit(
     nativeUsd: cfg.NATIVE_USD,
     chain: chain.key,
   });
-  // STRICT_PROFIT_FLOOR_GUARD — no path may bypass min_profit_usd
-  if (cfg.STRICT_PROFIT_FLOOR_GUARD && n.netUsd < cfg.MIN_PROFIT_USD) {
+  // STRICT_PROFIT_FLOOR_GUARD — lane floor = max(global min, lane floor).
+  // Whale-triggered paths carry a higher bar ($25 default): competition
+  // is fiercest right after a whale reprices a venue.
+  const floorUsd = Math.max(
+    cfg.MIN_PROFIT_USD,
+    lane === 'whale' ? cfg.WHALE_MIN_PROFIT_USD : cfg.PREDICTIVE_MIN_PROFIT_USD,
+  );
+  if (cfg.STRICT_PROFIT_FLOOR_GUARD && n.netUsd < floorUsd) {
     metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
+    metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: n.netUsd, floorUsd });
     return null;
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
+  metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: n.netUsd, floorUsd });
   return { strategy, chain, legs, borrowToken, borrowAmount, simOut: out, spreadPct: sp, netUsd: n.netUsd, variant: v };
 }
 
@@ -139,7 +148,7 @@ function emit(
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; tokenUsd: Map<string, number>; sizeOf: (token: string) => bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
@@ -176,7 +185,7 @@ export function solve(
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(legs[0].tokenIn);
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase()) ?? 1;
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive'));
           }
         }
       }
@@ -212,7 +221,7 @@ export function solve(
             ];
             if (!pathScreen(chain, legs, v)) continue;
             const borrow = opts.sizeOf(a);
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n);
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, opts.tokenUsd.get(a) ?? 1, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive');
             push(cnd);
           }
         }
@@ -230,7 +239,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn);
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, opts.lane ?? 'predictive'));
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

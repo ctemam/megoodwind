@@ -146,11 +146,15 @@ function ProfitMetrics({ m, windowMs = Infinity }) {
   const recs = Number.isFinite(windowMs) ? allRecs.filter((r) => r.ts >= Date.now() - windowMs) : allRecs;
   const net = recs.reduce((s, r) => s + (r.netUsd ?? 0), 0);
   const pj = m.projections;
+  const an = m.analytics;
   const kpis = [
     ['Settled Net P/L', fmt$(net), net >= 0 ? 'acc' : 'bad'],
     ['Settled Trades', recs.length],
     ['Avg Net / Trade', recs.length ? fmt$(net / recs.length) : '—'],
     ['Best Trade', fmt$(Math.max(0, ...recs.map((r) => r.netUsd)))],
+    ['Peak Sim Yield', an ? fmt$(an.peak_profit_usd) : '—', 'acc'],
+    ['Profit Ratio Predictive', an ? `${an.profit_ratio_predictive.toFixed(1)}%` : '—', 'num'],
+    ['Profit Ratio Whale', an ? `${an.profit_ratio_whale.toFixed(1)}%` : '—', 'num'],
     ['Projected /Hr (Simulation)', pj ? fmt$(pj.simPerHourUsd) : '—', pj ? 'acc' : 'dim'],
     ['Projected /Hr (Production)', pj ? fmt$(pj.prodPerHourUsd) : '—', pj ? 'acc' : 'dim'],
     ['Fork Window', pj ? `${Math.round(pj.windowSec / 60)}min · ${pj.cycles} Cycles · ${pj.profitableCandidates} Winners` : '—', 'dim'],
@@ -200,6 +204,19 @@ function Strategy({ m, ops }) {
   const varSplit = pj?.variantHits ? Object.entries(pj.variantHits) : [];
   return (<>
     <GateAudit m={m} />
+    {(m.analytics?.variant_performance_ledger?.length ?? 0) ? (
+      <Fold title="Variant Performance Ledger" cols={['Variant', 'Lane', 'Hits', 'Misses', 'Floor', 'Max Profit', 'Net']} defaultOpen
+        rollups={[['Variants', m.analytics.variant_performance_ledger.length], ['Hits', m.analytics.variant_performance_ledger.reduce((s, r) => s + r.hits, 0)], ['Net', fmt$(m.analytics.variant_performance_ledger.reduce((s, r) => s + r.netUsd, 0))]]}
+        rows={m.analytics.variant_performance_ledger.map((r) => [
+          <span className="acc">{r.variant}</span>,
+          <span className="dim">{tc(r.lane)}</span>,
+          r.hits,
+          <span className={r.misses ? 'bad' : 'dim'}>{r.misses}</span>,
+          <span className="num">{fmt$(r.minProfitFloorUsd)}</span>,
+          <span className="font-mono text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.3)]">{fmt$(r.maxProfitUsd)}</span>,
+          <span className={r.netUsd >= 0 ? 'acc' : 'bad'}>{fmt$(r.netUsd)}</span>,
+        ])} />
+    ) : null}
     {pj ? (
       <Fold title="Simulation Profit Split" cols={['Lane', 'Hits', 'Net']} defaultOpen
         rollups={[['Predictive', pj.lanes?.predictive ?? 0], ['Whale', pj.lanes?.whale ?? 0], ['Accrued', fmt$(pj.accruedNetUsd ?? 0)]]}

@@ -34,6 +34,10 @@ const envSchema = z.object({
   // execution
   AUTO_EXECUTE: z.coerce.boolean().default(false),
   MIN_PROFIT_USD: z.coerce.number().default(5),
+  // lane-specific floors — a whale-triggered path must clear a higher bar
+  // (competition is fiercest right after a big transfer reprices a venue)
+  PREDICTIVE_MIN_PROFIT_USD: z.coerce.number().default(2.5),
+  WHALE_MIN_PROFIT_USD: z.coerce.number().default(25),
   SCAN_INTERVAL_SECS: z.coerce.number().default(12),
   ACTIVE_CHAINS: z.string().default('eth,bsc,poly'),
   STRATEGIES: z.string().default('TRACE,P01,P02'),

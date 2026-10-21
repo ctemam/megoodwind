@@ -17,18 +17,41 @@ export interface SettledRecord {
   spreadPct: number;
 }
 
+export type Lane = 'predictive' | 'whale';
+
+export interface VariantLedgerRow {
+  variant: string;
+  hits: number;              // emitted candidates (passed all gates)
+  misses: number;            // rejected at profit floor
+  minProfitFloorUsd: number; // the floor that gated it
+  maxProfitUsd: number;      // peak simulated yield this variant produced
+  netUsd: number;            // accrued simulated net
+  lane: Lane;
+}
+
+interface LedgerDisk {
+  variants: Record<string, Omit<VariantLedgerRow, 'variant'>>;
+  laneProfitUsd: Record<Lane, number>;
+  peakProfitUsd: number;
+}
+
 class Metrics {
   private counters = new Map<string, number>();
   private settled: SettledRecord[] = [];
   private file = join(process.cwd(), 'data', 'settled.json');
   private countersFile = join(process.cwd(), 'data', 'metrics_counters.json');
+  private ledgerFile = join(process.cwd(), 'data', 'variant_ledger.json');
   private countersDirty = false;
+  private ledgerDirty = false;
+  private variants = new Map<string, Omit<VariantLedgerRow, 'variant'>>();
+  private laneProfitUsd: Record<Lane, number> = { predictive: 0, whale: 0 };
+  private peakProfitUsd = 0;
 
   constructor() {
     this.load();
     // counters flush on an interval — inc() can fire hundreds of times
     // per solver cycle; per-inc writes would be pure write amplification
-    setInterval(() => this.persistCounters(), 5_000).unref();
+    setInterval(() => { this.persistCounters(); this.persistLedger(); }, 5_000).unref();
   }
 
   private load() {
@@ -41,6 +64,29 @@ class Metrics {
         for (const [k, v] of Object.entries(c)) this.counters.set(k, Number(v) || 0);
       } catch { /* fresh */ }
     }
+    if (existsSync(this.ledgerFile)) {
+      try {
+        const d = JSON.parse(readFileSync(this.ledgerFile, 'utf8')) as LedgerDisk;
+        for (const [k, v] of Object.entries(d.variants ?? {})) this.variants.set(k, v);
+        this.laneProfitUsd = {
+          predictive: Number(d.laneProfitUsd?.predictive) || 0,
+          whale: Number(d.laneProfitUsd?.whale) || 0,
+        };
+        this.peakProfitUsd = Number(d.peakProfitUsd) || 0;
+      } catch { /* fresh */ }
+    }
+  }
+
+  private persistLedger() {
+    if (!this.ledgerDirty) return;
+    this.ledgerDirty = false;
+    mkdirSync(dirname(this.ledgerFile), { recursive: true });
+    const disk: LedgerDisk = {
+      variants: Object.fromEntries(this.variants),
+      laneProfitUsd: this.laneProfitUsd,
+      peakProfitUsd: this.peakProfitUsd,
+    };
+    writeFileSync(this.ledgerFile, JSON.stringify(disk, null, 2));
   }
 
   private persist() {
@@ -68,6 +114,44 @@ class Metrics {
     return s;
   }
 
+  /**
+   * Variant performance ledger — one row per (variantId+lane).
+   * hit = emitted past the profit floor; miss = floor rejection.
+   * Tracks peak simulated yield (maximum_profit) and accrued net.
+   */
+  recordVariantOutcome(variantId: string, lane: Lane, opts: {
+    hit: boolean; netUsd: number; floorUsd: number;
+  }) {
+    const key = `${variantId}@${lane}`;
+    const row = this.variants.get(key) ?? {
+      hits: 0, misses: 0, minProfitFloorUsd: opts.floorUsd,
+      maxProfitUsd: 0, netUsd: 0, lane,
+    };
+    if (opts.hit) {
+      row.hits++;
+      row.netUsd += opts.netUsd;
+      this.laneProfitUsd[lane] += opts.netUsd;
+      if (opts.netUsd > row.maxProfitUsd) row.maxProfitUsd = opts.netUsd;
+      if (opts.netUsd > this.peakProfitUsd) this.peakProfitUsd = opts.netUsd;
+    } else {
+      row.misses++;
+      row.minProfitFloorUsd = Math.min(row.minProfitFloorUsd, opts.floorUsd);
+    }
+    this.variants.set(key, row);
+    this.ledgerDirty = true;
+  }
+
+  get analytics() {
+    const total = this.laneProfitUsd.predictive + this.laneProfitUsd.whale;
+    return {
+      profit_ratio_predictive: total > 0 ? (this.laneProfitUsd.predictive / total) * 100 : 0,
+      profit_ratio_whale: total > 0 ? (this.laneProfitUsd.whale / total) * 100 : 0,
+      lane_profit_usd: { ...this.laneProfitUsd },
+      peak_profit_usd: this.peakProfitUsd,
+      variant_performance_ledger: [...this.variants.entries()].map(([variant, r]) => ({ variant, ...r })),
+    };
+  }
+
   addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number) {
     this.settled.push({ ts: Date.now(), chain, strategy, netUsd, txHash, spreadPct });
     this.persist();
@@ -90,6 +174,7 @@ class Metrics {
         rejected_by_profit_margin: this.counterSum('rejected_by_profit_margin'),
         passed_to_simulation_probe: this.counterSum('passed_to_simulation_probe'),
       },
+      analytics: this.analytics,
       ts: Date.now(),
     };
   }

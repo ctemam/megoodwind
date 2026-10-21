@@ -21,8 +21,17 @@ const counters = () => {
 const gateSum = (c, name) =>
   Object.entries(c).reduce((s, [k, v]) => s + (k.startsWith(`${name}|`) ? (Number(v) || 0) : 0), 0);
 
+// variant performance ledger — persisted by src/telemetry/metrics.ts
+const ledger = () => {
+  if (!existsSync('data/variant_ledger.json')) return null;
+  try { return JSON.parse(readFileSync('data/variant_ledger.json', 'utf8')); } catch { return null; }
+};
+
 const metrics = () => {
   const c = counters();
+  const l = ledger();
+  const lp = l?.laneProfitUsd ?? { predictive: 0, whale: 0 };
+  const lpTotal = lp.predictive + lp.whale;
   return {
   arb_settled_net_usd: 0,
   settled_count: 0,
@@ -33,6 +42,13 @@ const metrics = () => {
     rejected_by_forensic_bait: gateSum(c, 'rejected_by_forensic_bait'),
     rejected_by_profit_margin: gateSum(c, 'rejected_by_profit_margin'),
     passed_to_simulation_probe: gateSum(c, 'passed_to_simulation_probe'),
+  },
+  analytics: {
+    profit_ratio_predictive: lpTotal > 0 ? (lp.predictive / lpTotal) * 100 : 0,
+    profit_ratio_whale: lpTotal > 0 ? (lp.whale / lpTotal) * 100 : 0,
+    lane_profit_usd: lp,
+    peak_profit_usd: l?.peakProfitUsd ?? 0,
+    variant_performance_ledger: Object.entries(l?.variants ?? {}).map(([variant, r]) => ({ variant, ...r })),
   },
   ts: Date.now(),
   pools: {},
