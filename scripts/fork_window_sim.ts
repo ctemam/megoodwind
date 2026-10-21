@@ -139,6 +139,8 @@ async function main() {
       const candidates = solve(forkChain, variant, {
         gasUnits: 450_000n,
         baseFeeWei,
+        regime: snap.regime,
+        volBps: snap.volBps,
         tokenUsd: new Map(Object.entries(TOKEN_USD)),
         sizeOf: () => 10n ** 18n,
       });

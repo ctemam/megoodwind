@@ -89,9 +89,12 @@ async function buildSmartAccountClient(chain: ChainConfig) {
   const { entryPoint07Address } = await import('viem/account-abstraction');
 
   const owner = privateKeyToAccount(privKeyHex());
+  // reads (Kernel address derivation, nonce, estimates) go to the chain
+  // RPC — the Pimlico bundler URL does not serve eth_call and would kill
+  // account construction before any UserOp could be sent.
   const client = viem.createPublicClient({
     chain: viemChain(chain.chainId),
-    transport: viem.http(bundlerUrl(chain)),
+    transport: viem.http(chain.rpcUrls[0]),
   });
 
   const account = await toKernelSmartAccount({
