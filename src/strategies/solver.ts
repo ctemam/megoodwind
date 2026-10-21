@@ -74,15 +74,33 @@ export function legOut(pool: PoolState, amountIn: bigint, tokenIn: string): bigi
 const decOf = (pool: PoolState, token: string): number =>
   pool.token0.toLowerCase() === token.toLowerCase() ? pool.dec0 : pool.dec1;
 
-function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant, tokenUsd: Map<string, number>): boolean {
+/** Adaptive depth ladder — when a chain emits ZERO candidates while
+ *  depth rejections are firing, the effective minDepth decays
+ *  geometrically toward a floor so the shallow long-tail universe
+ *  actually reaches the margin gates. Real cross-venue mispricing lives
+ *  in the long tail; a static wall just counts rejections forever.
+ *  Any emitted candidate resets the scale. Forensics still screens
+ *  every leg — shallow ≠ trusted. */
+const depthAdapt = new Map<string, { scale: number; empty: number }>();
+const DEPTH_ADAPT_AFTER = 2;    // consecutive zero-emit cycles before stepping
+const DEPTH_ADAPT_STEP = 0.5;   // halve the requirement per step
+const DEPTH_FLOOR_USD = 2_500;  // never below — below this gas can't repay
+let depthRejectsThisSolve = 0;
+
+function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant, tokenUsd: Map<string, number>, depthGateUsd?: number): boolean {
   const g = effectiveGuards(v);
+  const needDepth = depthGateUsd ?? g.minDepthUsd;
   for (const { pool } of legs) {
     const s = breaker.screen(chain.key, pool);
     if (!s.ok) { metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' }); return false; }
     // depth = feed liquidity when present, else on-chain priced-side
     // value — discovered pools carry liquidityUsd=0 and must not be
     // blanket-rejected (they are the primary discovery product)
-    if (poolDepthUsd(pool, tokenUsd) < g.minDepthUsd) { metrics.inc('rejected_by_profit_margin', { reason: 'depth' }); return false; }
+    if (poolDepthUsd(pool, tokenUsd) < needDepth) {
+      metrics.inc('rejected_by_profit_margin', { reason: 'depth' });
+      depthRejectsThisSolve++;
+      return false;
+    }
   }
   return true;
 }
@@ -120,73 +138,81 @@ function emit(
   // b/(1−b)·vIn). A raw 1e18 borrow is a trillion-unit clip on 6-dec
   // tokens — instead of letting it die at the impact gate, shrink to
   // what the pool can absorb; the profit floor decides if it's enough.
-  let borrow = borrowAmount;
+  // Largest borrow the slippage bound can absorb on leg 1 (a_eff <=
+  // b/(1-b)*vIn), capped by the variant's sizeCapUsd — this is the
+  // sweep's upper bound, not necessarily the net-optimal size.
+  let boundMax = borrowAmount;
   const vIn = inputVirtualReserveRaw(legs[0].pool, borrowToken);
   if (vIn > 0 && slipBoundBps > 0) {
     const b = slipBoundBps / legs.length / 10_000;
     const maxIn = (vIn * b) / (1 - b) / (1 - legs[0].pool.feeBps / 10_000);
-    if (Number.isFinite(maxIn) && maxIn > 0 && maxIn < Number(borrow)) borrow = BigInt(Math.floor(maxIn));
+    if (Number.isFinite(maxIn) && maxIn > 0 && maxIn < Number(boundMax)) boundMax = BigInt(Math.floor(maxIn));
   }
-  // sizeCapUsd — the variant's borrow ceiling (was declared, never wired)
+  // sizeCapUsd — the variant's borrow ceiling
   const capUsd = effectiveGuards(v).sizeCapUsd;
   if (tokenUsd > 0 && capUsd > 0) {
     const cap = BigInt(Math.floor((capUsd / tokenUsd) * 10 ** decBorrow));
-    if (cap > 0n && cap < borrow) borrow = cap;
+    if (cap > 0n && cap < boundMax) boundMax = cap;
   }
-  if (borrow <= 0n) { metrics.inc('rejected_by_profit_margin', { reason: 'size_zero' }); return null; }
-  // one pass: simulate legs AND accumulate constant-product price
-  // impact — how much our size shifts each pool before minOut is set
-  let out = borrow;
-  let impactBps = 0;
-  for (const leg of legs) {
-    impactBps += priceImpactBps(leg.pool, out, leg.tokenIn);
-    out = legOut(leg.pool, out, leg.tokenIn);
-    if (out <= 0n) break;
-  }
-  metrics.notePathImpact(chain.key, impactBps);
-  if (out <= borrow) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
-  // dynamic slippage gate — path impact vs the regime/whale-tuned bound
-  if (impactBps > slipBoundBps) {
-    metrics.inc('rejected_by_profit_margin', { reason: 'price_impact' });
-    return null;
-  }
-  const sp = spreadPct(out, borrow);
-  if (sp > CREDIBILITY_CEILING_PCT) {
-    metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
-    // >~2% = a pool in the path is lying about reserves. Convict ONLY the
-    // legs whose spot quote diverges >3x from same-pair peers — blaming
-    // every leg convicts honest pools (e.g. canonical WETH/USDC) that
-    // merely routed through the liar. No peers = no honest attribution;
-    // exec-probe reverts still convict solo fakes deterministically.
-    let convicted = 0;
-    for (const l of legs) {
-      if (peerDivergence(chain.key, l.pool) > 3) {
-        breaker.convict(chain.key, l.pool.address, `gap_above_ceiling_${sp.toFixed(2)}pct`);
-        convicted++;
-      }
-    }
-    if (!convicted) log.debug(`spread ${sp.toFixed(0)}% with no divergent leg — unattributed, no conviction`);
-    return null;
-  }
-  // real flash premium at SCREEN time — aave-only chains (bsc/linea/
-  // scroll) charge 0.09%; assuming 0 produced phantom-positive candidates
-  // whose minOut=borrow+premium could never fill
+  if (boundMax <= 0n) { metrics.inc('rejected_by_profit_margin', { reason: 'size_zero' }); return null; }
+
+  // ARGMAX BORROW SEARCH — a static size is a decorative answer to a
+  // dynamic question. Impact grows with size while the venue spread is
+  // size-agnostic at screening fidelity, so a path impact-dead at the
+  // bound-max clip can be net-positive smaller. Sweep a geometric
+  // ladder and emit the size with the best honest net — every point is
+  // real leg simulation + real premium + real gas, not a heuristic.
+  const SIZE_RATIOS = [1, 0.25, 0.0625, 0.015625];
   const flSource = pickFlashSource(chain.key, borrowToken);
-  const flPremiumToken = flashPremium(flSource, borrow);
-  const n = netUsd({
-    gasUnits,
-    baseFeeWei,
-    l1DataFeeWei,
-    priorityFeeWei,
-    flashPremiumToken: flPremiumToken,
-    grossOutToken: out,
-    borrowInToken: borrow,
-    tokenUsd,
-    tokenDec: decBorrow,
-    nativeUsd, // chain's native price — ETH's $2.6k on poly/bsc overstated
-    // gas ~4-9000x and silently killed every non-eth candidate
-    chain: chain.key,
-  });
+  let sawSpread = false, sawImpactOver = false;
+  let best = null;
+  for (const r of SIZE_RATIOS) {
+    const sz = BigInt(Math.max(1, Math.floor(Number(boundMax) * r)));
+    let out = sz;
+    let impactBps = 0;
+    for (const leg of legs) {
+      impactBps += priceImpactBps(leg.pool, out, leg.tokenIn);
+      out = legOut(leg.pool, out, leg.tokenIn);
+      if (out <= 0n) break;
+    }
+    metrics.notePathImpact(chain.key, impactBps);
+    if (out <= sz) continue;                 // no venue spread at this size
+    sawSpread = true;
+    if (impactBps > slipBoundBps) { sawImpactOver = true; continue; }
+    const sp = spreadPct(out, sz);
+    if (sp > CREDIBILITY_CEILING_PCT) {
+      metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
+      // >~2% = a pool is lying about reserves. Convict ONLY legs whose
+      // spot quote diverges >3x from same-pair peers — blaming every leg
+      // convicts honest pools that merely routed through the liar.
+      let convicted = 0;
+      for (const l of legs) {
+        if (peerDivergence(chain.key, l.pool) > 3) {
+          breaker.convict(chain.key, l.pool.address, 'gap_above_ceiling_' + sp.toFixed(2) + 'pct');
+          convicted++;
+        }
+      }
+      if (!convicted) log.debug('spread ' + sp.toFixed(0) + '% with no divergent leg — unattributed, no conviction');
+      return null;
+    }
+    const premium = flashPremium(flSource, sz);
+    const n = netUsd({
+      gasUnits, baseFeeWei, l1DataFeeWei, priorityFeeWei,
+      flashPremiumToken: premium,
+      grossOutToken: out, borrowInToken: sz, tokenUsd,
+      tokenDec: decBorrow, nativeUsd, chain: chain.key,
+    });
+    if (!best || n.netUsd > best.netUsd) {
+      best = { borrow: sz, out, impactBps, sp, netUsd: n.netUsd, premium };
+    }
+  }
+  if (!sawSpread) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
+  if (!best) {
+    metrics.inc('rejected_by_profit_margin', { reason: sawImpactOver ? 'price_impact' : 'no_spread' });
+    return null;
+  }
+  const { borrow, out, impactBps, sp } = best;
+  const flPremiumToken = best.premium;
   // STRICT_PROFIT_FLOOR_GUARD — lane floor = max(global min, lane floor).
   // Whale-triggered paths carry a higher bar ($25 default): competition
   // is fiercest right after a whale reprices a venue.
@@ -194,13 +220,13 @@ function emit(
     cfg.MIN_PROFIT_USD,
     lane === 'whale' ? cfg.WHALE_MIN_PROFIT_USD : cfg.PREDICTIVE_MIN_PROFIT_USD,
   );
-  if (cfg.STRICT_PROFIT_FLOOR_GUARD && n.netUsd < floorUsd) {
+  if (cfg.STRICT_PROFIT_FLOOR_GUARD && best.netUsd < floorUsd) {
     metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
-    metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: n.netUsd, floorUsd });
+    metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: best.netUsd, floorUsd });
     return null;
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
-  metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: n.netUsd, floorUsd });
+  metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: best.netUsd, floorUsd });
   // stream the ACTIVE on-chain barrier — minOut = repay + premium
   // (+ floor on whale lane), in USD terms, for the cockpit
   const toUsd = (amt: bigint) => (Number(amt) / 10 ** decBorrow) * tokenUsd;
@@ -215,7 +241,7 @@ function emit(
   const minProfitToken = BigInt(Math.floor((floorUsd / tokenUsd) * 10 ** decBorrow));
   return {
     strategy, chain, legs, borrowToken, borrowAmount: borrow, simOut: out,
-    spreadPct: sp, netUsd: n.netUsd, variant: v, lane,
+    spreadPct: sp, netUsd: best.netUsd, variant: v, lane,
     impactBps, slipBoundBps, minProfitToken,
   };
 }
@@ -256,6 +282,15 @@ export function solve(
     cands.push(c);
   };
 
+  // adaptive depth gate for THIS solve — variant's own floor scaled by
+  // the chain's ladder (decays on consecutive zero-emit cycles)
+  depthRejectsThisSolve = 0;
+  const baseDepthUsd = effectiveGuards(v).minDepthUsd;
+  const effDepthUsd = Math.max(
+    Math.floor(baseDepthUsd * (depthAdapt.get(chain.key)?.scale ?? 1)),
+    DEPTH_FLOOR_USD,
+  );
+
   // --- P01: cross-venue 2-hop on same pair, different pools ---
   if (strat.has('P01') || strat.has('TRACE')) {
     const seen = new Set<string>();
@@ -276,7 +311,7 @@ export function solve(
             { pool: b, tokenIn: a.token0, tokenOut: a.token1 },
           ];
           for (const legs of [legsAB, legsBA]) {
-            if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
+            if (!pathScreen(chain, legs, v, opts.tokenUsd, effDepthUsd)) continue;
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
             if (usd === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
@@ -314,7 +349,7 @@ export function solve(
               { pool: p2, tokenIn: b, tokenOut: c },
               { pool: p3, tokenIn: c, tokenOut: a },
             ];
-            if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
+            if (!pathScreen(chain, legs, v, opts.tokenUsd, effDepthUsd)) continue;
             const usdA = opts.tokenUsd.get(a);
             if (usdA === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(a, decOf(p1, a));
@@ -332,11 +367,29 @@ export function solve(
   for (const legs of findCycles(edges)) {
     const label = legs.length <= 2 ? 'P01' : 'P02';
     if (!strat.has(label)) continue;
-    if (!pathScreen(chain, legs, v, opts.tokenUsd)) continue;
+    if (!pathScreen(chain, legs, v, opts.tokenUsd, effDepthUsd)) continue;
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
     push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei));
+  }
+
+  // adaptive-depth update — zero emits + depth rejections → decay the
+  // ladder; any emit resets it. Scale applies across variants so their
+  // relative depth ordering is preserved while the whole cone widens.
+  if (cands.length === 0) {
+    const a = depthAdapt.get(chain.key) ?? { scale: 1, empty: 0 };
+    a.empty++;
+    if (a.empty >= DEPTH_ADAPT_AFTER && depthRejectsThisSolve > 0) {
+      const next = Math.max(a.scale * DEPTH_ADAPT_STEP, DEPTH_FLOOR_USD / baseDepthUsd);
+      if (next < a.scale) {
+        a.scale = next;
+        log.info(`adaptive depth ${chain.key}: minDepth ×${a.scale.toFixed(3)} → $${Math.floor(baseDepthUsd * a.scale)} eff (zero-emit streak ${a.empty})`);
+      }
+    }
+    depthAdapt.set(chain.key, a);
+  } else {
+    depthAdapt.delete(chain.key);
   }
 
   return cands.sort((x, y) => y.netUsd - x.netUsd).slice(0, 8);

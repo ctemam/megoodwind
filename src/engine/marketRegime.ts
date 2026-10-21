@@ -44,13 +44,17 @@ const history = new Map<string, number[]>(); // chain:pool -> price ring
 function spotPrice(p: PoolState): number | null {
   if (p.kind === 'v3') {
     if (!p.sqrtPriceX96 || p.sqrtPriceX96 === 0n) return null;
-    // (sqrt/2^96)^2 — unitless; only deltas matter, decimals cancel
+    // (sqrt/2^96)^2 — unitless; only deltas matter, decimals cancel.
+    // Guard Infinity/NaN — extreme-price pairs would otherwise poison
+    // the median (observed as trendScore:null in signal JSON)
     const x = Number(p.sqrtPriceX96) / 2 ** 96;
-    return x * x;
+    const px = x * x;
+    return Number.isFinite(px) && px > 0 ? px : null;
   }
   if (!p.reserve0 || !p.reserve1 || p.reserve0 === 0n) return null;
   // normalize reserves by decimals so cross-pool series are comparable
-  return (Number(p.reserve1) / 10 ** p.dec1) / (Number(p.reserve0) / 10 ** p.dec0);
+  const px = (Number(p.reserve1) / 10 ** p.dec1) / (Number(p.reserve0) / 10 ** p.dec0);
+  return Number.isFinite(px) && px > 0 ? px : null;
 }
 
 const median = (xs: number[]) =>
@@ -76,8 +80,10 @@ export function classifyMarketRegime(chain: ChainKey): RegimeSnapshot {
       const prev = ring[ring.length - 1];
       if (prev > 0 && px! > 0) {
         const d = ((px! - prev) / prev) * 10_000; // bps
-        deltas.push(d);
-        absMoves.push(Math.abs(d));
+        if (Number.isFinite(d)) {
+          deltas.push(d);
+          absMoves.push(Math.abs(d));
+        }
       }
     }
     ring.push(px!);
@@ -85,10 +91,14 @@ export function classifyMarketRegime(chain: ChainKey): RegimeSnapshot {
     history.set(key, ring);
   }
 
-  const volBps = median(absMoves);
-  const trendScore = absMoves.length
+  const rawVol = median(absMoves);
+  const rawTrend = absMoves.length
     ? Math.abs(deltas.reduce((s, d) => s + Math.sign(d) * Math.abs(d), 0)) / absMoves.reduce((s, d) => s + d, 0)
     : 0;
+  // finite guards — a NaN/Inf signal must degrade to 0, never serialize
+  // as null or silently skew the regime branch
+  const volBps = Number.isFinite(rawVol) ? rawVol : 0;
+  const trendScore = Number.isFinite(rawTrend) ? rawTrend : 0;
   const illiquidFrac = pools.length ? stale / pools.length : 1;
 
   let regime: MarketRegime = 'BALANCED';
