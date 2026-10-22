@@ -36,6 +36,7 @@ export function startMetricsServer(schedulerSnapshot: () => unknown): void {
       variants: schedulerSnapshot(),
       config: {
         autoExecute: cfg.AUTO_EXECUTE,
+        armedChains: cfg.armedChains, // the honest send gate — autoExecute alone never arms
         minProfitUsd: cfg.MIN_PROFIT_USD,
         scanIntervalSecs: cfg.SCAN_INTERVAL_SECS,
         strategies: cfg.strategies,

@@ -26,9 +26,8 @@ const BASE: Record<string, string> = {
 };
 
 type Probe = {
-  AUTO_EXECUTE: boolean; DIAG_ONLY: boolean; STRICT_PROFIT_FLOOR_GUARD: boolean;
-  P09_ENABLED: boolean; armedChains: number[]; armedFor1: boolean; armedFor56: boolean; armedFor137: boolean;
-};
+  armedChains: number[]; armedFor1: boolean; armedFor56: boolean; armedFor137: boolean;
+} & Record<string, boolean | number[]>;
 
 let pass = 0, failed = 0;
 const check = (name: string, cond: boolean, detail = '') => {
@@ -50,11 +49,15 @@ function probe(env: Record<string, string>): { out?: Probe; refused: boolean; er
   }
 }
 
+// Every boolEnv field must appear here — generated to match the schema:
+// {name, default} for each BOOL_FIELDS entry. If a new boolean flag is
+// added to config/index.ts, add its default here or it goes untested.
 const FIELDS = [
   { name: 'AUTO_EXECUTE', def: false },
   { name: 'DIAG_ONLY', def: false },
   { name: 'STRICT_PROFIT_FLOOR_GUARD', def: true },
   { name: 'P09_ENABLED', def: false },
+  { name: 'MEM_WATCH', def: false },
 ] as const;
 
 for (const f of FIELDS) {
@@ -69,6 +72,14 @@ for (const f of FIELDS) {
     const r = probe({ [f.name]: bad });
     check(`${f.name}="${bad}" -> refuse to start`, r.refused && r.err.includes(f.name), (r.refused ? r.err.split('\n').find((l) => l.includes(f.name)) ?? '' : 'NO REFUSAL').slice(0, 160));
   }
+}
+
+console.log('== schema coverage');
+{
+  const u = probe({});
+  const flagKeys = Object.keys(u.out ?? {}).filter((k) => !k.startsWith('armed'));
+  const missing = flagKeys.filter((k) => !FIELDS.some((f) => f.name === k));
+  check('every schema boolEnv field is in the test matrix', missing.length === 0, `untested: ${missing.join(',')}`);
 }
 
 console.log('== ARM_LIVE gating');

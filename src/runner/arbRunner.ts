@@ -1,4 +1,4 @@
-import { activeChainConfigs, cfg, armedFor, ChainConfig } from '../config/index.js';
+import { activeChainConfigs, cfg, armedFor, BOOL_FIELDS, ChainConfig } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { poolFor, RpcPool } from '../providers/rpcPool.js';
 import { ScoutListener } from '../scout/scoutListener.js';
@@ -212,10 +212,11 @@ async function main() {
   const chains = activeChainConfigs();
   // boot banner — mode + every parsed boolean flag, BEFORE any work:
   // a run that was silently armed or shadowed is visible in line one.
+  // flags enumerate BOOL_FIELDS — generated from the schema, so a new
+  // boolean env var can never land unannounced here.
   log.info(
     `MODE ${chains.map((c) => `${c.key}(${c.chainId}):${armedFor(c.chainId) ? 'LIVE' : 'SHADOW'}`).join(' ')} | ` +
-    `flags AUTO_EXECUTE=${cfg.AUTO_EXECUTE} DIAG_ONLY=${cfg.DIAG_ONLY} ` +
-    `STRICT_PROFIT_FLOOR_GUARD=${cfg.STRICT_PROFIT_FLOOR_GUARD} P09_ENABLED=${cfg.P09_ENABLED} | ` +
+    `flags ${BOOL_FIELDS.map((f) => `${f}=${(cfg as unknown as Record<string, boolean>)[f]}`).join(' ')} | ` +
     `ARM_LIVE=[${cfg.armedChains.join(',') || '-'}]`,
   );
   for (const c of chains) breaker.load(c.key);

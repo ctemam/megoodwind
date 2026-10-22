@@ -16,9 +16,14 @@ const csv = (s: string) => s.split(',').map((v) => v.trim()).filter(Boolean);
  *  "shadow" run was actually armed.
  *  Fail-closed: an unrecognized string (e.g. "flase", "") raises a zod
  *  issue and the process refuses to start — never silently disarmed OR
- *  armed on a typo. */
-const boolEnv = (def: boolean) =>
-  z.union([z.boolean(), z.string()])
+ *  armed on a typo.
+ *  Every boolEnv field self-registers in BOOL_FIELDS — the boot banner
+ *  and tests enumerate the schema from this list, so a new boolean flag
+ *  can never land unannounced. */
+export const BOOL_FIELDS: string[] = [];
+const boolEnv = (name: string, def: boolean) => {
+  BOOL_FIELDS.push(name);
+  return z.union([z.boolean(), z.string()])
     .transform((v, ctx) => {
       if (typeof v === 'boolean') return v;
       const s = v.trim().toLowerCase();
@@ -28,6 +33,7 @@ const boolEnv = (def: boolean) =>
       return z.NEVER;
     })
     .default(def);
+};
 
 const envSchema = z.object({
   // keyed provider keys (item #10) — used to template private endpoints
@@ -51,17 +57,17 @@ const envSchema = z.object({
   PROFIT_TRANSFER_MIN_USD: z.coerce.number().default(100),
 
   // execution
-  AUTO_EXECUTE: boolEnv(false),
+  AUTO_EXECUTE: boolEnv('AUTO_EXECUTE', false),
   // diagnostics-only profile — forced AUTO_EXECUTE=false at load AND
   // refused at executeCandidate; cannot reach the send path.
-  DIAG_ONLY: boolEnv(false),
+  DIAG_ONLY: boolEnv('DIAG_ONLY', false),
   // fail-closed arming: AUTO_EXECUTE=true only arms a chain whose numeric
   // chainId is explicitly listed here (e.g. ARM_LIVE=1,56,137).
   // Missing or malformed (any non-integer token) => disarmed everywhere.
   ARM_LIVE: z.string().optional(),
   // memory telemetry — 30s process.memoryUsage + structure sizes jsonl,
   // and comma-separated minute marks for programmatic heap snapshots
-  MEM_WATCH: boolEnv(false),
+  MEM_WATCH: boolEnv('MEM_WATCH', false),
   HEAP_SNAP_MINUTES: z.string().default('5,15,25'),
   MIN_PROFIT_USD: z.coerce.number().default(5),
   // USD-target flash borrow before per-path right-sizing (emit() shrinks
@@ -81,7 +87,7 @@ const envSchema = z.object({
   PREDICTIVE_CHAINS: z.string().default('eth,bsc,poly'),
   BACKRUN_CHAINS: z.string().default('arb,op,base,avax,linea,scroll,blast'),
   MAX_TICK_DISTANCE: z.coerce.number().default(200),
-  STRICT_PROFIT_FLOOR_GUARD: boolEnv(true),
+  STRICT_PROFIT_FLOOR_GUARD: boolEnv('STRICT_PROFIT_FLOOR_GUARD', true),
   AUCTION_CHAINS: z.string().default('eth'),
   COINBASE_BRIBE_PCT: z.coerce.number().default(50),
   COINBASE_BRIBE_PCT_MAX: z.coerce.number().default(80),
@@ -96,7 +102,7 @@ const envSchema = z.object({
   FOT_BLACKLIST_PATH: z.string().default('tools/fot_blacklist.json'),
   PEND_THROTTLE_MS: z.coerce.number().default(100),
   EV_CHAINS: z.string().default(''),
-  P09_ENABLED: boolEnv(false),
+  P09_ENABLED: boolEnv('P09_ENABLED', false),
   RPC_PRIVATE_CHAINS: z.string().default(''),
 
   // Discovery engine — automated multi-chain expansion (no manual registration)
