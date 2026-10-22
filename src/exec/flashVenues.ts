@@ -1,4 +1,4 @@
-import { ChainKey } from '../config/index.js';
+import { ChainKey, chainIdFor } from '../config/index.js';
 
 /**
  * Flash-loan venue registry — the single source of truth shared by the
@@ -80,7 +80,9 @@ export function flashPremium(source: FlashSourceKey, borrowAmount: bigint): bigi
  * probe gate is the capacity check, not a venue heuristic.
  */
 export function pickFlashSource(chain: ChainKey, borrowToken: string): FlashSourceKey {
-  const v = FLASH_VENUES[chain];
+  // the canary row is selectable only when the fork chain id is active —
+  // a 'canary' key without CHAIN_ID_CANARY=31337 falls to the generic path.
+  const v = chain === 'canary' && chainIdFor(chain) !== 31337 ? undefined : FLASH_VENUES[chain];
   if (!v) return 'AAVE';
   if (v.balancer !== ZERO) return 'BALANCER';
   if (v.morpho !== ZERO) return 'MORPHO';

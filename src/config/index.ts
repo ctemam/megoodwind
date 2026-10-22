@@ -169,11 +169,11 @@ const KEYED_WSS = /^wss:\/\/[^/]*(:[^@/]+@)?[^/]*\/[^/]+|dkey=|key=|token=|apike
 const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
 const LOOPBACK_WSS = /^wss?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
 
-export function assertPrivateUrl(url: string, wss = false): string {
+export function assertPrivateUrl(url: string, wss = false, allowLoopback = false): string {
   const ok = wss ? KEYED_WSS.test(url) : KEYED_URL.test(url);
-  // loopback is unforgeable local transport — a local Anvil fork carries
-  // no credential by design (test/exec-canary); remote hosts still need keys.
-  if (!ok && !(wss ? LOOPBACK_WSS : LOOPBACK).test(url)) {
+  // loopback is unforgeable local transport — allowed ONLY for the 31337
+  // fork chain (test/exec-canary); remote hosts still need keys.
+  if (!ok && !(allowLoopback && (wss ? LOOPBACK_WSS : LOOPBACK).test(url))) {
     throw new Error(`PUBLIC_RPC_FORBIDDEN: unkeyed endpoint rejected: ${url}`);
   }
   return url;
@@ -182,7 +182,8 @@ export function assertPrivateUrl(url: string, wss = false): string {
 function collect(kind: 'RPC_URLS' | 'RPC_URL' | 'WSS_URL', chain: ChainKey): string[] {
   const val = process.env[`${envPrefixFor(chain)}_${kind}`];
   if (!val) return [];
-  return csv(val).map((u) => assertPrivateUrl(u, kind === 'WSS_URL'));
+  const loopbackOk = chainIdFor(chain) === 31337;
+  return csv(val).map((u) => assertPrivateUrl(u, kind === 'WSS_URL', loopbackOk));
 }
 
 export interface ChainConfig {

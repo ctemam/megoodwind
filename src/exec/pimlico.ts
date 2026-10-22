@@ -17,8 +17,15 @@ const log = logger('pimlico');
 const PIMLICO_BASE = 'https://api.pimlico.io/v2';
 
 export function bundlerUrl(chain: ChainConfig): string {
-  // local-fork canary override — diagnostics only; production keeps Pimlico.
-  return cfg.BUNDLER_URL ?? `${PIMLICO_BASE}/${chain.chainId}/rpc?apikey=${cfg.PIMLICO_API_KEY}`;
+  // local-fork canary override — honored ONLY on the 31337 fork chain;
+  // on any real chain the Pimlico endpoint is used regardless of env.
+  if (cfg.BUNDLER_URL && chain.chainId === 31337) return cfg.BUNDLER_URL;
+  return `${PIMLICO_BASE}/${chain.chainId}/rpc?apikey=${cfg.PIMLICO_API_KEY}`;
+}
+
+/** CANARY_SELF_PAY only disarms the paymaster on the 31337 fork chain. */
+export function selfPayUserOps(chain: ChainConfig): boolean {
+  return cfg.CANARY_SELF_PAY && chain.chainId === 31337;
 }
 
 /** Raw bundler JSON-RPC helper (gas price, receipts, sponsor calls). */
@@ -155,9 +162,10 @@ async function buildSmartAccountClient(chain: ChainConfig) {
     account,
     chain: viemChain(chain.chainId),
     bundlerTransport: viem.http(bundlerUrl(chain)),
-    // CANARY_SELF_PAY: local-fork diagnostics — account self-funds via its
-    // EntryPoint deposit instead of a sponsored paymaster.
-    paymaster: cfg.CANARY_SELF_PAY ? undefined : pimlico,
+    // CANARY_SELF_PAY: local-fork diagnostics only — account self-funds
+    // via its EntryPoint deposit. Gated to chainId 31337 so a stray env
+    // can never strip the sponsored path on a real chain.
+    paymaster: selfPayUserOps(chain) ? undefined : pimlico,
     userOperation: {
       estimateFeesPerGas: async () => (await pimlico.getUserOperationGasPrice()).fast,
     },
