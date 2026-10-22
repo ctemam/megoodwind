@@ -44,24 +44,65 @@ const DEFAULT_FEE_BPS: Record<string, number> = {
   quickswap: 30, camelot: 30, aerodrome: 30, velodrome: 30,
 };
 
+/**
+ * Canonical token ordering for a pool.
+ *
+ * Uniswap V2/V3 store reserves as token0/token1 with token0 < token1
+ * (lexicographic by lowercase address). DexScreener's baseToken/quoteToken
+ * ordering is market convention, NOT canonical — it is inverted roughly a
+ * quarter of the time. Copying it straight into PoolRef corrupts spot prices,
+ * graph edge rates, forensics peer-divergence, and solver amountOut math.
+ *
+ * This is a pure function: DexScreener returns correct *addresses*, just the
+ * wrong *order*, so the lowercase address sort is authoritative without an
+ * on-chain call. Decimals are later re-asserted on-chain by
+ * resolveTokenDecimals (refresh.ts), which runs against canonical token0/1.
+ *
+ * priceUsd from DexScreener is USD per BASE token. When BASE != canonical
+ * token0 we invert it so priceUsd always = USD per token0.
+ */
+function canonicalOrder(
+  a: { address: string; symbol: string; decimals?: number },
+  b: { address: string; symbol: string; decimals?: number },
+): { t0: typeof a; t1: typeof a; inverted: boolean } {
+  const aLower = a.address.toLowerCase();
+  const bLower = b.address.toLowerCase();
+  const inverted = aLower > bLower; // canonical: token0 < token1
+  return inverted ? { t0: b, t1: a, inverted: true } : { t0: a, t1: b, inverted: false };
+}
+
 export function toPoolRef(chain: ChainKey, p: DSPair): PoolRef {
   const kind = kindFromLabels(p);
+  const { t0, t1, inverted } = canonicalOrder(p.baseToken, p.quoteToken);
+
+  // DexScreener priceUsd = USD per BASE token. Canonical priceUsd = USD per
+  // token0. If base is not token0, invert (1 / price). Guard zero/negative.
+  let priceUsd: number | undefined;
+  if (p.priceUsd != null) {
+    const v = Number(p.priceUsd);
+    priceUsd = Number.isFinite(v) && v > 0
+      ? inverted
+        ? 1 / v
+        : v
+      : undefined;
+  }
+
   return {
     address: p.pairAddress,
     chain,
     dexId: p.dexId,
     kind,
-    token0: p.baseToken.address,
-    token1: p.quoteToken.address,
-    symbol0: p.baseToken.symbol,
-    symbol1: p.quoteToken.symbol,
-    dec0: p.baseToken.decimals ?? 18,
-    dec1: p.quoteToken.decimals ?? 18,
+    token0: t0.address,
+    token1: t1.address,
+    symbol0: t0.symbol,
+    symbol1: t1.symbol,
+    dec0: t0.decimals ?? 18,
+    dec1: t1.decimals ?? 18,
     feeBps: kind === 'v3'
       ? Math.round((p.fee ?? 0.3) * 100)
       : DEFAULT_FEE_BPS[p.dexId] ?? 30,
     liquidityUsd: p.liquidity?.usd ?? 0,
-    priceUsd: p.priceUsd ? Number(p.priceUsd) : undefined,
+    priceUsd,
   };
 }
 

@@ -88,16 +88,61 @@ async function deployChain(chain: ChainConfig, bytecode: string) {
     }
     return;
   }
-  const { submitExecUserOp } = await import('../src/exec/pimlico.js');
+  const { submitUserOp, awaitUserOp } = await import('../src/exec/pimlico.js');
+  const { deployAndTransferOwnership } = await import('../src/exec/deployment.js');
   // Encode factory call: CREATE2 deployer pattern — place deployer addr here.
   const DEPLOYER = process.env.CREATE2_DEPLOYER;
   if (!DEPLOYER) throw new Error('CREATE2_DEPLOYER env required for live deploy');
-  const { ethers } = await import('ethers');
+  const { ethers, keccak256, concat } = await import('ethers');
   const data = new ethers.Interface(['function deploy(bytes32 salt, bytes initCode)'])
     .encodeFunctionData('deploy', [salt, initCode]);
   const { poolFor } = await import('../src/providers/rpcPool.js');
-  const res = await submitExecUserOp(chain, poolFor(chain), data);
-  log.info(`${chain.key} deploy`, res);
+
+  // Deployment goes directly to the CREATE2 deployer — NOT through
+  // submitExecUserOp, which targets chain.executor (chicken-and-egg:
+  // you cannot deploy the executor by calling the executor itself).
+  const rpc = poolFor(chain);
+  const initCodeHash = keccak256(initCode);
+  const create2Hash = keccak256(concat([
+    '0xff',
+    DEPLOYER,
+    salt,
+    initCodeHash,
+  ]));
+  const deployedExecutor = '0x' + create2Hash.slice(-40);
+  const ownerIface = new ethers.Interface([
+    'function transferOwnership(address)',
+    'function owner() view returns (address)',
+  ]);
+  const ownerData = ownerIface.encodeFunctionData('transferOwnership', [
+    cfg.SMART_ACCOUNT_ADDRESS,
+  ]);
+
+  // Do not submit ownership transfer until deployment is mined and code
+  // exists; an eth_call to the predicted empty address would otherwise pass.
+  await deployAndTransferOwnership({
+    submitDeployment: async () => {
+      const result = await submitUserOp(chain, rpc, DEPLOYER, data);
+      log.info(`${chain.key} deploy CREATE2`, result);
+      return result;
+    },
+    waitForUserOp: (hash) => awaitUserOp(chain, hash),
+    getCode: () => rpc.call<string>('eth_getCode', [deployedExecutor, 'latest']),
+    submitOwnershipTransfer: async () => {
+      const result = await submitUserOp(chain, rpc, deployedExecutor, ownerData);
+      log.info(`${chain.key} transferOwnership -> ${cfg.SMART_ACCOUNT_ADDRESS}`, result);
+      return result;
+    },
+    getOwner: async () => {
+      const result = await rpc.callContract(
+        deployedExecutor,
+        ownerIface.encodeFunctionData('owner'),
+      );
+      return String(ownerIface.decodeFunctionResult('owner', result)[0]);
+    },
+    expectedOwner: cfg.SMART_ACCOUNT_ADDRESS,
+  });
+  log.info(`${chain.key} executor deployed at ${deployedExecutor} and owned by smart account`);
 }
 
 async function main() {

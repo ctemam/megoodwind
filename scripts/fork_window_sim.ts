@@ -257,12 +257,14 @@ async function main() {
         });
       }
 
-      // EXECUTION TRUTH GATE — top-3 winners run the real exec() payload
+      // EXECUTION TRUTH GATE — every profitable winner runs the real exec() payload
       // on the fork: impersonated smart-account owner -> executor contract
       // -> live flash venue + pools at the pinned block. PASS means the
-      // candidate is execution-READY (proven, not asserted). All fork-local.
-      for (const c of winners.slice(0, 3)) {
-        if (!chain.executor) break;
+      // candidate is execution-READY (proven, not asserted). All fork-local, zero funds at risk.
+      if (!chain.executor) {
+        log.warn('no executor set for ' + chainKey + ' â€” exec-gate skipped; candidates verified as sim-profitable only');
+      }
+      for (const c of winners) {
         execAttempts++;
         const source = pickFlashSource(chainKey, c.borrowToken);
         const { execData } = buildPlan(c, {
@@ -331,7 +333,22 @@ async function main() {
   console.log('exec gate — attempts:', execAttempts, ' READY(PASS):', execReady, ' breakdown:', execGate);
   console.log('forensic gates (this run):', gateDeltas());
   console.log('════════════════════════════════════');
-  process.exit(0);
+  // Profit validation â€” fail the run if no profitable opportunity was
+// detected or no production profit is projected. Automation can use
+// the exit code to gate live-deployment decisions.
+if (profitable === 0) {
+  console.error('FAIL: zero profitable candidates detected in fork window â€” not deployment-ready');
+  process.exit(1);
+}
+if (!(prodPerHourUsd > 0)) {
+  console.error('FAIL: production per-hour profit projection is not positive â€” not deployment-ready');
+  process.exit(1);
+}
+console.log('DEPLOYMENT-READY: profitable candidates detected + positive production projection');
+process.exit(0);
 }
 
 main().catch((e) => { log.error('fork window failed', e); process.exit(1); });
+
+
+

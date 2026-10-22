@@ -41,6 +41,43 @@ export interface SubmitResult {
 }
 
 /**
+ * ERC-4337 submission lane for arbitrary targets — used by the CREATE2
+ * deployment path (deploy.ts) where there is no chain.executor yet to call.
+ * Strict_4337: probe identity is always the smart account, never the EOA.
+ */
+export async function submitUserOp(
+  chain: ChainConfig,
+  rpc: RpcPool,
+  to: string,
+  data: string,
+): Promise<SubmitResult> {
+  // exec-probe from the REAL sender identity first — strict_4337
+  const probe: ProbeOutcome = await execProbe(rpc, cfg.SMART_ACCOUNT_ADDRESS, to, data);
+  if (probe.kind === 'deterministic_revert') {
+    return { kind: 'skipped', reason: `probe_revert:${probe.reason}` };
+  }
+  if (probe.kind === 'transport') {
+    return { kind: 'skipped', reason: `probe_transport:${probe.reason}` };
+  }
+
+  try {
+    const { smartAccountClient, accountAddress } = await buildSmartAccountClient(chain);
+    if (accountAddress.toLowerCase() !== cfg.SMART_ACCOUNT_ADDRESS.toLowerCase()) {
+      log.warn(`derived smart account ${accountAddress} != env ${cfg.SMART_ACCOUNT_ADDRESS}`);
+    }
+    const hash = await smartAccountClient.sendUserOperation({
+      calls: [{ to: to as `0x${string}`, data: data as `0x${string}`, value: 0n }],
+    });
+    log.info(`${chain.key} UserOp sent`, { hash, to });
+    return { kind: 'sent', userOpHash: hash };
+  } catch (e) {
+    const msg = String((e as { message?: string })?.message ?? e);
+    log.error(`${chain.key} UserOp submit failed`, msg.slice(0, 200));
+    return { kind: 'failed', reason: msg.slice(0, 200) };
+  }
+}
+
+/**
  * Build + sponsor + send a UserOp calling exec(planBytes) on the executor.
  * Uses permissionless when installed; falls back to raw pm_* calls.
  */
