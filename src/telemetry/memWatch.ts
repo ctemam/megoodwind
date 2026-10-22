@@ -9,6 +9,7 @@ import { metrics } from './metrics.js';
 import { regimeHistorySize } from '../engine/marketRegime.js';
 import { pendingSetSizes } from '../scout/scoutListener.js';
 import { rpcPoolStats } from '../providers/rpcPool.js';
+import { wssLiveProviders } from '../providers/wss.js';
 import { lastCycleMs } from '../runner/arbRunner.js';
 
 /**
@@ -58,6 +59,7 @@ export function startMemWatch(): void {
         metricsCounters: metrics.counterCount(),
         regimeHistory: regimeHistorySize(),
         wssPendingSets: pendingSetSizes(),
+        wssLiveProviders: wssLiveProviders(),
         rpcInFlight: rpc.inFlight,
         rpcMaxInFlight: rpc.maxInFlight,
         lastCycleMs: Object.fromEntries(lastCycleMs),

@@ -12,6 +12,12 @@ import { logger } from '../config/logger.js';
 export type HeadHandler = (blockNumber: number, ts: number) => void;
 export type PendingHandler = (txHash: string) => void;
 
+/** memWatch gauge — live WebSocketProvider instances across all lanes.
+ *  Healthy value = number of configured lanes (3 on eth); growth beyond
+ *  that is zombie providers from reconnect churn. */
+let liveProviders = 0;
+export function wssLiveProviders(): number { return liveProviders; }
+
 export class WssLane {
   private provider?: ethers.WebSocketProvider;
   private destroyed = false;
@@ -19,6 +25,8 @@ export class WssLane {
   private consecutiveFails = 0;
   private urlIdx = 0;
   private log = logger('wss');
+  private reconnectTimer?: NodeJS.Timeout; // single-flight reconnect — never stacked
+  private starting = false;                // overlapping start() guard
   private static MAX_FAILS = 6;
 
   constructor(
@@ -53,12 +61,21 @@ export class WssLane {
       this.log.warn(`${this.chain.key}: no WSS_URL — polling head via RPC pool`);
       return;
     }
-    if (this.destroyed) return;
+    if (this.destroyed || this.starting) return;
+    this.starting = true;
     try {
+      // destroy the previous provider BEFORE replacing it — an abandoned
+      // provider keeps its socket + newPendingTransactions subscription
+      // alive, still feeding onPending: zombie lanes accumulate mempool
+      // streams forever (the OOM evidence: heap grew with registry=0).
+      const old = this.provider;
+      this.provider = undefined;
+      if (old) { liveProviders--; await old.destroy().catch(() => undefined); }
       const ws = new ethers.WebSocketProvider(this.url, this.chain.chainId, {
         staticNetwork: true,
       });
       this.provider = ws;
+      liveProviders++;
       // Attach socket handlers BEFORE any await — a handshake failure
       // (e.g. HTTP 502) emits 'error' on the underlying socket during
       // getBlockNumber; an unhandled socket error crashes the process.
@@ -90,28 +107,34 @@ export class WssLane {
       this.consecutiveFails++;
       this.log.error(`${this.chain.key} WSS connect failed (${this.consecutiveFails})`, e);
       this.scheduleReconnect(e);
+    } finally {
+      this.starting = false;
     }
   }
 
   private scheduleReconnect(err?: unknown) {
     if (this.destroyed) return;
+    // single-flight: socket 'close' + socket 'error' + provider 'error'
+    // can all fire for one failure — without this guard each schedules
+    // its own start() and lanes multiply.
+    if (this.reconnectTimer) return;
     const msg = String((err as { message?: string })?.message ?? err ?? '');
     const hardQuota = msg.includes('rate limit') || msg.includes('paid plan') || msg.includes('"code":15');
     const authDead = /not enabled|unauthorized|forbidden|403|401|invalid api/i.test(msg);
     // auth-fatal: this endpoint can never serve us — rotate, don't retry
-    if (authDead && this.rotate('auth')) { setTimeout(() => void this.start(), 250); return; }
+    if (authDead && this.rotate('auth')) { this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.start(); }, 250); return; }
     // dead-lane circuit: persistent hard-quota failures mean the endpoint
     // can't serve this account — rotate to the next keyed WSS candidate;
     // only fall back to RPC polling once the whole pool is exhausted.
     if (this.consecutiveFails >= WssLane.MAX_FAILS && hardQuota) {
-      if (this.rotate('quota')) { setTimeout(() => void this.start(), 500); return; }
+      if (this.rotate('quota')) { this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.start(); }, 500); return; }
       this.log.warn(`${this.chain.key} WSS dead-lane: ${this.pinnedUrl ? 'union member' : 'all candidates'} quota-blocked, ${this.pinnedUrl ? 'lane retired' : 'falling back to RPC poll'}`);
       this.destroyed = true;
       return;
     }
     const wait = this.reconnectMs;
     this.reconnectMs = Math.min(this.reconnectMs * 2, 30_000);
-    setTimeout(() => void this.start(), wait);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = undefined; void this.start(); }, wait);
   }
 
   private hostOf(u?: string): string {
@@ -120,6 +143,9 @@ export class WssLane {
 
   async stop() {
     this.destroyed = true;
-    await this.provider?.destroy().catch(() => undefined);
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined; }
+    const p = this.provider;
+    this.provider = undefined;
+    if (p) { liveProviders--; await p.destroy().catch(() => undefined); }
   }
 }
