@@ -1,4 +1,4 @@
-import { ChainKey } from '../config/index.js';
+import { ChainKey, chainIdFor } from '../config/index.js';
 
 /**
  * Flash-loan venue registry — the single source of truth shared by the
@@ -55,6 +55,9 @@ export const FLASH_VENUES: Record<string, FlashVenueSet> = {
   linea: { balancer: ZERO, aave: '0xc47B8c00b0f69a36fa203fEaeafdB1557614c0E6', morpho: ZERO, erc3156: ZERO },
   scroll:{ balancer: ZERO, aave: '0x11fCfe756c05AD438e312a7fd934381537D3cFfe', morpho: ZERO, erc3156: ZERO },
   blast: { balancer: ZERO, aave: ZERO, morpho: ZERO, erc3156: ZERO },
+  // test/exec-canary local fork — mirrors eth where the venue actually
+  // exists on mainnet state (DssFlash has no code on the fork).
+  canary:{ balancer: BALANCER_VAULT, aave: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', morpho: MORPHO_BLUE, erc3156: ZERO },
 };
 
 /** Mainnet DAI — the only asset Maker DssFlash lends. */
@@ -77,7 +80,9 @@ export function flashPremium(source: FlashSourceKey, borrowAmount: bigint): bigi
  * probe gate is the capacity check, not a venue heuristic.
  */
 export function pickFlashSource(chain: ChainKey, borrowToken: string): FlashSourceKey {
-  const v = FLASH_VENUES[chain];
+  // the canary row is selectable only when the fork chain id is active —
+  // a 'canary' key without CHAIN_ID_CANARY=31337 falls to the generic path.
+  const v = chain === 'canary' && chainIdFor(chain) !== 31337 ? undefined : FLASH_VENUES[chain];
   if (!v) return 'AAVE';
   if (v.balancer !== ZERO) return 'BALANCER';
   if (v.morpho !== ZERO) return 'MORPHO';

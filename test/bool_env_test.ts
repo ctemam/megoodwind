@@ -58,6 +58,7 @@ const FIELDS = [
   { name: 'STRICT_PROFIT_FLOOR_GUARD', def: true },
   { name: 'P09_ENABLED', def: false },
   { name: 'MEM_WATCH', def: false },
+  { name: 'CANARY_SELF_PAY', def: false },
 ] as const;
 
 for (const f of FIELDS) {
