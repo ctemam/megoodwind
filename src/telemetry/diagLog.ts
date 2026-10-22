@@ -7,8 +7,9 @@ import { cfg } from '../config/index.js';
  *
  * Hard bounds (a diag lane that OOMs the runner is a leak, not a tool):
  *   RING_PER_STAGE  — in-memory ring of the most recent N rows per stage
- *   FILE_MAX_BYTES  — capped jsonl; on overflow the file is rewritten
- *                     with the newest half of rows (never grows past cap)
+ *   FILE_MAX_BYTES  — per-stage capped jsonl (data/diag_<stage>.jsonl);
+ *                     on overflow rewritten with newest half — a hot
+ *                     stage can never evict a rare stage's rows
  *   SAMPLE_EVERY    — after the first WARM rows per stage are kept in
  *                     full, 1-in-N subsequent rows is persisted, so a
  *                     hot rejection lane can't drown the sample budget.
@@ -22,11 +23,12 @@ const FILE_MAX_BYTES = 8 * 1024 * 1024; // 8MB cap
 const WARM_ROWS = 20;                   // first N rows per stage always kept
 const SAMPLE_EVERY = 25;                // thereafter 1-in-25 persists
 
-const FILE = join(process.cwd(), 'data', 'diag_signals.jsonl');
 const rings = new Map<string, Record<string, unknown>[]>();
 const seen = new Map<string, number>();
-let fileLines = 0;
+const fileLines = new Map<string, number>();
 let dropped = 0;
+
+const fileFor = (stage: string) => join(process.cwd(), 'data', `diag_${stage}.jsonl`);
 
 export function diagRecord(stage: string, row: Record<string, unknown>): void {
   if (!cfg.DIAG_ONLY) return;
@@ -41,31 +43,36 @@ export function diagRecord(stage: string, row: Record<string, unknown>): void {
   seen.set(stage, n);
   if (n > WARM_ROWS && n % SAMPLE_EVERY !== 0) { dropped++; return; }
 
+  const file = fileFor(stage);
   try {
-    appendFileSync(FILE, JSON.stringify(r) + '\n');
-    fileLines++;
-    if (existsSync(FILE) && statSync(FILE).size > FILE_MAX_BYTES) compact();
+    appendFileSync(file, JSON.stringify(r) + '\n');
+    fileLines.set(stage, (fileLines.get(stage) ?? 0) + 1);
+    // per-stage cap — a hot lane (depth floods) can NEVER evict rows
+    // from a rare one (min_profit_floor) the way a shared file did.
+    if (existsSync(file) && statSync(file).size > FILE_MAX_BYTES) compact(stage, file);
   } catch { /* diag never wedges the hot path */ }
 }
 
-/** Rewrite the capped file with the newest half of its rows. */
-function compact(): void {
+/** Rewrite a stage file with the newest half of its rows. */
+function compact(stage: string, file: string): void {
   try {
-    const lines = readFileSync(FILE, 'utf8').split('\n').filter(Boolean);
+    const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
     const keep = lines.slice(Math.floor(lines.length / 2));
-    writeFileSync(FILE, keep.join('\n') + '\n');
-    fileLines = keep.length;
+    writeFileSync(file, keep.join('\n') + '\n');
+    fileLines.set(stage, keep.length);
   } catch { /* best-effort */ }
 }
 
 /** Snapshot of in-memory rings + counters — for /api/metrics and reports. */
 export function diagSnapshot(): {
-  stages: Record<string, { rows: number; sampled: number }>;
-  dropped: number; fileLines: number;
+  stages: Record<string, { rows: number; sampled: number; fileLines: number }>;
+  dropped: number;
 } {
-  const stages: Record<string, { rows: number; sampled: number }> = {};
-  for (const [k, v] of rings) stages[k] = { rows: v.length, sampled: seen.get(k) ?? 0 };
-  return { stages, dropped, fileLines };
+  const stages: Record<string, { rows: number; sampled: number; fileLines: number }> = {};
+  for (const [k, v] of rings) {
+    stages[k] = { rows: v.length, sampled: seen.get(k) ?? 0, fileLines: fileLines.get(k) ?? 0 };
+  }
+  return { stages, dropped };
 }
 
-export function diagReset(): void { rings.clear(); seen.clear(); fileLines = 0; dropped = 0; }
+export function diagReset(): void { rings.clear(); seen.clear(); fileLines.clear(); dropped = 0; }

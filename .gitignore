@@ -13,4 +13,4 @@ logs/
 data/heapsnaps/
 data/mem_telemetry.jsonl
 data/metrics_counters*.json
-data/diag_signals.jsonl
+data/diag_*.jsonl
