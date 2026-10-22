@@ -1,4 +1,4 @@
-import { ChainConfig, cfg } from '../config/index.js';
+import { ChainConfig, cfg, armedFor } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { RpcPool } from '../providers/rpcPool.js';
 import { Candidate } from '../strategies/solver.js';
@@ -32,6 +32,10 @@ export async function executeCandidate(
   cand: Candidate,
   scheduler: VariantScheduler,
 ): Promise<void> {
+  // DIAG_ONLY hard-stop: refused here at the single funnel to the send
+  // path, not merely by the AUTO_EXECUTE flag — submitExecUserOp,
+  // submitUserOp and the Flashbots rail are all structurally unreachable.
+  if (cfg.DIAG_ONLY) { metrics.inc('diag_exec_skipped', { chain: chain.key }); return; }
   const t0 = performance.now();
   metrics.inc('arb_eval_total', { chain: chain.key, strategy: cand.strategy });
   scheduler.recordEmit(cand.variant); // scheduler evidence — unlocks the
@@ -88,7 +92,7 @@ export async function executeCandidate(
   for (const l of cand.legs) breaker.recordProbe(chain.key, l.pool.address, false);
   metrics.inc('arb_probe_pass_total', { chain: chain.key });
 
-  if (!cfg.AUTO_EXECUTE) {
+  if (!armedFor(chain.chainId)) {
     metrics.inc('arb_shadow_emit_total', { chain: chain.key, strategy: cand.strategy });
     log.info(`shadow emit ${cand.strategy} ${chain.key} net~$${cand.netUsd.toFixed(2)}`);
     return;

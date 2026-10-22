@@ -10,6 +10,25 @@ import * as providers from '../providers/providerCatalog.js';
 
 const csv = (s: string) => s.split(',').map((v) => v.trim()).filter(Boolean);
 
+/** Env booleans are strings — z.coerce.boolean() applies Boolean(),
+ *  which parses "false" as TRUE (non-empty string). That bug silently
+ *  armed AUTO_EXECUTE whenever it was set to "false" — every historical
+ *  "shadow" run was actually armed.
+ *  Fail-closed: an unrecognized string (e.g. "flase", "") raises a zod
+ *  issue and the process refuses to start — never silently disarmed OR
+ *  armed on a typo. */
+const boolEnv = (def: boolean) =>
+  z.union([z.boolean(), z.string()])
+    .transform((v, ctx) => {
+      if (typeof v === 'boolean') return v;
+      const s = v.trim().toLowerCase();
+      if (/^(1|true|yes|on)$/.test(s)) return true;
+      if (/^(0|false|no|off)$/.test(s)) return false;
+      ctx.addIssue({ code: 'custom', message: `unrecognized boolean "${v}" (expected true/false/1/0/yes/no/on/off)` });
+      return z.NEVER;
+    })
+    .default(def);
+
 const envSchema = z.object({
   // keyed provider keys (item #10) — used to template private endpoints
   ALCHEMY_API_KEY: z.string().optional(),
@@ -32,7 +51,14 @@ const envSchema = z.object({
   PROFIT_TRANSFER_MIN_USD: z.coerce.number().default(100),
 
   // execution
-  AUTO_EXECUTE: z.coerce.boolean().default(false),
+  AUTO_EXECUTE: boolEnv(false),
+  // diagnostics-only profile — forced AUTO_EXECUTE=false at load AND
+  // refused at executeCandidate; cannot reach the send path.
+  DIAG_ONLY: boolEnv(false),
+  // fail-closed arming: AUTO_EXECUTE=true only arms a chain whose numeric
+  // chainId is explicitly listed here (e.g. ARM_LIVE=1,56,137).
+  // Missing or malformed (any non-integer token) => disarmed everywhere.
+  ARM_LIVE: z.string().optional(),
   MIN_PROFIT_USD: z.coerce.number().default(5),
   // USD-target flash borrow before per-path right-sizing (emit() shrinks
   // it to the slippage bound and the variant's sizeCapUsd)
@@ -51,7 +77,7 @@ const envSchema = z.object({
   PREDICTIVE_CHAINS: z.string().default('eth,bsc,poly'),
   BACKRUN_CHAINS: z.string().default('arb,op,base,avax,linea,scroll,blast'),
   MAX_TICK_DISTANCE: z.coerce.number().default(200),
-  STRICT_PROFIT_FLOOR_GUARD: z.coerce.boolean().default(true),
+  STRICT_PROFIT_FLOOR_GUARD: boolEnv(true),
   AUCTION_CHAINS: z.string().default('eth'),
   COINBASE_BRIBE_PCT: z.coerce.number().default(50),
   COINBASE_BRIBE_PCT_MAX: z.coerce.number().default(80),
@@ -66,7 +92,7 @@ const envSchema = z.object({
   FOT_BLACKLIST_PATH: z.string().default('tools/fot_blacklist.json'),
   PEND_THROTTLE_MS: z.coerce.number().default(100),
   EV_CHAINS: z.string().default(''),
-  P09_ENABLED: z.coerce.boolean().default(false),
+  P09_ENABLED: boolEnv(false),
   RPC_PRIVATE_CHAINS: z.string().default(''),
 
   // Discovery engine — automated multi-chain expansion (no manual registration)
@@ -105,6 +131,19 @@ export const CHAIN_BY_ID: Record<number, ChainKey> = Object.fromEntries(
 export const envPrefixFor = (key: ChainKey): string => key.toUpperCase();
 
 const raw = envSchema.parse(process.env);
+// DIAG_ONLY hard-gate — enforced at load, not honored by convention.
+if (raw.DIAG_ONLY) raw.AUTO_EXECUTE = false;
+
+/** Armed chainIds — AUTO_EXECUTE=true only arms chains whose chainId is
+ *  explicitly listed in ARM_LIVE. ANY malformed token disarms the whole
+ *  value (fail-closed, never partially parsed). */
+const armTokens = (raw.ARM_LIVE ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const armParsed = armTokens.map(Number);
+const armedChains = new Set<number>(
+  raw.ARM_LIVE !== undefined && armTokens.length > 0 && armParsed.every((n) => Number.isInteger(n) && n > 0)
+    ? armParsed
+    : [],
+);
 
 /** PUBLIC-RPC LOCK (Commander protocol): a URL is "private keyed" iff it
  *  carries a credential — path segment, ?dkey=/?key=/?token= query, or
@@ -144,7 +183,14 @@ export const cfg = {
   strategies: csv(raw.STRATEGIES),
   evChains: csv(raw.EV_CHAINS),
   privateChains: csv(raw.RPC_PRIVATE_CHAINS),
+  armedChains: [...armedChains],
 };
+
+/** The ONLY place live sends are authorized: AUTO_EXECUTE parsed true
+ *  AND this chain's chainId is in ARM_LIVE. Everything else is shadow. */
+export function armedFor(chainId: number): boolean {
+  return cfg.AUTO_EXECUTE && armedChains.has(chainId);
+}
 
 export function chainConfig(chain: ChainKey): ChainConfig {
   const role: ChainConfig['role'] = cfg.predictiveChains.includes(chain)
