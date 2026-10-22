@@ -55,6 +55,9 @@ export const FLASH_VENUES: Record<string, FlashVenueSet> = {
   linea: { balancer: ZERO, aave: '0xc47B8c00b0f69a36fa203fEaeafdB1557614c0E6', morpho: ZERO, erc3156: ZERO },
   scroll:{ balancer: ZERO, aave: '0x11fCfe756c05AD438e312a7fd934381537D3cFfe', morpho: ZERO, erc3156: ZERO },
   blast: { balancer: ZERO, aave: ZERO, morpho: ZERO, erc3156: ZERO },
+  // test/exec-canary local fork — mirrors eth where the venue actually
+  // exists on mainnet state (DssFlash has no code on the fork).
+  canary:{ balancer: BALANCER_VAULT, aave: '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', morpho: MORPHO_BLUE, erc3156: ZERO },
 };
 
 /** Mainnet DAI — the only asset Maker DssFlash lends. */

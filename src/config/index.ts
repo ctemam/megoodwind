@@ -103,6 +103,11 @@ const envSchema = z.object({
   PEND_THROTTLE_MS: z.coerce.number().default(100),
   EV_CHAINS: z.string().default(''),
   P09_ENABLED: boolEnv('P09_ENABLED', false),
+  // local-fork canary: bundler endpoint override (defaults to Pimlico)
+  // and self-pay UserOps (no paymaster sponsor — EntryPoint deposit).
+  // Both are diagnostics-only; never set these in production.
+  BUNDLER_URL: z.string().optional(),
+  CANARY_SELF_PAY: boolEnv('CANARY_SELF_PAY', false),
   RPC_PRIVATE_CHAINS: z.string().default(''),
 
   // Discovery engine — automated multi-chain expansion (no manual registration)
@@ -161,9 +166,16 @@ const armedChains = new Set<number>(
 const KEYED_URL = /^https?:\/\/[^/]*(:[^@/]+@)?[^/]*\/[^/]+|dkey=|key=|token=|apikey=/i;
 const KEYED_WSS = /^wss:\/\/[^/]*(:[^@/]+@)?[^/]*\/[^/]+|dkey=|key=|token=|apikey=/i;
 
+const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
+const LOOPBACK_WSS = /^wss?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
+
 export function assertPrivateUrl(url: string, wss = false): string {
   const ok = wss ? KEYED_WSS.test(url) : KEYED_URL.test(url);
-  if (!ok) throw new Error(`PUBLIC_RPC_FORBIDDEN: unkeyed endpoint rejected: ${url}`);
+  // loopback is unforgeable local transport — a local Anvil fork carries
+  // no credential by design (test/exec-canary); remote hosts still need keys.
+  if (!ok && !(wss ? LOOPBACK_WSS : LOOPBACK).test(url)) {
+    throw new Error(`PUBLIC_RPC_FORBIDDEN: unkeyed endpoint rejected: ${url}`);
+  }
   return url;
 }
 

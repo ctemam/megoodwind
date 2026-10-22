@@ -17,7 +17,8 @@ const log = logger('pimlico');
 const PIMLICO_BASE = 'https://api.pimlico.io/v2';
 
 export function bundlerUrl(chain: ChainConfig): string {
-  return `${PIMLICO_BASE}/${chain.chainId}/rpc?apikey=${cfg.PIMLICO_API_KEY}`;
+  // local-fork canary override — diagnostics only; production keeps Pimlico.
+  return cfg.BUNDLER_URL ?? `${PIMLICO_BASE}/${chain.chainId}/rpc?apikey=${cfg.PIMLICO_API_KEY}`;
 }
 
 /** Raw bundler JSON-RPC helper (gas price, receipts, sponsor calls). */
@@ -139,6 +140,9 @@ async function buildSmartAccountClient(chain: ChainConfig) {
     owners: [owner],
     entryPoint: { address: entryPoint07Address, version: '0.7' },
     version: '0.3.1',
+    // pin the env-configured account — the UserOp sender must equal the
+    // identity execProbe simulated (strict_4337), not a derived address.
+    address: cfg.SMART_ACCOUNT_ADDRESS as `0x${string}`,
   });
 
   const pimlico = createPimlicoClient({
@@ -151,7 +155,9 @@ async function buildSmartAccountClient(chain: ChainConfig) {
     account,
     chain: viemChain(chain.chainId),
     bundlerTransport: viem.http(bundlerUrl(chain)),
-    paymaster: pimlico,
+    // CANARY_SELF_PAY: local-fork diagnostics — account self-funds via its
+    // EntryPoint deposit instead of a sponsored paymaster.
+    paymaster: cfg.CANARY_SELF_PAY ? undefined : pimlico,
     userOperation: {
       estimateFeesPerGas: async () => (await pimlico.getUserOperationGasPrice()).fast,
     },
