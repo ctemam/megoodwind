@@ -23,7 +23,7 @@ ck('K<1 looser than break-even', belowGasMultiple(5, 10, 0.5) === false && below
 // --- route gas table --------------------------------------------------
 const leg = (kind: 'v2' | 'v3') => ({ pool: { kind } });
 ck('v2x2 = measured 354k', routeGasUnits([leg('v2'), leg('v2')], 0) === 354_000n);
-ck('v2x3 = measured 408k', routeGasUnits([leg('v2'), leg('v2'), leg('v2')], 0) === 434_000n);
+ck('v2x3 = measured 434k', routeGasUnits([leg('v2'), leg('v2'), leg('v2')], 0) === 434_000n);
 ck('v3x2 fallback above v2', routeGasUnits([leg('v3'), leg('v3')], 0) > GAS_TABLE['v2x2']);
 ck('mixed v2/v3 takes v3 worst', routeGasUnits([leg('v2'), leg('v3')], 0) === 480_000n);
 ck('4+ hop falls to fail-expensive', routeGasUnits([leg('v2'), leg('v2'), leg('v2'), leg('v2')], 0) === 620_000n);

@@ -104,7 +104,7 @@ process.env.PRIVATE_KEY = THROWAWAY;
 process.env.SMART_ACCOUNT_ADDRESS = SMART;
 process.env.PIMLICO_API_KEY = 'canary';
 process.env.STRATEGIES = process.env.CANARY_STRATEGIES ?? 'P01';
-process.env.DIAG_ONLY = '0';
+process.env.DIAG_ONLY = process.env.DIAG_ONLY ?? '0'; // shell may pass 1 for diag runs
 process.env.PROFIT_WALLET = eoa;
 
 const { cfg, chainConfig, armedFor } = await import('../../src/config/index.js');
@@ -120,7 +120,9 @@ const chain = chainConfig('canary');
 console.log(`[canary] chain ${chain.key} id=${chain.chainId} executor=${chain.executor} rpc=${chain.rpcUrls[0]}`);
 console.log(`[canary] armedFor(31337)=${armedFor(31337)} armedFor(1)=${armedFor(1)}`);
 
-if (!armedFor(chain.chainId)) throw new Error('canary chain not armed — abort');
+// ARM check applies to the EXEC phase — DIAG_ONLY runs solve+diag rows
+// then stops before executeCandidate (armedFor is correctly false then).
+if (!armedFor(chain.chainId) && !cfg.DIAG_ONLY) throw new Error('canary chain not armed — abort');
 if (armedFor(1)) throw new Error('CANARY_ABORT: mainnet chainId is armed — refusing');
 
 const bundler = startLocalBundler({ anvilUrl: ANVIL, bundlerPort: 8546, beneficiaryKey: THROWAWAY });
@@ -245,6 +247,7 @@ const opts = {
 };
 
 const scheduler = new VariantScheduler();
+const snap0 = (metrics.snapshot() as { counters?: Record<string, number> }).counters ?? {};
 let cand: import('../../src/strategies/solver.js').Candidate | null = null;
 for (const v of VARIANTS) {
   const c = solve(chain, v, opts);
@@ -256,7 +259,12 @@ for (const v of VARIANTS) {
   }
   console.log(`[canary] ${v.id}: no candidate`);
 }
-if (!cand) { console.log('[canary] RESULT: no candidate — gate rejection (see counters)'); console.log(JSON.stringify(metrics.snapshot(), null, 1)); process.exit(2); }
+if (!cand) {
+  const snapR = (metrics.snapshot() as { counters?: Record<string, number> }).counters ?? {};
+  const deltaR = Object.entries(snapR).map(([k, v]) => `${k}=${v - (snap0[k] ?? 0)}`).join(' ');
+  console.log('[canary] RESULT: no candidate — gate rejection. counters (this run): ' + deltaR);
+  process.exit(2);
+}
 
 // --------------------------------------------- real execute path (armed)
 // measure realized profit in the ACTUAL borrow token, plus decode
@@ -265,6 +273,7 @@ const balIface = new ethers.Interface(['function balanceOf(address) view returns
 const balOf = async (token: string) => BigInt(await provider.call({ to: token, data: balIface.encodeFunctionData('balanceOf', [EXECUTOR_DEPLOYED]) }));
 const borrowDec = cand.legs[0].pool.token0.toLowerCase() === cand.borrowToken.toLowerCase() ? cand.legs[0].pool.dec0 : cand.legs[0].pool.dec1;
 const borrowIsWeth = cand.borrowToken.toLowerCase() === WETH.toLowerCase();
+if (cfg.DIAG_ONLY) { console.log('[canary] DIAG_ONLY — stopping before executeCandidate'); process.exit(0); }
 const balBefore = await balOf(cand.borrowToken);
 await executeCandidate(chain, rpcPool, cand, scheduler);
 const balAfter = await balOf(cand.borrowToken);
@@ -287,7 +296,8 @@ if (settled?.txHash) {
 }
 
 const snap = (metrics.snapshot() as { counters?: Record<string, number>; settled_records?: unknown[] });
-console.log('[canary] counters:', Object.entries(snap.counters ?? {}).filter(([k]) => /probe|settled|submit|shadow|revert|diag/.test(k)).map(([k, v]) => `${k}=${v}`).join(' '));
+const delta = Object.entries(snap.counters ?? {}).filter(([k]) => /probe|settled|submit|shadow|revert|diag|passed/.test(k)).map(([k, v]) => `${k}=${v - (snap0[k] ?? 0)}`).join(' ');
+console.log('[canary] counters (this run):', delta);
 console.log('[canary] settled_records:', JSON.stringify(snap.settled_records ?? []));
 bundler.close();
 anvil.kill();
