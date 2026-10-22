@@ -14,3 +14,7 @@ data/heapsnaps/
 data/mem_telemetry.jsonl
 data/metrics_counters*.json
 data/diag_*.jsonl
+data/monitor/
+data/projections.json
+test/.empty_env
+nul
