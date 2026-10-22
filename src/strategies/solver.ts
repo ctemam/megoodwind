@@ -244,6 +244,41 @@ function emit(
     if (r && (!best || r.netUsd > best.netUsd)) best = r;
     return null;
   };
+  // WO-6 census: achievable gross at each study slip bound — the gross
+  // argmax over sizes whose impact ≤ that bound (and uncapped), so the
+  // census can ask "what could this path pay" without re-running sizes.
+  // Computed only under DIAG_ONLY (bounded ~4×60 leg sims per emit).
+  const grossOnly = (sz: bigint): number => {
+    let out = sz;
+    for (const leg of legs) { out = legOut(leg.pool, out, leg.tokenIn); if (out <= 0n) return -Infinity; }
+    return out > sz ? ((Number(out - sz) / 10 ** decBorrow) * tokenUsd) : -Infinity;
+  };
+  const argmaxGross = (cap: bigint): number | null => {
+    if (cap <= 1n || !Number.isFinite(Number(vIn)) || vIn <= 0) return null;
+    let lo = 1, hi = Math.min(Number(cap), Number(vIn));
+    const INVPHI = 0.6180339887498949;
+    let x1 = hi - (hi - lo) * INVPHI, x2 = lo + (hi - lo) * INVPHI;
+    for (let i = 0; i < 50 && hi - lo > 8; i++) {
+      if (grossOnly(BigInt(Math.floor(x1))) < grossOnly(BigInt(Math.floor(x2)))) { lo = x1; x1 = x2; x2 = lo + (hi - lo) * INVPHI; }
+      else { hi = x2; x2 = x1; x1 = hi - (hi - lo) * INVPHI; }
+    }
+    let g = -Infinity;
+    for (const s of [lo, x1, x2, hi]) { const gg = grossOnly(BigInt(Math.max(1, Math.floor(s)))); if (gg > g) g = gg; }
+    return g > -Infinity ? g : null;
+  };
+  const capForSlip = (kbps: number) => {
+    if (!Number.isFinite(Number(vIn)) || vIn <= 0) return 0n;
+    const bk = kbps / legs.length / 10_000;
+    const cap = (Number(vIn) * bk) / (1 - bk) / (1 - (legs[0].pool.feeBps || 0) / 10_000);
+    return Number.isFinite(cap) && cap > 0 ? BigInt(Math.floor(cap)) : 0n;
+  };
+  const achievable = cfg.DIAG_ONLY ? {
+    slip15: argmaxGross(capForSlip(15)),
+    slip50: argmaxGross(capForSlip(50)),
+    slip100: argmaxGross(capForSlip(100)),
+    uncapped: argmaxGross(Number.isFinite(Number(vIn)) && vIn > 0 ? BigInt(Math.floor(Number(vIn))) : 0n),
+  } : undefined;
+
   let ceilingHit = false;
   if (cfg.SIZING_MODE === 'optimal') {
     // golden-section argmax — netUsd(x) is unimodal for constant-product
@@ -279,13 +314,14 @@ function emit(
   } : {};
   if (!sawSpread) {
     metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' });
-    if (cfg.DIAG_ONLY) diagRecord('no_spread', { chain: chain.key, path: pathSig, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length });
+    if (cfg.DIAG_ONLY) diagRecord('no_spread', { chain: chain.key, path: pathSig, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length, achievable });
     return null;
   }
   if (!b) {
     metrics.inc('rejected_by_profit_margin', { reason: sawImpactOver ? 'price_impact' : 'no_spread' });
     if (cfg.DIAG_ONLY) diagRecord(sawImpactOver ? 'price_impact' : 'no_spread', {
       chain: chain.key, path: pathSig, slipBoundBps, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length,
+      achievable,
     });
     return null;
   }
@@ -303,7 +339,7 @@ function emit(
       spreadPct: sp, impactBps,
       grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, mult: gasK,
       ratio: b.n.gasUsd > 0 ? b.n.grossUsd / b.n.gasUsd : Infinity,
-      premiumUsd: b.n.premiumUsd, netUsd: b.netUsd,
+      premiumUsd: b.n.premiumUsd, netUsd: b.netUsd, achievable,
     });
     return null;
   }
@@ -321,7 +357,7 @@ function emit(
       chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
       borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
       spreadPct: sp, impactBps, slipBoundBps, floorUsd,
-      ...(econ as Record<string, unknown>),
+      ...(econ as Record<string, unknown>), achievable,
     });
     return null;
   }
@@ -330,7 +366,7 @@ function emit(
     chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
     borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
     spreadPct: sp, impactBps, slipBoundBps, floorUsd,
-    ...(econ as Record<string, unknown>),
+    ...(econ as Record<string, unknown>), achievable,
   });
   metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: b.netUsd, floorUsd });
   // stream the ACTIVE on-chain barrier — minOut = repay + premium

@@ -105,6 +105,15 @@ process.env.SMART_ACCOUNT_ADDRESS = SMART;
 process.env.PIMLICO_API_KEY = 'canary';
 process.env.STRATEGIES = process.env.CANARY_STRATEGIES ?? 'P01';
 process.env.DIAG_ONLY = process.env.DIAG_ONLY ?? '0'; // shell may pass 1 for diag runs
+process.env.PRIORITY_FEE_GWEI = process.env.CANARY_PRIORITY_GWEI ?? '1'; // realistic tip, not the 5 gwei default
+// WO-6 study knobs — never defaults: slip-column override for the
+// *harness env only* and a variant whitelist to choose which guardrail binds.
+if (process.env.CANARY_SLIP) {
+  process.env.SLIPPAGE_BPS = process.env.CANARY_SLIP;
+  process.env.SLIPPAGE_BASELINE_BPS = process.env.CANARY_SLIP;
+  process.env.SLIPPAGE_LOW_VOL_BPS = process.env.CANARY_SLIP;
+  process.env.SLIPPAGE_CEILING_BPS = String(Math.max(200, Number(process.env.CANARY_SLIP)));
+}
 process.env.PROFIT_WALLET = eoa;
 
 const { cfg, chainConfig, armedFor } = await import('../../src/config/index.js');
@@ -239,31 +248,84 @@ const BALANCER_VAULT = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
 const balIface2 = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
 const flashLiquidityRaw = BigInt(await provider.call({ to: WETH, data: balIface2.encodeFunctionData('balanceOf', [BALANCER_VAULT]) }));
 console.log(`[canary] balancer vault WETH balance ${ethers.formatEther(flashLiquidityRaw)}`);
+// WO-6: same live-priority logic as arbRunner — eth_maxPriorityFeePerGas,
+// else CANARY_PRIORITY_GWEI (default 1 gwei, not the 5 gwei schema default).
+const livePrio = await rpc('eth_maxPriorityFeePerGas', []).then(BigInt).catch(() => 0n);
+const prioWei = livePrio > 0n ? livePrio : BigInt(Math.floor(Number(process.env.CANARY_PRIORITY_GWEI ?? 1) * 1e9));
+console.log(`[canary] priorityFee=${(Number(prioWei) / 1e9).toFixed(2)} gwei (live=${livePrio > 0n})`);
 const opts = {
   gasUnits: 450_000n, baseFeeWei: block!.baseFeePerGas ?? 10n ** 9n, l1DataFeeWei: 0n,
   lane: 'predictive' as const, tokenUsd, sizeOf, nativeUsd: NATIVE_USD,
-  priorityFeeWei: BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
+  priorityFeeWei: prioWei,
   flashLiquidityRaw,
 };
 
 const scheduler = new VariantScheduler();
 const snap0 = (metrics.snapshot() as { counters?: Record<string, number> }).counters ?? {};
+const vPick = (process.env.CANARY_VARIANTS ?? '').split(',').filter(Boolean);
+const variants = vPick.length ? VARIANTS.filter((v) => vPick.includes(v.id)) : VARIANTS;
+console.log(`[canary] variants: ${variants.map((v) => v.id).join(',')} slipEnv=${process.env.CANARY_SLIP ?? 'default'}`);
 let cand: import('../../src/strategies/solver.js').Candidate | null = null;
-for (const v of VARIANTS) {
+for (const v of variants) {
   const c = solve(chain, v, opts);
   if (c.length) {
-    cand = c.sort((a, b) => b.netUsd - a.netUsd)[0];
-    const bd = cand.legs[0].pool.token0.toLowerCase() === cand.borrowToken.toLowerCase() ? cand.legs[0].pool.dec0 : cand.legs[0].pool.dec1;
-    console.log(`[canary] candidate via ${v.id}: net $${cand.netUsd.toFixed(2)} gross $${cand.grossUsd.toFixed(2)} gas $${cand.gasUsd.toFixed(2)} spread ${cand.spreadPct.toFixed(2)}% impact ${cand.impactBps.toFixed(1)}bps borrow ${ethers.formatUnits(cand.borrowAmount, bd)} ${cand.borrowToken === WETH ? 'WETH' : 'USDC'} (mode=${cfg.SIZING_MODE})`);
-    break;
-  }
-  console.log(`[canary] ${v.id}: no candidate`);
+    const top = c.sort((a, b) => b.netUsd - a.netUsd)[0];
+    if (!cand || top.netUsd > cand.netUsd) cand = top;
+    console.log(`[canary] ${v.id}: ${c.length} cand(s), best net $${top.netUsd.toFixed(2)}`);
+  } else console.log(`[canary] ${v.id}: no candidate`);
+}
+if (cand) {
+  const bd = cand.legs[0].pool.token0.toLowerCase() === cand.borrowToken.toLowerCase() ? cand.legs[0].pool.dec0 : cand.legs[0].pool.dec1;
+  console.log(`[canary] candidate via ${cand.variant.id}: net $${cand.netUsd.toFixed(2)} gross $${cand.grossUsd.toFixed(2)} gas $${cand.gasUsd.toFixed(2)} spread ${cand.spreadPct.toFixed(2)}% impact ${cand.impactBps.toFixed(1)}bps borrow ${ethers.formatUnits(cand.borrowAmount, bd)} ${cand.borrowToken === WETH ? 'WETH' : 'USDC'} (mode=${cfg.SIZING_MODE})`);
 }
 if (!cand) {
   const snapR = (metrics.snapshot() as { counters?: Record<string, number> }).counters ?? {};
   const deltaR = Object.entries(snapR).map(([k, v]) => `${k}=${v - (snap0[k] ?? 0)}`).join(' ');
   console.log('[canary] RESULT: no candidate — gate rejection. counters (this run): ' + deltaR);
   process.exit(2);
+}
+
+// ---- WO-6 step 2: cap decomposition (same math emit uses) + theoretical
+// closed-form gross maximum on the same legs, slippage bound OFF.
+{
+  const { inputVirtualReserveRaw } = await import('../../src/math/profit.js');
+  const { legOut: legOutFn } = await import('../../src/strategies/solver.js');
+  const { effectiveGuards } = await import('../../src/engine/predictiveEngine.js');
+  const leg0 = cand.legs[0];
+  const decB = leg0.pool.token0.toLowerCase() === cand.borrowToken.toLowerCase() ? leg0.pool.dec0 : leg0.pool.dec1;
+  const pxB = cand.borrowToken.toLowerCase() === WETH.toLowerCase() ? NATIVE_USD : 1;
+  const vIn = inputVirtualReserveRaw(leg0.pool, cand.borrowToken);
+  const b = cand.slipBoundBps / cand.legs.length / 10_000;
+  const slipMaxIn = vIn > 0 ? (Number(vIn) * b) / (1 - b) / (1 - leg0.pool.feeBps / 10_000) : 0;
+  const borrowUsd = (x: bigint) => (Number(x) / 10 ** decB) * pxB;
+  const caps = {
+    sizeOf_usd: borrowUsd(sizeOf(cand.borrowToken, decB)),
+    slipBound_bps: cand.slipBoundBps,
+    slipMaxIn_usd: slipMaxIn * pxB / 10 ** decB,
+    sizeCapUsd: effectiveGuards(cand.variant).sizeCapUsd,
+    reserveFrac_usd: cfg.SIZING_MODE === 'optimal' ? Number(vIn) * cfg.OPTIMAL_RESERVE_FRAC / 10 ** decB * pxB : Infinity,
+    flashLiqUsd: cfg.SIZING_MODE === 'optimal' ? Number(flashLiquidityRaw) / 10 ** decB * pxB : Infinity,
+    chosen_usd: borrowUsd(cand.borrowAmount),
+  };
+  const binder = Object.entries(caps).filter(([k]) => /_usd|sizeCapUsd/.test(k)).sort((a, c) => a[1] - c[1])[0];
+  console.log('[canary] caps:', JSON.stringify({ ...caps, binding: binder[0] }));
+  // theoretical argmax gross — golden-section on gross(x) over [1, vIn]
+  const grossAt = (x: bigint): number => {
+    let out = x;
+    for (const leg of cand!.legs) { out = legOutFn(leg.pool, out, leg.tokenIn); if (out <= 0n) return -Infinity; }
+    return Number(out - x) / 10 ** decB * pxB;
+  };
+  let lo = 1, hi = Number(vIn), gx = 1;
+  const INVPHI = 0.6180339887498949;
+  let x1 = Math.floor(hi - (hi - lo) * INVPHI), x2 = Math.floor(hi - (hi - lo) * INVPHI * INVPHI);
+  for (let i = 0; i < 60 && hi - lo > 8; i++) {
+    const f1 = grossAt(BigInt(x1)), f2 = grossAt(BigInt(x2));
+    if (f1 < f2) { lo = x1; x1 = x2; x2 = lo + Math.floor((hi - lo) * INVPHI); }
+    else { hi = x2; x2 = x1; x1 = hi - Math.floor((hi - lo) * INVPHI); }
+  }
+  let bestG = -Infinity, bestX = 1n;
+  for (const s of [lo, x1, x2, hi]) { const g = grossAt(BigInt(Math.max(1, s))); if (g > bestG) { bestG = g; bestX = BigInt(Math.max(1, s)); } }
+  console.log(`[canary] theoretical argmax: gross_max=$${bestG.toFixed(2)} at borrow $${borrowUsd(bestX).toFixed(0)} (slip bound OFF)`);
 }
 
 // --------------------------------------------- real execute path (armed)

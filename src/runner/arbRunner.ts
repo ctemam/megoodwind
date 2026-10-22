@@ -269,7 +269,11 @@ async function main() {
     running.add(c.key);
     const t0 = performance.now();
     try { await cycle(c, rpcs.get(c.key)!, scheduler, discoveries.get(c.key)!); }
-    catch (e) { log.error(`${c.key} cycle`, e); }
+    catch (e) {
+      // WO-6 instrumentation: the bare object printed {} — log message+stack
+      const m = e instanceof Error ? `${e.message}${e.stack ? ' | ' + e.stack.split('\n')[1]?.trim() : ''}` : JSON.stringify(e);
+      log.error(`${c.key} cycle`, { error: m });
+    }
     finally { lastCycleMs.set(c.key, Math.round(performance.now() - t0)); running.delete(c.key); }
   };
 
