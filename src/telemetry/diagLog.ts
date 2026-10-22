@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync, existsSync, statSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync, existsSync, statSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { cfg } from '../config/index.js';
 
@@ -53,12 +53,17 @@ export function diagRecord(stage: string, row: Record<string, unknown>): void {
   } catch { /* diag never wedges the hot path */ }
 }
 
-/** Rewrite a stage file with the newest half of its rows. */
+/** Rewrite a stage file with the newest half of its rows — atomic via
+ *  temp+rename: a crash mid-compaction previously left the truncated
+ *  file as NUL padding (the file stays valid because the rename is the
+ *  only moment the path changes hands). */
 function compact(stage: string, file: string): void {
   try {
     const lines = readFileSync(file, 'utf8').split('\n').filter(Boolean);
     const keep = lines.slice(Math.floor(lines.length / 2));
-    writeFileSync(file, keep.join('\n') + '\n');
+    const tmp = file + '.tmp';
+    writeFileSync(tmp, keep.join('\n') + '\n');
+    renameSync(tmp, file);
     fileLines.set(stage, keep.length);
   } catch { /* best-effort */ }
 }
