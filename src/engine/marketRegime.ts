@@ -41,6 +41,13 @@ const STALE_MS = 120_000;     // pool state older than this counts illiquid
 
 const history = new Map<string, number[]>(); // chain:pool -> price ring
 
+/** memWatch sampler — total retained ring entries across all pools. */
+export function regimeHistorySize(): number {
+  let n = 0;
+  for (const r of history.values()) n += r.length;
+  return n;
+}
+
 function spotPrice(p: PoolState): number | null {
   if (p.kind === 'v3') {
     if (!p.sqrtPriceX96 || p.sqrtPriceX96 === 0n) return null;

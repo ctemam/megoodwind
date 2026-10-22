@@ -17,6 +17,7 @@ import { classifyMarketRegime } from '../engine/marketRegime.js';
 import { nextVariant, routeWhaleAlphaSignal } from '../engine/strategyRouter.js';
 import { emitSignal } from '../telemetry/signalSink.js';
 import { isOpStack, l1DataFeeWei, l1FeeScalars } from '../providers/l1Fee.js';
+import { startMemWatch } from '../telemetry/memWatch.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 /**
@@ -28,6 +29,9 @@ import { writeFileSync, mkdirSync } from 'node:fs';
  */
 
 const log = logger('runner');
+
+/** memWatch sampler — last completed cycle wall-time per chain (ms). */
+export const lastCycleMs = new Map<string, number>();
 
 // whale lane attribution: a whale-alpha event marks the chain 'whale'
 // for a short window — candidates emitted inside it carry lane='whale'
@@ -224,6 +228,7 @@ async function main() {
   await scout.start();
   await whale.start();
   startMetricsServer(() => scheduler.snapshot());
+  startMemWatch();
 
   // Discovery phase — on-chain factory matrix + token lists per chain
   const discoveries = new Map<string, Discovery>(
@@ -241,11 +246,14 @@ async function main() {
 
   const running = new Set<string>();
   const tick = async (c: ChainConfig) => {
-    if (running.has(c.key)) return;
+    // overlap guard: a tick that arrives while the previous cycle is
+    // still running is SKIPPED (counted) — never queued or doubled.
+    if (running.has(c.key)) { metrics.inc('runner_tick_skipped', { chain: c.key }); return; }
     running.add(c.key);
+    const t0 = performance.now();
     try { await cycle(c, rpcs.get(c.key)!, scheduler, discoveries.get(c.key)!); }
     catch (e) { log.error(`${c.key} cycle`, e); }
-    finally { running.delete(c.key); }
+    finally { lastCycleMs.set(c.key, Math.round(performance.now() - t0)); running.delete(c.key); }
   };
 
   for (const c of chains) {

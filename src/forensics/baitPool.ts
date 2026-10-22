@@ -69,6 +69,10 @@ export class TokenCircuitBreaker {
     return this.convicted.has(`${chain}:${pool.toLowerCase()}`);
   }
 
+  convictionCount(): number { return this.convicted.size; }
+  repCacheSize(): number { return this.repCache.size; }
+  volCheckedSize(): number { return this.volChecked.size; }
+
   convictions(chain?: ChainKey): Conviction[] {
     return [...this.convicted.values()].filter((c) => !chain || c.chain === chain);
   }

@@ -133,6 +133,8 @@ class Metrics {
     this.countersDirty = true;
   }
 
+  counterCount(): number { return this.counters.size; }
+
   /** Aggregate of a counter across all its label variants. */
   counterSum(name: string): number {
     let s = 0;

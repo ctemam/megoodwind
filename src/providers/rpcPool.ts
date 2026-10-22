@@ -174,6 +174,8 @@ export class RpcPool {
       for (let i = 0; i < this.members.length; i++) {
         const m = this.pick();
         const t0 = performance.now();
+        inFlight++;
+        if (inFlight > maxInFlight) maxInFlight = inFlight;
         try {
           const res = await Promise.race([
             m.provider.send(method, params),
@@ -195,6 +197,8 @@ export class RpcPool {
           if (fatal && this.aliveCount() > 1) { this.kill(m, fatal); continue; }
           if (isTransportError(e) || fatal) this.penalize(m, isRateLimit(e));
           else throw e; // deterministic payload errors are not transport faults
+        } finally {
+          inFlight--;
         }
       }
     }
@@ -272,6 +276,13 @@ const isDeadEndpoint = (e: unknown): string | null => {
 const hostOf = (url: string) => {
   try { return new URL(url).host; } catch { return url; }
 };
+
+let inFlight = 0;
+let maxInFlight = 0;
+/** memWatch sampler — live + peak concurrent RPC attempts across pools. */
+export function rpcPoolStats(): { inFlight: number; maxInFlight: number } {
+  return { inFlight, maxInFlight };
+}
 
 const pools = new Map<string, RpcPool>();
 export const poolFor = (chain: ChainConfig): RpcPool => {

@@ -39,6 +39,7 @@ export class ScoutListener extends EventEmitter {
     private rpcs: Map<string, RpcPool>,
   ) {
     super();
+    liveScouts.add(this);
   }
 
   async start(): Promise<void> {
@@ -108,5 +109,23 @@ export class ScoutListener extends EventEmitter {
     return rpc ? rpc.blockNumber() : 0;
   }
 
-  async stop() { await Promise.all(this.lanes.map((l) => l.stop())); }
+  /** memWatch sampler — pending-dedupe set sizes per chain. */
+  pendingSetSizes(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [k, s] of this.seenPending) out[k] = s.cur.size + s.prev.size;
+    return out;
+  }
+
+  async stop() { liveScouts.delete(this); await Promise.all(this.lanes.map((l) => l.stop())); }
 }
+
+/** Module-level sampler — sums across live ScoutListener instances. */
+export function pendingSetSizes(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const s of liveScouts) {
+    for (const [k, v] of Object.entries(s.pendingSetSizes())) out[k] = (out[k] ?? 0) + v;
+  }
+  return out;
+}
+
+const liveScouts = new Set<ScoutListener>();

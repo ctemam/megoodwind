@@ -59,6 +59,10 @@ const envSchema = z.object({
   // chainId is explicitly listed here (e.g. ARM_LIVE=1,56,137).
   // Missing or malformed (any non-integer token) => disarmed everywhere.
   ARM_LIVE: z.string().optional(),
+  // memory telemetry — 30s process.memoryUsage + structure sizes jsonl,
+  // and comma-separated minute marks for programmatic heap snapshots
+  MEM_WATCH: boolEnv(false),
+  HEAP_SNAP_MINUTES: z.string().default('5,15,25'),
   MIN_PROFIT_USD: z.coerce.number().default(5),
   // USD-target flash borrow before per-path right-sizing (emit() shrinks
   // it to the slippage bound and the variant's sizeCapUsd)
