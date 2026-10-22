@@ -127,6 +127,13 @@ export function poolDepthUsd(
  *  top-liquidity pairs are fake — the pool is lying about reserves. */
 export const CREDIBILITY_CEILING_PCT = 2.0;
 
+/** WO-5 gas-aware gate — reject when the gross edge doesn't clear K×gas.
+ *  Boundary: gross == K×gas PASSES (strict less-than), gas<=0 passes
+ *  (zero-fee chains can't be starved by the gate). */
+export function belowGasMultiple(grossUsd: number, gasUsd: number, k: number): boolean {
+  return gasUsd > 0 && grossUsd < k * gasUsd;
+}
+
 export function spreadPct(amountOut: bigint, amountIn: bigint, sameDecimals = true): number {
   if (amountIn <= 0n || !sameDecimals) return 0;
   return ((Number(amountOut) - Number(amountIn)) / Number(amountIn)) * 100;

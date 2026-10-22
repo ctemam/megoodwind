@@ -40,8 +40,14 @@ const SMART = ethers.getAddress('0x663050be401f590e8e2c3f01f05536948275015b');
 // the canary deploys the current build instead (see EXECUTOR_DEPLOYED).
 const ECDSA_VALIDATOR = ethers.getAddress('0x845adb2c711129d4f3966735ed98a9f09fc4ce57');
 const EP07 = ethers.getAddress('0x0000000071727de22e5e9d8baf0edac6f37da032');
+const USDT = ethers.getAddress('0xdac17f958d2ee523a2206206994597c13d831ec7');
 // canonical real pairs on this fork's mainnet — PAIR_EXISTS means the
 // factories already route them; we skew liquidity, not the venue.
+const PAIR_WETH_USDC_UNI = ethers.getAddress('0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc');
+const PAIR_WETH_USDC_SUSHI = ethers.getAddress('0x397FF1542f962076d0BFE58eA045FfA2d347ACa0');
+const PAIR_USDC_USDT_UNI = ethers.getAddress('0x3041CbD36888bECc7bbCBc0045E3B1f144466f5f');
+const PAIR_WETH_USDT_UNI = ethers.getAddress('0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852');
+const TRI_MODE = process.argv.includes('--tri');
 
 const THROWAWAY = ethers.Wallet.createRandom().privateKey;
 assertThrowawayKey(THROWAWAY, [SMART]);
@@ -97,7 +103,7 @@ process.env.CANARY_SELF_PAY = '1';
 process.env.PRIVATE_KEY = THROWAWAY;
 process.env.SMART_ACCOUNT_ADDRESS = SMART;
 process.env.PIMLICO_API_KEY = 'canary';
-process.env.STRATEGIES = 'P01';
+process.env.STRATEGIES = process.env.CANARY_STRATEGIES ?? 'P01';
 process.env.DIAG_ONLY = '0';
 process.env.PROFIT_WALLET = eoa;
 
@@ -143,70 +149,78 @@ console.log(`[canary] entrypoint deposit ${ethers.formatEther(await ep.balanceOf
 
 // ------------------------------------------------------- synthetic market
 const NATIVE_USD = cfg.NATIVE_USD;
-// $25M per side: the dynamic slippage bound (10bps at BALANCED) clips
-// borrow to ~vIn×5e-4 — $600k pools cap borrow near $300 (gross < gas,
-// the same min_profit_floor starvation seen live). $25M lets the honest
-// $10k FLASH_BORROW_USD size pass every gate untouched.
-const USD_SIDE = 25_000_000;
-const mkpair = async (factory: string, usd: number, wethUsd: number) => {
-  const f = new ethers.Contract(factory, ['function createPair(address,address) returns (address)', 'function getPair(address,address) view returns (address)'], wallet);
-  try { await (await f.createPair(USDC, WETH)).wait(); } catch { /* pair may exist */ }
-  return f.getPair(USDC, WETH) as Promise<string>;
-};
-const pairA = await mkpair(UNIV2_FACTORY, USD_SIDE, USD_SIDE);
-const pairB = await mkpair(SUSHIV2_FACTORY, USD_SIDE, USD_SIDE * (1 + SPREAD_PCT / 100));
-console.log(`[canary] pairs A(uni)=${pairA} B(sushi)=${pairB}`);
+// $25M per side default: the dynamic slippage bound (10bps at BALANCED)
+// clips borrow to ~vIn×5e-4 — $600k pools cap borrow near $300 (gross <
+// gas, the same starvation seen live). Study runs vary CANARY_DEPTH_USD.
+const USD_SIDE = Number(process.env.CANARY_DEPTH_USD ?? 25_000_000);
 
-// fund EXACT balances via storage writes on BOTH tokens (WETH balanceOf
-// is mapping slot 3 on mainnet WETH9). Writing token balances then sync()
-// makes the pair reserves deterministic — real pre-existing liquidity on
-// these canonical pairs distorted the skew when we only added on top.
-const wethIface = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
-const usdcIface = new ethers.Interface(['function transfer(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)']);
+// generic balance-write helpers — discover each token's balances-mapping
+// slot by probing against balanceOf on the throwaway, then write exact
+// pool balances + sync() so reserves are deterministic.
+const ercIface = new ethers.Interface(['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)']);
+const tokBalOf = (token: string, a: string) =>
+  provider.call({ to: token, data: ercIface.encodeFunctionData('balanceOf', [a]) }).then((r) => (r && r !== '0x' ? BigInt(r) : 0n));
+const decOfTok = (token: string) =>
+  provider.call({ to: token, data: ercIface.encodeFunctionData('decimals', []) }).then((r) => Number(BigInt(r)));
 const setBal = async (token: string, slot: number, acct: string, amt: bigint) => {
   const sl = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['address', 'uint256'], [acct, slot]));
   await rpc('anvil_setStorageAt', [token, sl, ethers.zeroPadValue(ethers.toBeHex(amt), 32)]);
 };
-// pool A: WETH priced at NATIVE_USD. pool B: WETH priced ×(1+spread) —
-// i.e. fewer WETH per USDC. Arb: buy WETH on A, sell on B.
-const wethResA = ethers.parseUnits((USD_SIDE / NATIVE_USD).toFixed(8), 18);
-const wethResB = ethers.parseUnits((USD_SIDE / (NATIVE_USD * (1 + SPREAD_PCT / 100))).toFixed(8), 18);
+const findSlot = async (token: string, amt: bigint) => {
+  for (let s = 0; s < 60; s++) {
+    await setBal(token, s, eoa, amt);
+    if ((await tokBalOf(token, eoa)) === amt) return s;
+  }
+  throw new Error(`${token} balances slot not found`);
+};
 
-// USDC funding via direct storage write: discover the balances-mapping
-// slot by probing candidate slots against balanceOf, then write the two
-// pair balances + sync. (No whale large enough exists on this fork's USDC.)
-const usdcBalOf = (a: string) =>
-  provider.call({ to: USDC, data: usdcIface.encodeFunctionData('balanceOf', [a]) }).then((r) => (r && r !== '0x' ? BigInt(r) : 0n));
-let balSlot = -1;
-const probeAddr = eoa; // write into throwaway, verify via balanceOf
-const target = BigInt(USD_SIDE) * 10n ** 6n;
-for (let s = 0; s < 40 && balSlot < 0; s++) {
-  const sl = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['address', 'uint256'], [probeAddr, s]));
-  await rpc('anvil_setStorageAt', [USDC, sl, ethers.zeroPadValue(ethers.toBeHex(target), 32)]);
-  if ((await usdcBalOf(probeAddr)) === target) balSlot = s;
+const usdAmt = (BigInt(Math.floor(USD_SIDE)) * 10n ** 6n);
+const wethFair = ethers.parseUnits((USD_SIDE / NATIVE_USD).toFixed(8), 18);
+const wethSkew = ethers.parseUnits((USD_SIDE / (NATIVE_USD * (1 + SPREAD_PCT / 100))).toFixed(8), 18);
+
+// market spec: token-balance writes per pair (fair side + skewed side).
+// P01 lane: two WETH/USDC pools, B skewed. TRI lane: USDC/USDT 1:1 +
+// WETH/USDT fair + WETH/USDC skewed → a P02 triangle exists.
+const MARKET: { pair: string; writes: [string, bigint][] }[] = TRI_MODE
+  ? [
+      { pair: PAIR_USDC_USDT_UNI, writes: [[USDC, usdAmt], [USDT, usdAmt]] },
+      { pair: PAIR_WETH_USDT_UNI, writes: [[USDT, usdAmt], [WETH, wethFair]] },
+      { pair: PAIR_WETH_USDC_UNI, writes: [[USDC, usdAmt], [WETH, wethSkew]] },
+    ]
+  : [
+      { pair: PAIR_WETH_USDC_UNI, writes: [[USDC, usdAmt], [WETH, wethFair]] },
+      { pair: PAIR_WETH_USDC_SUSHI, writes: [[USDC, usdAmt], [WETH, wethSkew]] },
+    ];
+
+const slots = new Map<string, number>();
+for (const t of [USDC, USDT]) {
+  if (MARKET.some((m) => m.writes.some(([tk]) => tk === t))) {
+    const s = await findSlot(t, usdAmt);
+    slots.set(t, s);
+    console.log(`[canary] ${t.slice(0, 8)}… balances slot = ${s}`);
+  }
 }
-if (balSlot < 0) throw new Error('USDC balances slot not found in 40 slots');
-console.log(`[canary] usdc balances slot = ${balSlot}`);
-for (const [pair, wethRes] of [[pairA, wethResA], [pairB, wethResB]] as const) {
-  await setBal(USDC, balSlot, pair, target);
-  await setBal(WETH, 3, pair, wethRes); // WETH9 balanceOf mapping slot 3
-}
+slots.set(WETH, 3); // WETH9 balanceOf mapping slot
+for (const m of MARKET) for (const [tk, amt] of m.writes) await setBal(tk, slots.get(tk)!, m.pair, amt);
+
 const pairAbi = ['function sync()', 'function getReserves() view returns (uint112,uint112,uint32)', 'function token0() view returns (address)', 'function token1() view returns (address)'];
-for (const p of [pairA, pairB]) await (await new ethers.Contract(p, pairAbi, wallet).sync()).wait();
-// report the realized price spread (existing liquidity may shift it)
-const pa = new ethers.Contract(pairA, pairAbi, provider);
-const pb = new ethers.Contract(pairB, pairAbi, provider);
-const [ra0, ra1] = await pa.getReserves(); const [rb0, rb1] = await pb.getReserves();
-const px = (u: bigint, w: bigint) => (Number(u) / 1e6) / (Number(w) / 1e18);
-const pA = px(ra0, ra1), pB = px(rb0, rb1);
-const realSpread = (Math.max(pA, pB) / Math.min(pA, pB) - 1) * 100;
-console.log(`[canary] realized prices: A=$${pA.toFixed(2)}/WETH B=$${pB.toFixed(2)}/WETH spread=${realSpread.toFixed(2)}%`);
+const poolDefs: { pair: string; dexId: string; token0: string; token1: string; dec0: number; dec1: number; r0: bigint; r1: bigint }[] = [];
+for (const m of MARKET) {
+  const pc = new ethers.Contract(m.pair, pairAbi, wallet);
+  await (await pc.sync()).wait();
+  const [token0, token1, [r0, r1]] = await Promise.all([pc.token0(), pc.token1(), pc.getReserves()]);
+  poolDefs.push({ pair: m.pair, dexId: 'univ2', token0, token1, dec0: await decOfTok(token0), dec1: await decOfTok(token1), r0, r1 });
+  console.log(`[canary] ${m.pair} t0=${token0.slice(0, 10)} t1=${token1.slice(0, 10)} r0=${r0} r1=${r1}`);
+}
+// realized WETH price from the skewed pair vs the fair WETH/USDT leg
+const pxW = (rUsd: bigint, rW: bigint, ud: number) => (Number(rUsd) / 10 ** ud) / (Number(rW) / 1e18);
+console.log(`[canary] market wired (${TRI_MODE ? 'P02 triangle' : 'P01 pair'}), spread target ${SPREAD_PCT}%`);
 
 // ------------------------------------------------------- registry + solve
 const rpcPool = poolFor(chain);
-const state = (p: string, dexId: string) =>
-  registry.upsert({ address: p, chain: 'canary', dexId, kind: 'v2', token0: USDC, token1: WETH, symbol0: 'USDC', symbol1: 'WETH', dec0: 6, dec1: 18, feeBps: 30, liquidityUsd: USD_SIDE * 2 });
-const pools = [state(pairA, 'uniswap'), state(pairB, 'sushiswap')];
+const symOf = (t: string) => (t.toLowerCase() === WETH.toLowerCase() ? 'WETH' : t.toLowerCase() === USDT.toLowerCase() ? 'USDT' : 'USDC');
+const pools = poolDefs.map((d) =>
+  registry.upsert({ address: d.pair, chain: 'canary', dexId: d.dexId, kind: 'v2', token0: d.token0, token1: d.token1, symbol0: symOf(d.token0), symbol1: symOf(d.token1), dec0: d.dec0, dec1: d.dec1, feeBps: 30, liquidityUsd: USD_SIDE * 2 }));
 await refreshPools(rpcPool, pools);
 for (const p of pools) console.log(`[canary] ${p.dexId} ${p.address} r0=${p.reserve0} r1=${p.reserve1}`);
 
@@ -214,19 +228,32 @@ const sizeOf = (token: string, dec: number): bigint => {
   const px = token.toLowerCase() === WETH.toLowerCase() ? NATIVE_USD : 1;
   return (BigInt(Math.floor((cfg.FLASH_BORROW_USD / px) * 1e6)) * 10n ** BigInt(dec)) / 10n ** 6n;
 };
-const tokenUsd = new Map([[USDC.toLowerCase(), 1], [WETH.toLowerCase(), NATIVE_USD]]);
+const tokenUsd = new Map([[USDC.toLowerCase(), 1], [USDT.toLowerCase(), 1], [WETH.toLowerCase(), NATIVE_USD]]);
 const block = await provider.getBlock('latest');
+// flash-liquidity cap input for SIZING_MODE=optimal — the Balancer
+// vault's real borrow-side balance on the fork (non-binding here but
+// the cap path is exercised).
+const BALANCER_VAULT = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
+const balIface2 = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
+const flashLiquidityRaw = BigInt(await provider.call({ to: WETH, data: balIface2.encodeFunctionData('balanceOf', [BALANCER_VAULT]) }));
+console.log(`[canary] balancer vault WETH balance ${ethers.formatEther(flashLiquidityRaw)}`);
 const opts = {
   gasUnits: 450_000n, baseFeeWei: block!.baseFeePerGas ?? 10n ** 9n, l1DataFeeWei: 0n,
   lane: 'predictive' as const, tokenUsd, sizeOf, nativeUsd: NATIVE_USD,
   priorityFeeWei: BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
+  flashLiquidityRaw,
 };
 
 const scheduler = new VariantScheduler();
 let cand: import('../../src/strategies/solver.js').Candidate | null = null;
 for (const v of VARIANTS) {
   const c = solve(chain, v, opts);
-  if (c.length) { cand = c.sort((a, b) => b.netUsd - a.netUsd)[0]; console.log(`[canary] candidate via ${v.id}: net $${cand.netUsd.toFixed(2)} spread ${cand.spreadPct.toFixed(2)}% borrow ${ethers.formatUnits(cand.borrowAmount, 6)} USDC`); break; }
+  if (c.length) {
+    cand = c.sort((a, b) => b.netUsd - a.netUsd)[0];
+    const bd = cand.legs[0].pool.token0.toLowerCase() === cand.borrowToken.toLowerCase() ? cand.legs[0].pool.dec0 : cand.legs[0].pool.dec1;
+    console.log(`[canary] candidate via ${v.id}: net $${cand.netUsd.toFixed(2)} gross $${cand.grossUsd.toFixed(2)} gas $${cand.gasUsd.toFixed(2)} spread ${cand.spreadPct.toFixed(2)}% impact ${cand.impactBps.toFixed(1)}bps borrow ${ethers.formatUnits(cand.borrowAmount, bd)} ${cand.borrowToken === WETH ? 'WETH' : 'USDC'} (mode=${cfg.SIZING_MODE})`);
+    break;
+  }
   console.log(`[canary] ${v.id}: no candidate`);
 }
 if (!cand) { console.log('[canary] RESULT: no candidate — gate rejection (see counters)'); console.log(JSON.stringify(metrics.snapshot(), null, 1)); process.exit(2); }

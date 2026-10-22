@@ -108,6 +108,12 @@ const envSchema = z.object({
   // Both are diagnostics-only; never set these in production.
   BUNDLER_URL: z.string().optional(),
   CANARY_SELF_PAY: boolEnv('CANARY_SELF_PAY', false),
+  // WO-5 cost model: per-route gas safety margin, gas-multiple floor K
+  // (gross < K×gasUsd → reject), and the borrow-sizing lane switch.
+  GAS_MARGIN_BPS: z.coerce.number().int().nonnegative().default(1000),
+  GAS_PROFIT_MULT: z.coerce.number().positive().default(1.5),
+  SIZING_MODE: z.enum(['bound', 'optimal']).default('bound'),
+  OPTIMAL_RESERVE_FRAC: z.coerce.number().positive().max(0.5).default(0.05),
   RPC_PRIVATE_CHAINS: z.string().default(''),
 
   // Discovery engine — automated multi-chain expansion (no manual registration)

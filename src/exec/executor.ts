@@ -4,11 +4,13 @@ import { RpcPool } from '../providers/rpcPool.js';
 import { Candidate } from '../strategies/solver.js';
 import { buildPlan } from './planBuilder.js';
 import { pickFlashSource, flashPremium } from './flashVenues.js';
-import { baseFeeOk, execProbe } from './verify.js';
+import { baseFeeOk, execProbe, gasProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
 import { sendUserOpViaFlashbots } from './privateRoute.js';
 import { flashbotsAvailable } from './flashbots.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
+import { routeGasUnits } from './gasModel.js';
+import { diagRecord } from '../telemetry/diagLog.js';
 import { metrics } from '../telemetry/metrics.js';
 import { VariantScheduler } from '../engine/predictiveEngine.js';
 import { refreshPools } from '../feed/refresh.js';
@@ -91,6 +93,30 @@ export async function executeCandidate(
   }
   for (const l of cand.legs) breaker.recordProbe(chain.key, l.pool.address, false);
   metrics.inc('arb_probe_pass_total', { chain: chain.key });
+
+  // WO-5: where gasProbe returns a live estimateGas for THIS execData,
+  // prefer it over the route-table constant — re-check economics with
+  // measured gas before spending a slot. Margin applied to the estimate
+  // so a noisy est can't slide a marginal path through.
+  const gp = await gasProbe(rpc, cfg.SMART_ACCOUNT_ADDRESS, chain.executor!, execData);
+  if (gp !== null) {
+    const modelUnits = routeGasUnits(cand.legs, cfg.GAS_MARGIN_BPS);
+    const estUnits = (gp * (10_000n + BigInt(cfg.GAS_MARGIN_BPS))) / 10_000n;
+    const prio = BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9));
+    const estGasUsd = (Number(estUnits * (fee.baseFeeWei + prio)) / 1e18) * cfg.NATIVE_USD;
+    const estNet = cand.grossUsd - cand.premiumUsd - estGasUsd;
+    if (cfg.DIAG_ONLY) diagRecord('gas_model_vs_estimate', {
+      chain: chain.key, path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>'),
+      modelUnits: modelUnits.toString(), estimate: gp.toString(),
+      modelGasUsd: cand.gasUsd, estGasUsd, estNetUsd: estNet, solverNetUsd: cand.netUsd,
+    });
+    const floorUsd = Math.max(cfg.MIN_PROFIT_USD, cand.lane === 'whale' ? cfg.WHALE_MIN_PROFIT_USD : cfg.PREDICTIVE_MIN_PROFIT_USD);
+    if (estNet < floorUsd) {
+      metrics.inc('exec_gas_recheck_reject', { chain: chain.key });
+      log.warn(`gas re-check kill ${cand.strategy} ${chain.key} estNet $${estNet.toFixed(2)} < floor $${floorUsd}`);
+      return;
+    }
+  }
 
   if (!armedFor(chain.chainId)) {
     metrics.inc('arb_shadow_emit_total', { chain: chain.key, strategy: cand.strategy });

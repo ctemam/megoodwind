@@ -2,7 +2,7 @@ import { ChainConfig, cfg } from '../config/index.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { v2AmountOut } from '../math/univ2.js';
 import { v3SpotPrice, tickDistanceOk } from '../math/univ3.js';
-import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps, poolDepthUsd, inputVirtualReserveRaw } from '../math/profit.js';
+import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps, poolDepthUsd, inputVirtualReserveRaw, belowGasMultiple } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards, dynamicSlippageBps } from '../engine/predictiveEngine.js';
 import { MarketRegime } from '../engine/marketRegime.js';
@@ -11,6 +11,7 @@ import { metrics, Lane } from '../telemetry/metrics.js';
 import { diagRecord } from '../telemetry/diagLog.js';
 import { buildEdges, findCycles } from './graph.js';
 import { pickFlashSource, flashPremium } from '../exec/flashVenues.js';
+import { routeGasUnits } from '../exec/gasModel.js';
 
 /**
  * Strategy solver — CPU-eval ALL items before any RPC.
@@ -44,6 +45,10 @@ export interface Candidate {
   slipBoundBps: number;
   /** lane floor in borrowToken units — on-chain minProfit enforcement */
   minProfitToken: bigint;
+  /** solver-model economics at the chosen size (for gas re-check) */
+  grossUsd: number;
+  gasUsd: number;
+  premiumUsd: number;
 }
 
 const log = logger('solver');
@@ -143,6 +148,7 @@ function emit(
   slipBoundBps = cfg.SLIPPAGE_BPS,
   nativeUsd = cfg.NATIVE_USD,
   priorityFeeWei = BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
+  extra?: { flashLiquidityRaw?: bigint },
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
   const decBorrow = decOf(legs[0].pool, borrowToken);
@@ -167,21 +173,32 @@ function emit(
     const cap = BigInt(Math.floor((capUsd / tokenUsd) * 10 ** decBorrow));
     if (cap > 0n && cap < boundMax) boundMax = cap;
   }
+  // WO-5 optimal-lane caps: (b) fraction of the leg-0 input reserve,
+  // (a) the flash venue's available balance when the caller supplies it.
+  if (cfg.SIZING_MODE === 'optimal') {
+    if (vIn > 0) {
+      const rc = BigInt(Math.floor(Number(vIn) * cfg.OPTIMAL_RESERVE_FRAC));
+      if (rc > 0n && rc < boundMax) boundMax = rc;
+    }
+    if (extra?.flashLiquidityRaw && extra.flashLiquidityRaw > 0n && extra.flashLiquidityRaw < boundMax) {
+      boundMax = extra.flashLiquidityRaw;
+    }
+  }
   if (boundMax <= 0n) { metrics.inc('rejected_by_profit_margin', { reason: 'size_zero' }); return null; }
 
   // ARGMAX BORROW SEARCH — a static size is a decorative answer to a
   // dynamic question. Impact grows with size while the venue spread is
   // size-agnostic at screening fidelity, so a path impact-dead at the
-  // bound-max clip can be net-positive smaller. Sweep a geometric
-  // ladder and emit the size with the best honest net — every point is
-  // real leg simulation + real premium + real gas, not a heuristic.
+  // bound-max clip can be net-positive smaller. Two lanes:
+  //   bound   — geometric SIZE_RATIOS ladder (existing behavior)
+  //   optimal — golden-section argmax on netUsd over [1, boundMax]
+  // Every point is real leg simulation + real premium + real gas.
   const SIZE_RATIOS = [1, 0.25, 0.0625, 0.015625];
   const pathSig = legs.map((l) => l.pool.address.toLowerCase()).join('>');
   const flSource = pickFlashSource(chain.key, borrowToken);
+  const gUnits = routeGasUnits(legs, cfg.GAS_MARGIN_BPS);
   let sawSpread = false, sawImpactOver = false;
-  let best = null;
-  for (const r of SIZE_RATIOS) {
-    const sz = BigInt(Math.max(1, Math.floor(Number(boundMax) * r)));
+  const evalSize = (sz: bigint) => {
     let out = sz;
     let impactBps = 0;
     for (const leg of legs) {
@@ -190,13 +207,13 @@ function emit(
       if (out <= 0n) break;
     }
     metrics.notePathImpact(chain.key, impactBps);
-    if (out <= sz) continue;                 // no venue spread at this size
+    if (out <= sz) return null;
     sawSpread = true;
-    if (impactBps > slipBoundBps) { sawImpactOver = true; continue; }
+    if (impactBps > slipBoundBps) { sawImpactOver = true; return null; }
     const sp = spreadPct(out, sz);
     if (sp > CREDIBILITY_CEILING_PCT) {
       metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
-      if (cfg.DIAG_ONLY) diagRecord('gap_above_ceiling', { chain: chain.key, path: pathSig, spreadPct: sp, sizeRatio: r });
+      if (cfg.DIAG_ONLY) diagRecord('gap_above_ceiling', { chain: chain.key, path: pathSig, spreadPct: sp, size: sz.toString() });
       // >~2% = a pool is lying about reserves. Convict ONLY legs whose
       // spot quote diverges >3x from same-pair peers — blaming every leg
       // convicts honest pools that merely routed through the liar.
@@ -208,38 +225,88 @@ function emit(
         }
       }
       if (!convicted) log.debug('spread ' + sp.toFixed(0) + '% with no divergent leg — unattributed, no conviction');
-      return null;
+      return 'ceiling' as const;
     }
     const premium = flashPremium(flSource, sz);
     const n = netUsd({
-      gasUnits, baseFeeWei, l1DataFeeWei, priorityFeeWei,
+      gasUnits: gUnits, baseFeeWei, l1DataFeeWei, priorityFeeWei,
       flashPremiumToken: premium,
       grossOutToken: out, borrowInToken: sz, tokenUsd,
       tokenDec: decBorrow, nativeUsd, chain: chain.key,
     });
-    if (!best || n.netUsd > best.netUsd) {
-      best = { borrow: sz, out, impactBps, sp, netUsd: n.netUsd, premium, n };
+    return { borrow: sz, out, impactBps, sp, netUsd: n.netUsd, premium, n };
+  };
+  type SizeEval = Exclude<ReturnType<typeof evalSize>, null | 'ceiling'>;
+  let best: SizeEval | null = null;
+  const consider = (sz: bigint) => {
+    const r = evalSize(sz);
+    if (r === 'ceiling') return 'ceiling' as const;
+    if (r && (!best || r.netUsd > best.netUsd)) best = r;
+    return null;
+  };
+  let ceilingHit = false;
+  if (cfg.SIZING_MODE === 'optimal') {
+    // golden-section argmax — netUsd(x) is unimodal for constant-product
+    // round-trips (fee-favored below breakeven, impact-penalized above).
+    let lo = 0, hi = Number(boundMax);
+    const INVPHI = 0.6180339887498949;
+    let x1 = hi - Math.floor((hi - lo) * INVPHI);
+    let x2 = lo + Math.floor((hi - lo) * INVPHI);
+    const N = (s: number) => {
+      const r = evalSize(BigInt(Math.max(1, Math.floor(s))));
+      if (r === 'ceiling') { ceilingHit = true; return -Infinity; }
+      if (r && (!best || r.netUsd > best.netUsd)) best = r;
+      return r ? r.netUsd : -Infinity;
+    };
+    let f1 = N(x1), f2 = N(x2);
+    for (let i = 0; i < 40 && hi - lo > 4; i++) {
+      if (f1 < f2) { lo = x1; x1 = x2; f1 = f2; x2 = lo + Math.floor((hi - lo) * INVPHI); f2 = N(x2); }
+      else { hi = x2; x2 = x1; f2 = f1; x1 = hi - Math.floor((hi - lo) * INVPHI); f1 = N(x1); }
+    }
+    for (const s of [lo, x1, x2, hi]) consider(BigInt(Math.max(1, Math.floor(s))));
+  } else {
+    for (const r of SIZE_RATIOS) {
+      if (consider(BigInt(Math.max(1, Math.floor(Number(boundMax) * r)))) === 'ceiling') ceilingHit = true;
     }
   }
-  const econ = best ? {
-    grossUsd: best.n.grossUsd, gasUsd: best.n.gasUsd, premiumUsd: best.n.premiumUsd,
-    bribeUsd: best.n.bribeUsd, preBribeUsd: best.n.grossUsd - best.n.gasUsd - best.n.premiumUsd,
-    netUsd: best.netUsd,
+  if (ceilingHit) return null;
+  // closure-assigned — TS can't narrow it; rebind to a definite alias.
+  const b = best as SizeEval | null;
+  const econ = b ? {
+    grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, premiumUsd: b.n.premiumUsd,
+    bribeUsd: b.n.bribeUsd, preBribeUsd: b.n.grossUsd - b.n.gasUsd - b.n.premiumUsd,
+    netUsd: b.netUsd,
   } : {};
   if (!sawSpread) {
     metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' });
     if (cfg.DIAG_ONLY) diagRecord('no_spread', { chain: chain.key, path: pathSig, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length });
     return null;
   }
-  if (!best) {
+  if (!b) {
     metrics.inc('rejected_by_profit_margin', { reason: sawImpactOver ? 'price_impact' : 'no_spread' });
     if (cfg.DIAG_ONLY) diagRecord(sawImpactOver ? 'price_impact' : 'no_spread', {
       chain: chain.key, path: pathSig, slipBoundBps, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length,
     });
     return null;
   }
-  const { borrow, out, impactBps, sp } = best;
-  const flPremiumToken = best.premium;
+  const { borrow, out, impactBps, sp } = b;
+  const flPremiumToken = b.premium;
+  // WO-5 gas-aware gate: gross edge must clear K×gas cost at the chosen
+  // size — a path whose edge only exists inside the gas model's error
+  // bars is not a path worth a UserOp. Stage named below_gas_multiple.
+  const gasK = cfg.GAS_PROFIT_MULT;
+  if (belowGasMultiple(b.n.grossUsd, b.n.gasUsd, gasK)) {
+    metrics.inc('rejected_by_profit_margin', { reason: 'below_gas_multiple' });
+    if (cfg.DIAG_ONLY) diagRecord('below_gas_multiple', {
+      chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
+      borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
+      spreadPct: sp, impactBps,
+      grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, mult: gasK,
+      ratio: b.n.gasUsd > 0 ? b.n.grossUsd / b.n.gasUsd : Infinity,
+      premiumUsd: b.n.premiumUsd, netUsd: b.netUsd,
+    });
+    return null;
+  }
   // STRICT_PROFIT_FLOOR_GUARD — lane floor = max(global min, lane floor).
   // Whale-triggered paths carry a higher bar ($25 default): competition
   // is fiercest right after a whale reprices a venue.
@@ -247,9 +314,9 @@ function emit(
     cfg.MIN_PROFIT_USD,
     lane === 'whale' ? cfg.WHALE_MIN_PROFIT_USD : cfg.PREDICTIVE_MIN_PROFIT_USD,
   );
-  if (cfg.STRICT_PROFIT_FLOOR_GUARD && best.netUsd < floorUsd) {
+  if (cfg.STRICT_PROFIT_FLOOR_GUARD && b.netUsd < floorUsd) {
     metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
-    metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: best.netUsd, floorUsd });
+    metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: b.netUsd, floorUsd });
     if (cfg.DIAG_ONLY) diagRecord('min_profit_floor', {
       chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
       borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
@@ -265,7 +332,7 @@ function emit(
     spreadPct: sp, impactBps, slipBoundBps, floorUsd,
     ...(econ as Record<string, unknown>),
   });
-  metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: best.netUsd, floorUsd });
+  metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: b.netUsd, floorUsd });
   // stream the ACTIVE on-chain barrier — minOut = repay + premium
   // (+ floor on whale lane), in USD terms, for the cockpit
   const toUsd = (amt: bigint) => (Number(amt) / 10 ** decBorrow) * tokenUsd;
@@ -280,8 +347,9 @@ function emit(
   const minProfitToken = BigInt(Math.floor((floorUsd / tokenUsd) * 10 ** decBorrow));
   return {
     strategy, chain, legs, borrowToken, borrowAmount: borrow, simOut: out,
-    spreadPct: sp, netUsd: best.netUsd, variant: v, lane,
+    spreadPct: sp, netUsd: b.netUsd, variant: v, lane,
     impactBps, slipBoundBps, minProfitToken,
+    grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, premiumUsd: b.n.premiumUsd,
   };
 }
 
@@ -289,7 +357,7 @@ function emit(
 export function solve(
   chain: ChainConfig,
   v: Variant,
-  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint; nativeUsd?: number; priorityFeeWei?: bigint },
+  opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint; nativeUsd?: number; priorityFeeWei?: bigint; flashLiquidityRaw?: bigint },
 ): Candidate[] {
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
@@ -354,7 +422,7 @@ export function solve(
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
             if (usd === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }));
           }
         }
       }
@@ -392,7 +460,7 @@ export function solve(
             const usdA = opts.tokenUsd.get(a);
             if (usdA === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(a, decOf(p1, a));
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei);
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw });
             push(cnd);
           }
         }
@@ -410,7 +478,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }));
   }
 
   // adaptive-depth update — zero emits + depth rejections → decay the
