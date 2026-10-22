@@ -142,16 +142,20 @@ export class TokenCircuitBreaker {
     }
 
     if (p.kind === 'v3' && p.feeBps && !V3_SANE_TIERS.has(p.feeBps * 100)) {
-      return { ok: false, reason: `fee_outside_sane_tiers:${p.feeBps}` };
+      return { ok: false, reason: 'fee_outside_sane_tiers' };
     }
 
     // peer divergence: >3x vs median of tracked same-pair pools.
     // Physically-impossible divergence (>=1000x) is corrupt state, not a
     // depeg — convict permanently instead of re-screening it every cycle.
+    // Reasons are metric labels — the raw div value must NOT be embedded
+    // (each distinct value mints a new counter key: unbounded cardinality
+    // grows the counters map, the persisted JSON, and every /api/metrics
+    // snapshot). Severity survives in bounded buckets.
     const div = peerDivergence(chain, p);
     if (div > 3) {
       if (div >= 1000) this.convict(chain, p.address, `corrupt_price_state_${div.toExponential(1)}x`);
-      return { ok: false, reason: `peer_divergence_${div.toFixed(1)}x` };
+      return { ok: false, reason: `peer_divergence_${divBucket(div)}` };
     }
     return { ok: true };
   }
@@ -161,6 +165,10 @@ export class TokenCircuitBreaker {
     return simulatedSpreadPct > CREDIBILITY_CEILING_PCT;
   }
 }
+
+/** Bounded severity buckets for the divergence metric label. */
+const divBucket = (d: number): string =>
+  d >= 1e6 ? 'ge1e6' : d >= 1e3 ? 'ge1e3' : d >= 1e2 ? 'ge1e2' : d >= 1e1 ? 'ge1e1' : 'ge3';
 
 /** Divergence ratio vs median of tracked same-pair peers (1 = aligned). */
 export function peerDivergence(chain: ChainKey, p: PoolState): number {

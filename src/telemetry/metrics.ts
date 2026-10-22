@@ -50,6 +50,8 @@ export interface SlippageState {
 }
 
 class Metrics {
+  /** Counter-key cardinality ceiling — beyond this, new label combos fold into `other`. */
+  private static readonly MAX_COUNTER_KEYS = 10_000;
   private counters = new Map<string, number>();
   private settled: SettledRecord[] = [];
   private file = join(process.cwd(), 'data', 'settled.json');
@@ -118,7 +120,16 @@ class Metrics {
 
   inc(name: string, labels: Record<string, string> = {}) {
     const k = `${name}|${JSON.stringify(labels)}`;
-    this.counters.set(k, (this.counters.get(k) ?? 0) + 1);
+    // Cardinality guard — a label that interpolates a measured value
+    // (e.g. peer_divergence_2514.9x) mints a new key per observation and
+    // the map grows without bound; persisted + served on /api/metrics,
+    // it is a memory + payload leak. Fold overflow keys into `other`.
+    if (!this.counters.has(k) && this.counters.size >= Metrics.MAX_COUNTER_KEYS) {
+      const fold = `${name}|{"reason":"other"}`;
+      this.counters.set(fold, (this.counters.get(fold) ?? 0) + 1);
+    } else {
+      this.counters.set(k, (this.counters.get(k) ?? 0) + 1);
+    }
     this.countersDirty = true;
   }
 
