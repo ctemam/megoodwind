@@ -12,3 +12,5 @@ data/rpc_registry.json
 logs/
 data/heapsnaps/
 data/mem_telemetry.jsonl
+data/metrics_counters*.json
+data/diag_signals.jsonl

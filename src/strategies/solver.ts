@@ -8,6 +8,7 @@ import { Variant, effectiveGuards, dynamicSlippageBps } from '../engine/predicti
 import { MarketRegime } from '../engine/marketRegime.js';
 import { logger } from '../config/logger.js';
 import { metrics, Lane } from '../telemetry/metrics.js';
+import { diagRecord } from '../telemetry/diagLog.js';
 import { buildEdges, findCycles } from './graph.js';
 import { pickFlashSource, flashPremium } from '../exec/flashVenues.js';
 
@@ -92,13 +93,25 @@ function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant, tokenUsd: Map<s
   const needDepth = depthGateUsd ?? g.minDepthUsd;
   for (const { pool } of legs) {
     const s = breaker.screen(chain.key, pool);
-    if (!s.ok) { metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' }); return false; }
+    if (!s.ok) {
+      metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' });
+      if (cfg.DIAG_ONLY) diagRecord('forensic_screen', { chain: chain.key, pool: pool.address, kind: pool.kind, reason: s.reason ?? 'screen' });
+      return false;
+    }
     // depth = feed liquidity when present, else on-chain priced-side
     // value — discovered pools carry liquidityUsd=0 and must not be
     // blanket-rejected (they are the primary discovery product)
-    if (poolDepthUsd(pool, tokenUsd) < needDepth) {
+    const dep = poolDepthUsd(pool, tokenUsd);
+    if (dep < needDepth) {
       metrics.inc('rejected_by_profit_margin', { reason: 'depth' });
       depthRejectsThisSolve++;
+      if (cfg.DIAG_ONLY) diagRecord('depth', {
+        chain: chain.key, pool: pool.address, kind: pool.kind,
+        token0: pool.token0, token1: pool.token1, dec0: pool.dec0, dec1: pool.dec1,
+        reserve0: pool.reserve0?.toString(), reserve1: pool.reserve1?.toString(),
+        sqrtPriceX96: pool.sqrtPriceX96?.toString(), liquidity: pool.liquidity?.toString(),
+        feedLiquidityUsd: pool.liquidityUsd, depthUsd: dep, thresholdUsd: needDepth,
+      });
       return false;
     }
   }
@@ -163,6 +176,7 @@ function emit(
   // ladder and emit the size with the best honest net — every point is
   // real leg simulation + real premium + real gas, not a heuristic.
   const SIZE_RATIOS = [1, 0.25, 0.0625, 0.015625];
+  const pathSig = legs.map((l) => l.pool.address.toLowerCase()).join('>');
   const flSource = pickFlashSource(chain.key, borrowToken);
   let sawSpread = false, sawImpactOver = false;
   let best = null;
@@ -182,6 +196,7 @@ function emit(
     const sp = spreadPct(out, sz);
     if (sp > CREDIBILITY_CEILING_PCT) {
       metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
+      if (cfg.DIAG_ONLY) diagRecord('gap_above_ceiling', { chain: chain.key, path: pathSig, spreadPct: sp, sizeRatio: r });
       // >~2% = a pool is lying about reserves. Convict ONLY legs whose
       // spot quote diverges >3x from same-pair peers — blaming every leg
       // convicts honest pools that merely routed through the liar.
@@ -203,12 +218,24 @@ function emit(
       tokenDec: decBorrow, nativeUsd, chain: chain.key,
     });
     if (!best || n.netUsd > best.netUsd) {
-      best = { borrow: sz, out, impactBps, sp, netUsd: n.netUsd, premium };
+      best = { borrow: sz, out, impactBps, sp, netUsd: n.netUsd, premium, n };
     }
   }
-  if (!sawSpread) { metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' }); return null; }
+  const econ = best ? {
+    grossUsd: best.n.grossUsd, gasUsd: best.n.gasUsd, premiumUsd: best.n.premiumUsd,
+    bribeUsd: best.n.bribeUsd, preBribeUsd: best.n.grossUsd - best.n.gasUsd - best.n.premiumUsd,
+    netUsd: best.netUsd,
+  } : {};
+  if (!sawSpread) {
+    metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' });
+    if (cfg.DIAG_ONLY) diagRecord('no_spread', { chain: chain.key, path: pathSig, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length });
+    return null;
+  }
   if (!best) {
     metrics.inc('rejected_by_profit_margin', { reason: sawImpactOver ? 'price_impact' : 'no_spread' });
+    if (cfg.DIAG_ONLY) diagRecord(sawImpactOver ? 'price_impact' : 'no_spread', {
+      chain: chain.key, path: pathSig, slipBoundBps, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length,
+    });
     return null;
   }
   const { borrow, out, impactBps, sp } = best;
@@ -223,9 +250,21 @@ function emit(
   if (cfg.STRICT_PROFIT_FLOOR_GUARD && best.netUsd < floorUsd) {
     metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
     metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: best.netUsd, floorUsd });
+    if (cfg.DIAG_ONLY) diagRecord('min_profit_floor', {
+      chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
+      borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
+      spreadPct: sp, impactBps, slipBoundBps, floorUsd,
+      ...(econ as Record<string, unknown>),
+    });
     return null;
   }
   metrics.inc('passed_to_simulation_probe', { chain: chain.key });
+  if (cfg.DIAG_ONLY) diagRecord('probe_pass', {
+    chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
+    borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
+    spreadPct: sp, impactBps, slipBoundBps, floorUsd,
+    ...(econ as Record<string, unknown>),
+  });
   metrics.recordVariantOutcome(v.id, lane, { hit: true, netUsd: best.netUsd, floorUsd });
   // stream the ACTIVE on-chain barrier — minOut = repay + premium
   // (+ floor on whale lane), in USD terms, for the cockpit

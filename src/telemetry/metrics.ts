@@ -1,5 +1,16 @@
 import { ChainKey } from '../config/index.js';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+
+let epochCache: string | undefined;
+/** Short git hash = the counter epoch. Outside a checkout → 'dev'. */
+function codeEpoch(): string {
+  if (epochCache) return epochCache;
+  try {
+    epochCache = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch { epochCache = 'dev'; }
+  return epochCache;
+}
 import { dirname, join } from 'node:path';
 
 /**
@@ -55,7 +66,11 @@ class Metrics {
   private counters = new Map<string, number>();
   private settled: SettledRecord[] = [];
   private file = join(process.cwd(), 'data', 'settled.json');
-  private countersFile = join(process.cwd(), 'data', 'metrics_counters.json');
+  // WO-2 counter epoch: counters reset per code version — the file is
+  // named for the running commit, so a new build never inherits the old
+  // build's gate counts. Prior-epoch files stay on disk for forensics.
+  readonly epoch = codeEpoch();
+  private countersFile = join(process.cwd(), 'data', `metrics_counters.${codeEpoch()}.json`);
   private ledgerFile = join(process.cwd(), 'data', 'variant_ledger.json');
   private countersDirty = false;
   private ledgerDirty = false;
