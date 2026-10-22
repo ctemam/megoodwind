@@ -10,7 +10,7 @@ import { regimeHistorySize } from '../engine/marketRegime.js';
 import { pendingSetSizes } from '../scout/scoutListener.js';
 import { rpcPoolStats } from '../providers/rpcPool.js';
 import { wssLiveProviders } from '../providers/wss.js';
-import { lastCycleMs } from '../runner/arbRunner.js';
+import { lastCycleMs, lastStageMs } from '../runner/arbRunner.js';
 
 /**
  * WO-1 memory telemetry — the OOM evidence file.
@@ -39,7 +39,12 @@ export function startMemWatch(): void {
   mkdirSync(SNAP_DIR, { recursive: true });
 
   const t0 = Date.now();
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (!gc) log.warn('gc() not exposed — launch with --expose-gc for post-GC heap readings');
   const timer = setInterval(() => {
+    // WO-1b: sample AFTER a forced GC — separates retained (leak) from
+    // in-flight allocation churn that makes pre-GC heapUsed oscillate.
+    try { gc?.(); } catch { /* flag absent */ }
     const mu = process.memoryUsage();
     const rpc = rpcPoolStats();
     const row = {
@@ -50,6 +55,7 @@ export function startMemWatch(): void {
       heapTotal: mu.heapTotal,
       external: mu.external,
       arrayBuffers: mu.arrayBuffers,
+      activeHandles: (process as unknown as { _getActiveHandles?: () => unknown[] })._getActiveHandles?.().length ?? -1,
       sizes: {
         registryPools: registry.size,
         breakerPoolStats: breaker.poolStats.size,
@@ -63,6 +69,7 @@ export function startMemWatch(): void {
         rpcInFlight: rpc.inFlight,
         rpcMaxInFlight: rpc.maxInFlight,
         lastCycleMs: Object.fromEntries(lastCycleMs),
+        stageMs: Object.fromEntries(lastStageMs),
       },
     };
     try { appendFileSync(FILE, JSON.stringify(row) + '\n'); } catch { /* telemetry never wedges */ }

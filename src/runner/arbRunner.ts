@@ -32,6 +32,9 @@ const log = logger('runner');
 
 /** memWatch sampler — last completed cycle wall-time per chain (ms). */
 export const lastCycleMs = new Map<string, number>();
+/** memWatch sampler — last cycle's per-stage wall-time (ms): which stage
+ *  dominates the 8-17s cycles (WO-1b profiling). */
+export const lastStageMs = new Map<string, number>();
 
 // whale lane attribution: a whale-alpha event marks the chain 'whale'
 // for a short window — candidates emitted inside it carry lane='whale'
@@ -119,8 +122,15 @@ async function cycle(
   scheduler: VariantScheduler,
   discovery: Discovery,
 ): Promise<void> {
+  let stageT = performance.now();
+  const markStage = (name: string): void => {
+    const n = performance.now();
+    lastStageMs.set(name, Math.round(n - stageT));
+    stageT = n;
+  };
   // Discovery phase: pull newly deployed pools (bounded, skips same-block)
   await discovery.scanNewPools().catch((e) => log.debug(`${chain.key} scanNewPools`, e));
+  markStage('discovery_scan');
 
   // ONE merged refresh across ALL tracked pools — graph edges need live
   // state before CPU-eval (latency discipline: never per-item RPC).
@@ -131,8 +141,10 @@ async function cycle(
   // corruption convicts legitimate pools; resolve ON-CHAIN (incremental —
   // already-resolved tokens skip the multicall entirely)
   await resolveTokenDecimals(rpc, tracked).catch((e) => log.debug(`${chain.key} decimals`, e));
+  markStage('resolve_decimals');
 
   await refreshPools(rpc, tracked);
+  markStage('refresh_pools');
 
   // Conditioning layer: the regime snapshot gates variant eligibility
   // BEFORE the scheduler picks — suppressed families never evaluate.
@@ -143,6 +155,7 @@ async function cycle(
   const baseFeeWei = (await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false])
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
     .catch(() => 0n)) ?? 0n;
+  markStage('gas_oracle');
 
   // live priority fee — PRIORITY_FEE_GWEI is the fallback, not a constant:
   // a fixed 5 gwei phantom-charges ~$6/candidate on eth where live tips
@@ -172,6 +185,7 @@ async function cycle(
     }
   }
 
+  markStage('fee_oracle');
   const candidates = solve(chain, variant, {
     gasUnits: 450_000n,
     baseFeeWei,
@@ -184,12 +198,14 @@ async function cycle(
     nativeUsd: nativeUsdFor(chain.key),
     priorityFeeWei: livePrio > 0n ? livePrio : BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
   });
+  markStage('solve');
   if (!candidates.length) return;
 
   // submit loop — best candidate first, probe gates each
   for (const cand of candidates.slice(0, 3)) {
     await executeCandidate(chain, rpc, cand, scheduler);
   }
+  markStage('exec_candidates');
 }
 
 async function main() {
