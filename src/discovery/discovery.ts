@@ -28,6 +28,7 @@ export class Discovery {
   private tokens = new Map<string, DiscoveredToken>(); // addr -> token
   private lastFactoryBlock = new Map<string, number>();
   private timer?: NodeJS.Timeout;
+  private abandonedChunks = 0;
 
   constructor(private chain: ChainConfig, private rpc: RpcPool) {}
 
@@ -58,7 +59,23 @@ export class Discovery {
       found += await this.factoryMatrix(f, matrixCap);
     }
 
-    log.info(`${this.chain.key} discovery boot: ${tokens.length} tokens, ${found} pools, ${(performance.now() - t0).toFixed(0)}ms`);
+    log.info(`${this.chain.key} discovery boot: ${tokens.length} tokens, ${found} pools, ${(performance.now() - t0).toFixed(0)}ms${this.abandonedChunks ? ` abandonedChunks=${this.abandonedChunks}` : ''}`);
+    // WO-7: zero pools with live tokens+factories is a BOOT FAILURE, not
+    // a quiet empty universe — log loudly and retry boot up to 3 times
+    // with backoff; steady-state scanNewPools keeps re-seeding after.
+    if (found === 0 && tokens.length > 0 && factories.length > 0) {
+      for (let retry = 1; retry <= 3 && registry.all(this.chain.key).length === 0; retry++) {
+        const wait = retry * 30_000;
+        log.error(`${this.chain.key} DISCOVERY_BOOT_EMPTY — 0 pools on ${tokens.length} tokens × ${factories.length} factories; retry ${retry}/3 in ${wait / 1000}s`);
+        await sleep(wait);
+        for (const f of factories) {
+          found += await this.verifyPairs(f, candidatePairs);
+          found += await this.factoryMatrix(f, tokens.slice(0, 12));
+        }
+        if (found > 0) log.info(`${this.chain.key} discovery boot recovered on retry ${retry}: ${found} pools`);
+      }
+      if (found === 0) log.error(`${this.chain.key} DISCOVERY_BOOT_EMPTY persists after retries — universe stays empty; steady-state scan will re-seed`);
+    }
   }
 
   /** Candidate (tokenA,tokenB,fee?) tuples from the pair feed. */
@@ -106,23 +123,45 @@ export class Discovery {
     let delay = cfg.DISCOVERY_BATCH_DELAY_MS;
     for (let i = 0; i < combos.length; i += cfg.DISCOVERY_BATCH_SIZE) {
       const chunk = combos.slice(i, i + cfg.DISCOVERY_BATCH_SIZE);
-      const calls = chunk.map((c) => ({
-        to: f.address,
-        data: f.kind === 'v3'
-          ? FACTORY_ABI.encodeFunctionData('getPool', [c.a.address, c.b.address, c.fee])
-          : FACTORY_ABI.encodeFunctionData('getPair', [c.a.address, c.b.address]),
-      }));
+      // velodrome probes BOTH slots (volatile + stable) per pair — track
+      // which call belongs to which combo for the results walk.
+      const calls: { to: string; data: string; ci: number }[] = [];
+      for (let ci = 0; ci < chunk.length; ci++) {
+        const c = chunk[ci];
+        const enc = (frag: string) => calls.push({ to: f.address, data: frag, ci });
+        if (f.kind === 'v3') enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,uint24)', [c.a.address, c.b.address, c.fee]));
+        else if (f.kind === 'velodrome') {
+          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, false]));
+          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, true]));
+        } else if (f.kind === 'algebra') enc(FACTORY_ABI.encodeFunctionData('poolByPair', [c.a.address, c.b.address]));
+        else enc(FACTORY_ABI.encodeFunctionData('getPair', [c.a.address, c.b.address]));
+      }
       // Multicall3: the whole chunk is ONE aggregate3 eth_call — ~200x
-      // fewer requests on the factory matrix.
+      // fewer requests on the factory matrix. WO-7: a majority-transport-
+      // failed chunk is RETRIED with exponential backoff (each attempt
+      // lands on a different provider account via the budget scheduler) —
+      // returning '0x' for rate-limited chunks made a dead-universe look
+      // like an empty one (base discovered "0 pools" this way).
+      let results: string[] | null = null;
       let transportFail = 0;
-      const results = await multicall(this.rpc, calls, calls.length, () => transportFail++);
+      for (let attempt = 0; attempt <= 4 && results === null; attempt++) {
+        transportFail = 0;
+        const r = await multicall(this.rpc, calls, calls.length, () => transportFail++);
+        if (transportFail <= calls.length * 0.5) { results = r; break; }
+        if (attempt < 4) await sleep(Math.min(500 * 2 ** attempt, 8_000));
+      }
+      if (results === null) {
+        this.abandonedChunks++;
+        log.warn(`${this.chain.key} discovery chunk abandoned after 5 tries (${calls.length} combos, ${f.address.slice(0, 10)})`);
+        continue; // skip the chunk, don't abort the boot
+      }
       let failures = transportFail;
       const chunkPools: string[] = [];
       results.forEach((value, k) => {
         if (value === '0x' || value.length < 66) return;
         const pool = ethers.getAddress(`0x${value.slice(-40)}`);
         if (pool === ZERO) return;
-        const { a, b, fee } = chunk[k];
+        const { a, b, fee } = chunk[calls[k].ci];
         this.upsertPool(f, pool, a, b, fee);
         chunkPools.push(pool);
         found++;
@@ -146,7 +185,7 @@ export class Discovery {
       address: pool,
       chain: this.chain.key,
       dexId: f.name,
-      kind: f.kind,
+      kind: f.kind === 'v3' || f.kind === 'algebra' ? 'v3' : 'v2',
       token0: t0.address, token1: t1.address,
       symbol0: t0.symbol, symbol1: t1.symbol,
       dec0: t0.decimals, dec1: t1.decimals,

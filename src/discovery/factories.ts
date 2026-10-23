@@ -11,13 +11,22 @@ import { ChainKey } from '../config/index.js';
 
 export interface FactoryRef {
   name: string;
-  kind: 'v2' | 'v3';
+  // v2 = UniV2 getPair(a,b) · v3 = UniV3 getPool(a,b,fee) ·
+  // velodrome = Velodrome/Aerodrome V1 getPool(a,b,bool stable) — both
+  // stable and volatile slots probed per pair · algebra = Algebra-style
+  // poolByPair(a,b) (Camelot et al., no fee arg)
+  kind: 'v2' | 'v3' | 'velodrome' | 'algebra';
   address: string;
-  feeTiers: number[];      // v3: [100,500,3000,10000]; v2: [] (fee from feeBps)
+  feeTiers: number[];      // v3: [100,500,3000,10000]; others: [] (fee from feeBps)
   defaultFeeBps: number;   // v2 swap fee in bps
 }
 
 const UNIV3 = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
+/** Per-chain UniV3 factory overrides — the canonical 0x1F98 deployment
+ *  is absent on newer chains; base hosts UniV3 at 0x33128a8f. */
+const UNIV3_BY_CHAIN: Record<string, string> = {
+  base: '0x33128a8fC17869897dcE68Ed026d694621f6FDfD',
+};
 const PCS_V3 = '0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865';
 const UNI_V2 = '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f';
 const SUSHI_V2 = '0xC0AEe478e3658e2610c5F7A4A2E1777cE9e4f2Ac';
@@ -47,19 +56,19 @@ export const FACTORIES: Record<string, FactoryRef[]> = {
   ],
   arb: [
     { name: 'uniswap-v3', kind: 'v3', address: UNIV3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
-    { name: 'camelot-v3', kind: 'v3', address: CAMELOT_V3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
+    { name: 'camelot-v3', kind: 'algebra', address: CAMELOT_V3, feeTiers: [], defaultFeeBps: 30 },
     { name: 'sushiswap-v2', kind: 'v2', address: SUSHI_V2, feeTiers: [], defaultFeeBps: 30 },
   ],
   op: [
     { name: 'uniswap-v3', kind: 'v3', address: UNIV3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
-    { name: 'velodrome-v2', kind: 'v2', address: '0x25CbdDb98b35ab1FF77413456B31EC81A6B6B746', feeTiers: [], defaultFeeBps: 30 },
+    { name: 'velodrome-v2', kind: 'velodrome', address: '0x25CbdDb98b35ab1FF77413456B31EC81A6B6B746', feeTiers: [], defaultFeeBps: 30 },
   ],
   avax: [
     { name: 'uniswap-v3', kind: 'v3', address: UNIV3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
   ],
   base: [
-    { name: 'uniswap-v3', kind: 'v3', address: UNIV3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
-    { name: 'aerodrome', kind: 'v3', address: AERO, feeTiers: V3_TIERS, defaultFeeBps: 30 },
+    { name: 'uniswap-v3', kind: 'v3', address: UNIV3_BY_CHAIN.base, feeTiers: V3_TIERS, defaultFeeBps: 30 },
+    { name: 'aerodrome', kind: 'velodrome', address: AERO, feeTiers: [], defaultFeeBps: 30 },
   ],
   linea: [
     { name: 'pancakeswap-v3', kind: 'v3', address: PCS_V3, feeTiers: V3_TIERS, defaultFeeBps: 30 },
@@ -84,7 +93,9 @@ export function factoriesFor(chain: ChainKey): FactoryRef[] {
 // ---- ABIs + event topics ----
 export const FACTORY_ABI = new ethers.Interface([
   'function getPool(address,address,uint24) view returns (address)',
+  'function getPool(address,address,bool) view returns (address)',
   'function getPair(address,address) view returns (address)',
+  'function poolByPair(address,address) view returns (address)',
 ]);
 export const POOL_CREATED_TOPIC = ethers.id('PoolCreated(address,address,uint24,int24,address)');
 export const PAIR_CREATED_TOPIC = ethers.id('PairCreated(address,address,address,uint256)');
