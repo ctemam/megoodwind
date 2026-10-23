@@ -18,3 +18,9 @@ data/monitor/
 data/projections.json
 test/.empty_env
 nul
+.continue/
+UINEW/
+WOREPO.MD
+data/swap_rows_*.jsonl
+data/shadow_candidates.jsonl
+data/reports/raw/
