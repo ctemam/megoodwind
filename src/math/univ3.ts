@@ -31,6 +31,33 @@ export function tickDistanceOk(tickBefore: number, tickAfter: number, maxDist: n
   return Math.abs(tickAfter - tickBefore) <= maxDist;
 }
 
+/**
+ * WO-9/audit — exact single-tick v3 output (no tick crossing).
+ * zeroForOne: selling token0 pushes sqrtP down:
+ *   inv_new = 1/sqrtP + amtInNet/L  →  s_new = s·L·Q96 / (L·Q96 + amtInNet·s)
+ *   out1 = L·(s − s_new)/Q96
+ * oneForZero: buying token0 pushes sqrtP up:
+ *   s_new = s + amtInNet·Q96/L
+ *   out0 = L·(1/s − 1/s_new) = L·Q96·(s_new−s)/(s·s_new)
+ * Crosses a tick => real output is strictly LOWER — this is a tight
+ * upper bound that kills the spot-price phantom edge the audit found.
+ */
+export function v3AmountOutInTick(
+  sqrtPriceX96: bigint, liquidity: bigint, amountIn: bigint, zeroForOne: boolean, feeBps: number,
+): bigint {
+  if (!sqrtPriceX96 || !liquidity || amountIn <= 0n) return 0n;
+  const s = sqrtPriceX96, L = liquidity;
+  const amtInNet = amountIn * BigInt(10_000 - feeBps) / 10_000n;
+  if (zeroForOne) {
+    const sNew = (s * L * Q96) / (L * Q96 + amtInNet * s);
+    if (sNew >= s) return 0n;
+    return (L * (s - sNew)) / Q96;
+  }
+  const sNew = s + (amtInNet * Q96) / L;
+  if (sNew <= s) return 0n;
+  return (L * Q96 * (sNew - s)) / (s * sNew);
+}
+
 /** slot0() calldata + decoder. */
 export const SLOT0_ABI = new ethers.Interface([
   'function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16 obsIndex,uint16 obsCard,uint16 obsCardNext,uint8 feeProto,bool unlocked)',

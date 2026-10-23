@@ -58,6 +58,23 @@ export function capitalOk(borrowUsd: number, perTxCap: number, dayNotional: numb
   return borrowUsd <= perTxCap && dayNotional + borrowUsd <= dayCap;
 }
 
+const NOTIONAL_FILE = 'data/ops/notional.json';
+function notionalRead(): { day: string; per: Record<string, number> } {
+  if (existsSync(NOTIONAL_FILE)) {
+    try { const j = JSON.parse(readFileSync(NOTIONAL_FILE, 'utf8')); if (j.day === new Date().toISOString().slice(0, 10)) return j; } catch {}
+  }
+  return { day: new Date().toISOString().slice(0, 10), per: {} };
+}
+export function dayNotionalUsd(chain: string): number {
+  return notionalRead().per[chain] ?? 0;
+}
+export function noteNotional(chain: string, usd: number) {
+  const n = notionalRead();
+  n.per[chain] = (n.per[chain] ?? 0) + usd;
+  mkdirSync('data/ops', { recursive: true });
+  writeFileSync(NOTIONAL_FILE, JSON.stringify(n));
+}
+
 /** One-liner gate used by every submit path. */
 export function mayExecute(chain: string, borrowUsd: number, caps: { dailyLossCap: number; perTxCap: number; dailyNotionalCap: number; dayNotional: number }): { ok: boolean; reason?: string } {
   const k = killActive(chain);

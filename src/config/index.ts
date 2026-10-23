@@ -77,6 +77,10 @@ const envSchema = z.object({
   // (competition is fiercest right after a big transfer reprices a venue)
   PREDICTIVE_MIN_PROFIT_USD: z.coerce.number().default(2.5),
   WHALE_MIN_PROFIT_USD: z.coerce.number().default(25),
+  // WO-15 ops caps — applied by mayExecute() inside executor.ts before submit
+  OPS_DAILY_LOSS_CAP_USD: z.coerce.number().default(100),
+  OPS_PER_TX_CAP_USD: z.coerce.number().default(25_000),
+  OPS_DAILY_NOTIONAL_CAP_USD: z.coerce.number().default(250_000),
   SCAN_INTERVAL_SECS: z.coerce.number().default(12),
   ACTIVE_CHAINS: z.string().default('eth,bsc,poly'),
   STRATEGIES: z.string().default('TRACE,P01,P02'),

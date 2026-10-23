@@ -354,3 +354,71 @@ Node/project ops (`list_nodes`, `create_node`, `get_deployment_options`)
 need a console API key (console.chainstack.com → user settings → API keys)
 as `Authorization: Bearer`. The `mt_` RPC token is NOT a console API key —
 the two auth planes are separate.
+
+## Research framework — realized-profit doctrine (Commander-provided, 2026-10-23)
+
+The objective is **realized, risk-adjusted net profit over time** — not
+detected-opportunity count or simulator gross. Competing searchers bid
+away most of any visible edge through transaction fees; private
+submission reduces frontrun exposure but does not eliminate competition.
+
+### The profit equation (mandatory accounting for every candidate)
+
+net = realized_proceeds − input_costs − dex_fees − impact
+      − borrow_fees − network+execution − other_attributable
+
+An atomic revert returns contract state but **still loses gas**. A quoted
+price difference is not profit — the settled receipt with its full cost
+record is the only admissible evidence.
+
+### Factor register (audit dimensions, in pipeline order)
+
+1. **Opportunity quality** — separate lanes, not one count: DEX↔DEX gaps,
+   pool-curve/depth differences (spot ≠ quote at size), lending/liquidation
+   dislocations, ordering effects (arbitrage is legitimate; sandwiching is
+   harmful MEV — out of scope).
+2. **Execution economics** — per-opportunity record: quoted → simulated →
+   settled → reconciled; failed-tx fees attributable and counted.
+3. **Data quality** — freshness (which block), consistency (do sources
+   agree), completeness, accuracy (decimals/reserves/fees/addresses),
+   availability, provenance, stale/contradictory-data recovery. More
+   endpoints ≠ better intelligence.
+4. **Software correctness** — chain-id/block ref consistency, integer
+   arithmetic, decimal conversions, rounding, fee units, stage-to-stage
+   opportunity identity (path + block + assumptions + reject reason).
+5. **Observability** — stage counts, reject reasons, latencies, sim
+   results, receipts, reconciled outcomes.
+6. **Safeguards** — authorization, secret handling, contract permissions,
+   dependency integrity, no unintended live action.
+
+### Evaluation without self-deception
+
+Report denominators and observation windows — a failure rate without
+attempt count/failure class/spend is meaningless. Simulated performance,
+realized results, and unverified claims are three separate ledgers and are
+never mixed.
+
+### Source ledger additions
+
+| Source | Use | Status |
+|---|---|---|
+| ethereum.org MEV docs | searcher/ordering/competition model | VERIFIED-CONCEPT (referenced, doctrine matches) |
+| ethereum.org gas docs | fee mechanics incl. failed-tx cost | VERIFIED-CONCEPT |
+| ethereum.org transactions docs | tx fields / nonce / gas semantics | VERIFIED-CONCEPT |
+| Flashbots bundle-pricing | builder bid↔cost relationship | VERIFIED-CONCEPT |
+| Flashbots searcher quick-start | bundle sim/submit model | VERIFIED-CONCEPT |
+
+### AllBright audit mapping (WO-campaign status, evidence-linked)
+
+| Factor | Module(s) | Evidence | Gap |
+|---|---|---|---|
+| net accounting | `src/math/profit.ts` (`netUsd` — gas+L1+premium+impact) | eth fork settle predicted $80.02 → settled $81.10 (0.9%) | — |
+| quoted≠profit | atomic `minOut`/`minProfit`, execProbe | 0/3 replay — model edge nonexistent at real v3 | v3 screen over-pred ~0.5–1% (tick impact) — **open** |
+| separate lanes | P01/P02 arb, WO-10 liquidation, WO-11 private flow | settle proofs | live measured edge = 0 |
+| failed-tx cost | `ops/losses.jsonl` revert_gas rows | — | not yet populated by runtime |
+| data freshness | block-anchored refresh + `updatedAt` | probe replay at emit-block | — |
+| data consistency | peer divergence >3× conviction | 7 base pools convicted | — |
+| decimals accuracy | on-chain `decimals()` authority | `resolveTokenDecimals` | — |
+| observability | `diag_*` stage counters + funnel | WO-8.6 funnel 761k→148 | — |
+| safeguards | `mayExecute`, kill file, caps, fail-closed | — | not yet wired into runner submit path — **open** |
+| RPC spend trigger | `ops/rpcEconomics.ts` measured | recommendation: no spend | — |

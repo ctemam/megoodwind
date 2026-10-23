@@ -7,6 +7,7 @@ import { pickFlashSource, flashPremium } from './flashVenues.js';
 import { baseFeeOk, execProbe, gasProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
 import { sendUserOpViaFlashbots } from './privateRoute.js';
+import { mayExecute, dayNotionalUsd, noteNotional, recordLoss } from '../ops/killSwitch.js';
 import { flashbotsAvailable } from './flashbots.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { routeGasUnits } from './gasModel.js';
@@ -124,6 +125,21 @@ export async function executeCandidate(
     return;
   }
 
+  // WO-15 ops gate — kill file / daily loss breaker / capital caps.
+  // Between arm and submit so a hot file edit halts the next submit.
+  const gate = mayExecute(chain.key, cand.borrowUsd ?? 0, {
+    dailyLossCap: cfg.OPS_DAILY_LOSS_CAP_USD,
+    perTxCap: cfg.OPS_PER_TX_CAP_USD,
+    dailyNotionalCap: cfg.OPS_DAILY_NOTIONAL_CAP_USD,
+    dayNotional: dayNotionalUsd(chain.key),
+  });
+  if (!gate.ok) {
+    metrics.inc('arb_ops_gate_block', { chain: chain.key, reason: gate.reason ?? 'unknown' });
+    log.error(`ops gate BLOCKED ${cand.strategy} ${chain.key} — ${gate.reason}`);
+    return;
+  }
+  noteNotional(chain.key, cand.borrowUsd ?? 0);
+
   // 4. submit via strict 4337 — private rail first on eth (Flashbots
   //    bundle/private-tx wraps the signed UserOp in a handleOps carrier
   //    tx; mempool never sees it). Fallback to Pimlico on failure.
@@ -135,7 +151,7 @@ export async function executeCandidate(
       log.info(`PRIVATE submit ${cand.strategy} ${chain.key} bundle=${priv.bundleHash ?? priv.txHash}`);
       const rc = await awaitTxReceipt(rpc, priv.txHash!);
       if (!rc.landed) { metrics.inc('arb_unlanded_total', { chain: chain.key }); return; }
-      if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); return; }
+      if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: rc.txHash }); return; }
       scheduler.recordSettle(cand.variant, cand.netUsd);
       metrics.addSettled(chain.key, cand.strategy, cand.netUsd, rc.txHash!, cand.spreadPct);
       log.info(`SETTLED(private) ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${rc.txHash}`);
@@ -162,6 +178,8 @@ export async function executeCandidate(
   if (!receipt.success) {
     scheduler.recordRevert(cand.variant);
     metrics.inc('arb_landed_revert_total', { chain: chain.key });
+    // WO-15: failed-tx gas is a real cost — feeds the daily loss breaker
+    recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: receipt.txHash });
     return;
   }
 

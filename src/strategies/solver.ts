@@ -1,7 +1,7 @@
 import { ChainConfig, cfg } from '../config/index.js';
 import { PoolState, registry } from '../pools/registry.js';
 import { v2AmountOut } from '../math/univ2.js';
-import { v3SpotPrice, tickDistanceOk } from '../math/univ3.js';
+import { v3SpotPrice, tickDistanceOk, v3AmountOutInTick } from '../math/univ3.js';
 import { netUsd, spreadPct, CREDIBILITY_CEILING_PCT, priceImpactBps, poolDepthUsd, inputVirtualReserveRaw, belowGasMultiple } from '../math/profit.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { Variant, effectiveGuards, dynamicSlippageBps } from '../engine/predictiveEngine.js';
@@ -50,6 +50,8 @@ export interface Candidate {
   grossUsd: number;
   gasUsd: number;
   premiumUsd: number;
+  /** borrow notional in USD — ops capital-cap input */
+  borrowUsd?: number;
 }
 
 const log = logger('solver');
@@ -65,9 +67,13 @@ export function legOut(pool: PoolState, amountIn: bigint, tokenIn: string): bigi
       : { reserveIn: pool.reserve1, reserveOut: pool.reserve0 };
     return v2AmountOut(amountIn, r, pool.feeBps);
   }
-  // v3 screening approx: spot price * (1 - fee) — tick-walk guard applied
-  // on candidates that survive; exec-probe is the final arbiter.
+  // v3: exact in-tick math when liquidity is known (audit fix — the old
+  // spot-price approx over-predicted thin-pool outputs ~0.5-1%, the root
+  // of the phantom edge). Spot approx remains only when liquidity unknown.
   if (!pool.sqrtPriceX96) return 0n;
+  if (pool.liquidity) {
+    return v3AmountOutInTick(pool.sqrtPriceX96, pool.liquidity, amountIn, inIs0, pool.feeBps || 0);
+  }
   const price = inIs0
     ? v3SpotPrice(pool.sqrtPriceX96, pool.dec0, pool.dec1)
     : 1 / v3SpotPrice(pool.sqrtPriceX96, pool.dec0, pool.dec1);
@@ -406,6 +412,7 @@ function emit(
     spreadPct: sp, netUsd: b.netUsd, variant: v, lane,
     impactBps, slipBoundBps, minProfitToken,
     grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, premiumUsd: b.n.premiumUsd,
+    borrowUsd: (Number(borrow) / 10 ** decBorrow) * tokenUsd,
   };
 }
 
