@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear LocalStorage</title>
+</head>
+<body>
+    <h1>Clear LocalStorage</h1>
+    <button onclick="clearAll()" style="padding: 10px 20px; font-size: 16px; background: #ff4444; color: white; border: none; border-radius: 5px; cursor: pointer;">
+        Clear All LocalStorage
+    </button>
+    <div id="result" style="margin-top: 20px;"></div>
+
+    <script>
+        function clearAll() {
+            try {
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    localStorage.removeItem(key);
+                });
+                document.getElementById('result').innerHTML = `
+                    <p style="color: green;">✅ Cleared ${keys.length} items from LocalStorage</p>
+                    <ul>
+                        ${keys.map(key => `<li>${key}</li>`).join('')}
+                    </ul>
+                `;
+            } catch (error) {
+                document.getElementById('result').innerHTML = `
+                    <p style="color: red;">❌ Error: ${error.message}</p>
+                `;
+            }
+        }
+
+        // Show current items on load
+        window.onload = function() {
+            const keys = Object.keys(localStorage);
+            if (keys.length > 0) {
+                document.getElementById('result').innerHTML = `
+                    <p>Current LocalStorage items (${keys.length}):</p>
+                    <ul>
+                        ${keys.map(key => `<li>${key}</li>`).join('')}
+                    </ul>
+                `;
+            }
+        };
+    </script>
+</body>
+</html>
+

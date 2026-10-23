@@ -1,0 +1,393 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { ArbitrageState, ArbitrageSettings, ArbitrageOpportunity, ScanLog, LogLevel, ChainId } from "@/types/monitor";
+import { DEFAULT_ARBITRAGE_CONFIG, DEFAULT_ARBITRAGE_SETTINGS, NETWORKS, getTokensForChain, getTokenByAddress, getDefaultWatchedTokens } from "@/lib/config";
+import { getTokenName } from "@/lib/utils/format";
+import { getMultiDexQuotes, findBestArbitrage } from "@/lib/utils/dex-prices";
+import { getCurrentGasPrice, calculateGasCostUSD, getEstimatedGasUnits } from "@/lib/utils/gas-price";
+import { getEthPriceCached } from "@/lib/utils/eth-price";
+import { scanAllWETHPairs } from "@/lib/utils/weth-arbitrage-scanner";
+
+/**
+ * 차익거래 상태 관리 훅
+ */
+export function useArbitrage() {
+  const [state, setState] = useState<ArbitrageState>({
+    isScanning: false,
+    chainId: 1, // Default to Mainnet
+    lastUpdate: Date.now(),
+    opportunities: [],
+    config: DEFAULT_ARBITRAGE_CONFIG,
+    settings: {
+      ...DEFAULT_ARBITRAGE_SETTINGS,
+      watchedTokens: getDefaultWatchedTokens(1), // Use Mainnet tokens
+    },
+    logs: [],
+    gasPrice: null,
+    ethPrice: null,
+    stats: {
+      totalScanned: 0,
+      opportunitiesFound: 0,
+      totalProfit: 0,
+    },
+  });
+
+  const addLog = useCallback((level: LogLevel, message: string) => {
+    const log: ScanLog = {
+      id: `${Date.now()}-${Math.random()}`,
+      timestamp: Date.now(),
+      level,
+      message,
+    };
+    setState((prev) => ({
+      ...prev,
+      logs: [log, ...prev.logs].slice(0, 100), // Keep last 100 logs
+    }));
+  }, []);
+
+  const startScanning = useCallback(async () => {
+    setState((prev) => ({
+      ...prev,
+      isScanning: true,
+      lastUpdate: Date.now(),
+    }));
+    addLog("info", "Scanner started");
+
+    // Fetch initial gas price
+    try {
+      const gasData = await getCurrentGasPrice();
+      setState((prev) => ({
+        ...prev,
+        gasPrice: {
+          baseFeeGwei: gasData.baseFeeGwei,
+          priorityFeeGwei: gasData.priorityFeeGwei,
+          maxFeeGwei: gasData.maxFeeGwei,
+          timestamp: gasData.timestamp,
+        },
+      }));
+      addLog("info", `Current gas: ${gasData.maxFeeGwei.toFixed(1)} Gwei (base: ${gasData.baseFeeGwei.toFixed(1)} + priority: ${gasData.priorityFeeGwei.toFixed(1)})`);
+    } catch (error) {
+      addLog("error", `Failed to fetch gas price: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    // Fetch initial ETH price
+    try {
+      const ethPrice = await getEthPriceCached(state.chainId);
+      setState((prev) => ({
+        ...prev,
+        ethPrice,
+      }));
+      addLog("info", `ETH price: $${ethPrice.toFixed(2)} (Chainlink)`);
+    } catch (error) {
+      addLog("error", `Failed to fetch ETH price: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [addLog, state.chainId]);
+
+  const stopScanning = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      isScanning: false,
+    }));
+    addLog("warning", "Scanner stopped");
+  }, [addLog]);
+
+  const updateSettings = useCallback((settings: ArbitrageSettings) => {
+    setState((prev) => ({
+      ...prev,
+      settings,
+    }));
+  }, []);
+
+  const setChainId = useCallback((chainId: ChainId) => {
+    if (state.isScanning) {
+      addLog("warning", "Please stop scanning before changing network");
+      return;
+    }
+    setState((prev) => ({
+      ...prev,
+      chainId,
+      opportunities: [], // Clear opportunities when switching networks
+      gasPrice: null,
+      ethPrice: null,
+      settings: {
+        ...prev.settings,
+        watchedTokens: getDefaultWatchedTokens(chainId), // Update tokens for new network
+      },
+    }));
+    const networkName = chainId === 1 ? "Ethereum Mainnet" : "Sepolia Testnet";
+    addLog("info", `Switched to ${networkName}`);
+  }, [state.isScanning, addLog]);
+
+  const addOpportunity = useCallback((opportunity: ArbitrageOpportunity) => {
+    setState((prev) => ({
+      ...prev,
+      opportunities: [opportunity, ...prev.opportunities].slice(0, 50), // 최근 50개만 유지
+      lastUpdate: Date.now(),
+      stats: {
+        ...prev.stats,
+        opportunitiesFound: prev.stats.opportunitiesFound + 1,
+      },
+    }));
+    addLog("success", `Found opportunity: ${opportunity.token.symbol}/${opportunity.baseToken.symbol} (+${opportunity.priceDiff.toFixed(2)}%)`);
+  }, [addLog]);
+
+  const clearOpportunities = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      opportunities: [],
+    }));
+    addLog("info", "Cleared all opportunities");
+  }, [addLog]);
+
+  const executeArbitrage = useCallback(async (opportunityId: string) => {
+    const opportunity = state.opportunities.find(o => o.id === opportunityId);
+    if (!opportunity) return;
+
+    addLog("info", `Executing arbitrage for ${opportunity.token.symbol}/${opportunity.baseToken.symbol}...`);
+
+    // Set status to executing
+    setState((prev) => ({
+      ...prev,
+      opportunities: prev.opportunities.map((opp) =>
+        opp.id === opportunityId ? { ...opp, status: "executing" as const } : opp
+      ),
+    }));
+
+    // TODO: 실제 차익거래 실행 로직 구현 필요
+    // 현재는 시뮬레이션: 2-5초 후 70% 성공, 30% 실패
+    const executionTime = 2000 + Math.random() * 3000; // 2-5 seconds
+    const willSucceed = Math.random() > 0.3; // 70% success rate
+
+    setTimeout(() => {
+      if (willSucceed) {
+        setState((prev) => ({
+          ...prev,
+          opportunities: prev.opportunities.map((opp) =>
+            opp.id === opportunityId ? { ...opp, status: "success" as const } : opp
+          ),
+          stats: {
+            ...prev.stats,
+            totalProfit: prev.stats.totalProfit + (prev.opportunities.find(o => o.id === opportunityId)?.netProfit || 0),
+          },
+        }));
+        addLog("success", `✅ Executed successfully! Profit: $${opportunity.netProfit.toFixed(2)}`);
+      } else {
+        const failReasons = [
+          "Insufficient liquidity",
+          "Price slippage too high",
+          "Transaction reverted",
+          "Gas price spike",
+          "Opportunity expired"
+        ];
+        const reason = failReasons[Math.floor(Math.random() * failReasons.length)];
+
+        setState((prev) => ({
+          ...prev,
+          opportunities: prev.opportunities.map((opp) =>
+            opp.id === opportunityId ? { ...opp, status: "failed" as const } : opp
+          ),
+        }));
+        addLog("error", `❌ Execution failed: ${reason}`);
+      }
+    }, executionTime);
+  }, [state.opportunities, addLog]);
+
+  // 스캐닝 루프 - Real price fetching
+  useEffect(() => {
+    if (!state.isScanning) return;
+
+    let scanCount = 0;
+
+    const scanForOpportunities = async () => {
+      const tokens = state.settings.watchedTokens;
+
+      if (tokens.length === 0) {
+        addLog("warning", "No tokens selected for scanning");
+        return;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        lastUpdate: Date.now(),
+        stats: {
+          ...prev.stats,
+          totalScanned: prev.stats.totalScanned + 1,
+        },
+      }));
+
+      scanCount++;
+
+      // Pick a random token to check
+      const randomToken = tokens[Math.floor(Math.random() * tokens.length)];
+      const tokenName = getTokenName(randomToken);
+
+      // Get token info from config
+      const TOKENS = getTokensForChain(state.chainId);
+      const tokenInfo = getTokenByAddress(randomToken, state.chainId);
+
+      if (!tokenInfo) {
+        addLog("error", `Token ${randomToken} not found in config`);
+        return;
+      }
+
+      // Amount to check (1 token with correct decimals)
+      const amount = Math.pow(10, tokenInfo.decimals).toString();
+
+      try {
+        addLog("info", `Scanning ${tokenName}/USDC across multiple DEXes...`);
+
+        // Get quotes from multiple DEXes in parallel
+        const quotes = await getMultiDexQuotes(
+          randomToken as `0x${string}`,
+          TOKENS.USDC.address as `0x${string}`,
+          tokenInfo.decimals,
+          TOKENS.USDC.decimals
+        );
+
+        if (quotes.length === 0) {
+          addLog("warning", `No liquidity found for ${tokenName}/USDC`);
+          return;
+        }
+
+        // Log all found prices
+        addLog("info", `Found ${quotes.length} valid price sources for ${tokenName}`);
+        quotes.forEach(quote => {
+          addLog("info", `${quote.dex.toUpperCase()}: $${quote.price.toFixed(4)}`);
+        });
+
+        // Find best arbitrage opportunity
+        const arbitrage = findBestArbitrage(quotes);
+
+        if (arbitrage) {
+          const { buyFrom, sellTo, priceDiff } = arbitrage;
+
+          addLog("warning", `🔥 ${tokenName}: ${priceDiff.toFixed(3)}% spread between ${buyFrom.dex.toUpperCase()} and ${sellTo.dex.toUpperCase()}`);
+
+          // Calculate potential profit
+          const tradeAmount = state.settings.tradeAmount; // ETH
+          const buyPrice = buyFrom.price;
+          const estimatedProfit = (priceDiff / 100) * tradeAmount * buyPrice;
+
+          // Calculate real gas cost
+          const gasUnits = getEstimatedGasUnits(buyFrom.dex, sellTo.dex);
+          const currentGasPrice = state.gasPrice?.maxFeeGwei || 30; // Default 30 Gwei if not available
+
+          // Fetch real ETH price from Chainlink
+          let ethPriceUsd = 3500; // Fallback price
+          try {
+            ethPriceUsd = await getEthPriceCached(state.chainId);
+          } catch (error) {
+            addLog("warning", "Failed to fetch ETH price, using fallback $3500");
+          }
+
+          const estimatedGas = calculateGasCostUSD(gasUnits, currentGasPrice, ethPriceUsd);
+
+          const flashLoanFee = (0.05 / 100) * tradeAmount * buyPrice; // 0.05%
+          const netProfit = estimatedProfit - estimatedGas - flashLoanFee;
+
+          if (netProfit > state.settings.minProfitUsd) {
+            // Create opportunity
+            const opportunity: ArbitrageOpportunity = {
+              id: `${Date.now()}-${Math.random()}`,
+              timestamp: Date.now(),
+              token: {
+                address: randomToken,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+                decimals: tokenInfo.decimals,
+              },
+              baseToken: {
+                address: TOKENS.USDC.address,
+                symbol: "USDC",
+                name: "USD Coin",
+                decimals: 6,
+              },
+              buyFrom: {
+                dex: buyFrom.dex,
+                price: buyFrom.price,
+                liquidity: "1000000", // TODO: Get real liquidity
+                pairAddress: buyFrom.pairAddress || "0x0000000000000000000000000000000000000000",
+              },
+              sellTo: {
+                dex: sellTo.dex,
+                price: sellTo.price,
+                liquidity: "1000000", // TODO: Get real liquidity
+                pairAddress: sellTo.pairAddress || "0x0000000000000000000000000000000000000000",
+              },
+              priceDiff,
+              estimatedProfit,
+              estimatedGasCost: estimatedGas,
+              netProfit,
+              flashLoanProtocol: state.settings.flashLoanProtocol,
+              status: "pending",
+            };
+
+            addOpportunity(opportunity);
+            addLog("success", `🎯 Real opportunity! Buy @ ${buyFrom.dex.toUpperCase()} ($${buyFrom.price.toFixed(2)}), Sell @ ${sellTo.dex.toUpperCase()} ($${sellTo.price.toFixed(2)}) - Profit: $${netProfit.toFixed(2)}`);
+          } else {
+            addLog("info", `${tokenName}: Net profit $${netProfit.toFixed(2)} below minimum $${state.settings.minProfitUsd}`);
+          }
+        } else {
+          addLog("info", `${tokenName}: No profitable arbitrage found (max spread <0.1%)`);
+        }
+      } catch (error) {
+        addLog("error", `Error scanning ${tokenName}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      // Update gas price and ETH price every 5 scans (~25 seconds with 5s interval)
+      if (scanCount % 5 === 0) {
+        // Update gas price
+        try {
+          const gasData = await getCurrentGasPrice();
+          setState((prev) => ({
+            ...prev,
+            gasPrice: {
+              baseFeeGwei: gasData.baseFeeGwei,
+              priorityFeeGwei: gasData.priorityFeeGwei,
+              maxFeeGwei: gasData.maxFeeGwei,
+              timestamp: gasData.timestamp,
+            },
+          }));
+
+          if (gasData.maxFeeGwei > state.settings.maxGasPrice) {
+            addLog("warning", `⛽ Gas ${gasData.maxFeeGwei.toFixed(1)} Gwei exceeds max ${state.settings.maxGasPrice} Gwei`);
+          } else {
+            addLog("info", `⛽ Gas: ${gasData.maxFeeGwei.toFixed(1)} Gwei`);
+          }
+        } catch (error) {
+          addLog("error", `Failed to update gas price: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+
+        // Update ETH price
+        try {
+          const ethPrice = await getEthPriceCached(state.chainId);
+          setState((prev) => ({
+            ...prev,
+            ethPrice,
+          }));
+          addLog("info", `💎 ETH: $${ethPrice.toFixed(2)}`);
+        } catch (error) {
+          addLog("error", `Failed to update ETH price: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+    };
+
+    const interval = setInterval(() => {
+      scanForOpportunities();
+    }, state.config.refreshInterval);
+
+    return () => clearInterval(interval);
+  }, [state.isScanning, state.config.refreshInterval, state.settings.watchedTokens, state.settings.maxGasPrice, state.gasPrice, state.ethPrice, addLog, addOpportunity]);
+
+  return {
+    state,
+    startScanning,
+    stopScanning,
+    updateSettings,
+    setChainId,
+    addOpportunity,
+    clearOpportunities,
+    executeArbitrage,
+  };
+}

@@ -1,0 +1,105 @@
+{
+  "variants": {
+    "V01@predictive": {
+      "hits": 83,
+      "misses": 6,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 51.31941057696755,
+      "netUsd": 1909.0665791239783,
+      "lane": "predictive"
+    },
+    "V02@predictive": {
+      "hits": 36,
+      "misses": 8,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1686.2345765636217,
+      "lane": "predictive"
+    },
+    "V03@predictive": {
+      "hits": 55,
+      "misses": 150,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1874.1310363552159,
+      "lane": "predictive"
+    },
+    "V04@predictive": {
+      "hits": 53,
+      "misses": 81,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1918.9365115162952,
+      "lane": "predictive"
+    },
+    "V05@predictive": {
+      "hits": 53,
+      "misses": 168,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1867.2006583122818,
+      "lane": "predictive"
+    },
+    "V06@predictive": {
+      "hits": 54,
+      "misses": 106,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1984.2485694347517,
+      "lane": "predictive"
+    },
+    "V07@predictive": {
+      "hits": 44,
+      "misses": 4,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1990.6553731236368,
+      "lane": "predictive"
+    },
+    "V08@predictive": {
+      "hits": 50,
+      "misses": 80,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1853.8372760903655,
+      "lane": "predictive"
+    },
+    "V09@predictive": {
+      "hits": 44,
+      "misses": 4,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 2166.766097811037,
+      "lane": "predictive"
+    },
+    "V10@predictive": {
+      "hits": 36,
+      "misses": 8,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1686.2345765636217,
+      "lane": "predictive"
+    },
+    "V11@predictive": {
+      "hits": 44,
+      "misses": 4,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 2167.384418291971,
+      "lane": "predictive"
+    },
+    "V12@predictive": {
+      "hits": 49,
+      "misses": 119,
+      "minProfitFloorUsd": 2.5,
+      "maxProfitUsd": 79.96541357696755,
+      "netUsd": 1853.642679052545,
+      "lane": "predictive"
+    }
+  },
+  "laneProfitUsd": {
+    "predictive": 22958.3383522393,
+    "whale": 0
+  },
+  "peakProfitUsd": 79.96541357696755
+}

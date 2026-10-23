@@ -1,0 +1,298 @@
+[
+  {
+    "ts": 1792681192308,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 45.26246307453668,
+    "txHash": "0xea5ac031623e39e446d453aca82e105d0ebe3a35ccd571570ded4f43dbbec98b",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792681300528,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 45.21680860388896,
+    "txHash": "0x49be22531d8bd31f6274765ca25e52a8cdc2ce1889f8ba4ba3eb2b38efd7e0ed",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792685903695,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.742931544087146,
+    "txHash": "0xc5ec1295d8bc53e1f6308a8061bed6d0caac3ed7cbea82c9da20ac5627f33194",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792686000288,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.36497088347071,
+    "txHash": "0x8763f101360dc4cc4964e55d75c400d7a2de9ec030950ea8d78903166ca96517",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792686242882,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.441643094562465,
+    "txHash": "0xba3d90dfb9a864e599ee85828aa48c32ec71c7f86dc2d7c6e8f7153913dcb618",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792686318936,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.828873219116513,
+    "txHash": "0xe676a2f302929f4a34824b252bb8dd85d362d9287f2a69c1a451e37fea39fb72",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792686489888,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.92691644431724,
+    "txHash": "0x87afbb5708b69f2674c027d01c2cfe396524e0c5ad36389ae658bdabee3ba965",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792686832089,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 4.966851615670069,
+    "txHash": "0x235237d3d4f21f78270388f2aec37bc28abcc3d1f16092ca9227cb6ea29f4330",
+    "spreadPct": 0.8415556833811455
+  },
+  {
+    "ts": 1792686902581,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 5.067482950765628,
+    "txHash": "0xb4513ad8bbab038f1cf497d7ea367544d9f36a7fb1153c2467a2aac734956178",
+    "spreadPct": 0.8414738486622472
+  },
+  {
+    "ts": 1792686991429,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.031791213761785,
+    "txHash": "0x50817ec9b855a9c7ab29f30c748c9dd18a486d051867907fde77b07ed8e9eabf",
+    "spreadPct": 0.8414738465025088
+  },
+  {
+    "ts": 1792691665180,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.66479658331993,
+    "txHash": "0xeb8451e13170a9a439240d438599a27f3811e9e14a097011d16a0022f7b1992f",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792691729884,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.68539515894722,
+    "txHash": "0x8eb687f76ac5e393ebc407b09577c7c504e4b7cae36d2b7436ed4673651e7d9c",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792691786343,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.67120166275335,
+    "txHash": "0xd22c91048eeea3b66218ff357d7fcd96a02a818384c7cc8b1c3cbd2f5018f612",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792692103854,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.692121082125329,
+    "txHash": "0xc73ea8ba8b24619e3900cb97be493783548c10721cdeaa143e6136a7bf088884",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792692167934,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.686472904863647,
+    "txHash": "0xf2b8cecbf7fb5f509750ead19995932407964804c1baeb1eb57d7302d6e8aa7c",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792692231426,
+    "chain": "canary",
+    "strategy": "P02",
+    "netUsd": 15.683300547230091,
+    "txHash": "0x78e152b93eeda880ee439bdc58dc7333cbbbd5692f9c7edbc40e3e22b65b0498",
+    "spreadPct": 0.5391104756408746
+  },
+  {
+    "ts": 1792692396276,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 5.071138210270141,
+    "txHash": "0x1f0c608a36824bc3a6d54552a9337f7eec81a76a74b4910e94eb60b3981df7c7",
+    "spreadPct": 0.8415556833811455
+  },
+  {
+    "ts": 1792692491211,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.12059083839589,
+    "txHash": "0xb9f4b239cde8d2a1f6aff6063ae23a0fe908c9850895b0b13ba6e4e813ffec60",
+    "spreadPct": 0.8414738465025088
+  },
+  {
+    "ts": 1792692549259,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 46.662123125113105,
+    "txHash": "0xf68fd6cacf60ec5397866bd10531e373da2110525d01f2616ed0a0555282375c",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792692605534,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 5.164295132854401,
+    "txHash": "0x959d745be063060f7c45fa9bc6c042b161328c854fefbd9d6fc7fb4960f23c9b",
+    "spreadPct": 0.8414738486622472
+  },
+  {
+    "ts": 1792693976133,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 50.84756742529942,
+    "txHash": "0x31bf1b9c6be561feec8b7e3eb1d08a97d55a33d9361065bcdda8d4bfd9acc96d",
+    "spreadPct": 0.8415557639263876
+  },
+  {
+    "ts": 1792694527535,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 26.335267499746244,
+    "txHash": "0xa904289da9836305d0e479739b0221878169195f515bde0838e8b0f4cd83d0e7",
+    "spreadPct": 0.7409155454592489
+  },
+  {
+    "ts": 1792694584455,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.95830199038649,
+    "txHash": "0xd675206453c881d8b65c82ce2a97e819835cfab4d74b72fd8449b35e31424907",
+    "spreadPct": 0.81102599
+  },
+  {
+    "ts": 1792694689554,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 26.578818899219623,
+    "txHash": "0x14f1311acf7d98caa6aafe49dc9de200d271c740051c51fc91e0a18c01345407",
+    "spreadPct": 0.7406323741501274
+  },
+  {
+    "ts": 1792694755744,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.96541357696755,
+    "txHash": "0x7e19839c131030b5e931fa8af70aea360812fd294d98c1ef448b316f20e6550d",
+    "spreadPct": 0.8110259950850836
+  },
+  {
+    "ts": 1792694816101,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 4.6839454910318885,
+    "txHash": "0x9891860e65084f1d079103a60e5f4a94e3b894600493896d8299e76c186eafd6",
+    "spreadPct": 0.4897530249811731
+  },
+  {
+    "ts": 1792694875945,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.714478582353536,
+    "txHash": "0x5818fdaac156cadf932db0f656374154c83d85848665f613e6c0d7c7378b8072",
+    "spreadPct": 0.48876881
+  },
+  {
+    "ts": 1792694930602,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.93247830239211,
+    "txHash": "0xbef8d4c2daa4b3f26bb4834559ef32f34ef01b4ffd1e2bdb4900d031d6b27611",
+    "spreadPct": 0.81102599
+  },
+  {
+    "ts": 1792694998183,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 4.741867276745728,
+    "txHash": "0xa960385bf75c7cdb97904580ef6be006abaffa61510628aa3dd50fb9925e5202",
+    "spreadPct": 0.4450178770483881
+  },
+  {
+    "ts": 1792695055268,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.71482022836491,
+    "txHash": "0x87812adb18e42e8a70b004551a61e835f554d1f1f3de7e39ef8f60a426cd894a",
+    "spreadPct": 0.4887688620247686
+  },
+  {
+    "ts": 1792695112582,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.93714564923313,
+    "txHash": "0x3257fe578218ed0b5de87d1bb4398a8080fc93b44dbdc27480c1e6fe244876b5",
+    "spreadPct": 0.8110259950850836
+  },
+  {
+    "ts": 1792695170721,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 4.647016900822554,
+    "txHash": "0xb28886de66b121f2c23633a6e8c08dface49c9e89a378e34f93188b33f61f08d",
+    "spreadPct": 0.4897530249811731
+  },
+  {
+    "ts": 1792695225413,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.71711906576554,
+    "txHash": "0xb6a0fe467dd4cc651de06bb0a822d41e3bb24f4ff52acffb937d93a795eb16bc",
+    "spreadPct": 0.48876881
+  },
+  {
+    "ts": 1792695282411,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.93893742078346,
+    "txHash": "0x75f957b6b4413a4bc97ce0d9846700ee793dd49c750729684ca043aa1a9e04c4",
+    "spreadPct": 0.81102599
+  },
+  {
+    "ts": 1792695343308,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 4.765086804848851,
+    "txHash": "0x4b1879a26a64f1a7b1cda3d1a0af674a82ce54f671982fa464a0bc4f30ad3ad0",
+    "spreadPct": 0.4450178770483881
+  },
+  {
+    "ts": 1792695398871,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 47.71787159992714,
+    "txHash": "0xee0cd5c33f56d763b84655d85490672a1374a2545d34692eb2c5a43e8c5796d0",
+    "spreadPct": 0.4887688620247686
+  },
+  {
+    "ts": 1792695450584,
+    "chain": "canary",
+    "strategy": "P01",
+    "netUsd": 79.94697706378894,
+    "txHash": "0xded6512ee6dd089db408719d86b63bde3b26e93a9f0694c1bf44b166e7f1d0b4",
+    "spreadPct": 0.8110259950850836
+  }
+]

@@ -19,11 +19,14 @@ import { logger } from '../src/config/logger.js';
 
 const log = logger('backrun');
 const MINUTES = Number(process.env.MINUTES ?? 60);
+const GAP_FLOOR_BPS = Number(process.env.GAP_BPS ?? 10); // WO-8 step 6: re-run at 1/2/5/10bps
+const PERSIST = process.env.PERSIST === '1'; // WO-8 step 5: raw swap rows to disk
+import { appendFileSync, mkdirSync } from 'node:fs';
+mkdirSync('data', { recursive: true });
 const SWAP_V2 = ethers.id('Swap(address,uint256,uint256,uint256,uint256)');
 const SWAP_V3 = ethers.id('Swap(address,address,int256,int256,uint160,uint128,int24)');
 const RES_ABI = new ethers.Interface(['function getReserves() view returns (uint112,uint112,uint32)']);
 const SLOT0_ABI = new ethers.Interface(['function slot0() view returns (uint160 sqrtPriceX96,int24 tick,uint16,uint16,uint16,uint8,bool)']);
-const GAP_FLOOR_BPS = 10;
 
 const TOKEN_USD: Record<string, number> = {
   '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': cfg.NATIVE_USD,
@@ -142,6 +145,7 @@ async function run(chainKey: string): Promise<void> {
             const gap = (pp / pq - 1) * 10_000;
             if (Math.abs(gap) > Math.abs(bestGap)) { bestGap = gap; bestQ = q; }
           }
+          if (PERSIST) appendFileSync(`data/swap_rows_${chain.key}.jsonl`, JSON.stringify({ ts: new Date().toISOString(), block: b, tx: l.transactionHash, pool: p.address, pair: `${p.symbol0}/${p.symbol1}`, kind: p.kind, bestPeer: bestQ?.address ?? null, gapBps: bestGap }) + '\n');
           if (!bestQ || Math.abs(bestGap) < GAP_FLOOR_BPS) continue;
           dislocations++;
           const contested = logs.some((o) => o.address.toLowerCase() !== p.address.toLowerCase() && peerList.some((q) => q.address.toLowerCase() === o.address.toLowerCase()) && Number(o.logIndex) > Number(l.logIndex));

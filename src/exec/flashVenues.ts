@@ -49,7 +49,7 @@ export const FLASH_VENUES: Record<string, FlashVenueSet> = {
   poly:  { balancer: BALANCER_VAULT, aave: AAVE_V3_CANONICAL, morpho: ZERO, erc3156: ZERO },
   arb:   { balancer: BALANCER_VAULT, aave: AAVE_V3_CANONICAL, morpho: MORPHO_BLUE, erc3156: ZERO },
   op:    { balancer: BALANCER_VAULT, aave: AAVE_V3_CANONICAL, morpho: MORPHO_BLUE, erc3156: ZERO },
-  base:  { balancer: BALANCER_VAULT, aave: '0xa238dd80C259A72E81D7E4664A74715939677AC0', morpho: MORPHO_BLUE, erc3156: ZERO },
+  base:  { balancer: BALANCER_VAULT, aave: '0xa238dd80c259a72e81d7e4664a9801593f98d1c5', morpho: MORPHO_BLUE, erc3156: ZERO }, // WO-8: was typo'd address (…39677AC0 has no code) — real Aave V3 Pool on base
   avax:  { balancer: BALANCER_VAULT, aave: AAVE_V3_CANONICAL, morpho: ZERO, erc3156: ZERO },
   bsc:   { balancer: ZERO, aave: '0x6807dc923806fE8Fd134338EABCA509979a7e0cB', morpho: ZERO, erc3156: ZERO },
   linea: { balancer: ZERO, aave: '0xc47B8c00b0f69a36fa203fEaeafdB1557614c0E6', morpho: ZERO, erc3156: ZERO },

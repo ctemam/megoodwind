@@ -65,9 +65,15 @@ export function buildPlan(c: Candidate, o: PlanOpts): { planBytes: string; execD
   return { planBytes, execData };
 }
 
-/** UniV3 SwapRouter per chain/dex — canonical addresses. */
+/** UniV3 SwapRouter per chain/dex — canonical addresses.
+ *  WO-8: base's only UniV3 router is SwapRouter02 0x2626… whose
+ *  exactInputSingle takes NO deadline field (7 params) — the executor's
+ *  8-param ABI reverts bare on it. 0xE592 is NOT a router on base (4kB
+ *  stub, factory() reverts). v3 legs on base need a contract change —
+ *  the fallback below MUST NOT silently route there. */
 const V3_ROUTERS: Record<string, string> = {
   uniswap: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
+  'uniswap-base': '0x2626664c2603336E57B271c5C0b26F421741e481', // SwapRouter02 — BLOCKED by ABI, flagged
   'pancakeswap-eth': '0x1b81D678ffb9C0263b24A97847620C99d213eB14',
   'pancakeswap-bsc': '0x13f4EA83D0ee40E75C5Df61B19381241d52dD75d',
   'pancakeswap-poly': '0x4C60051384bd2d3C01bfc845Cf5F4b44bcbE9de5',

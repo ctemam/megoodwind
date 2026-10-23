@@ -7,6 +7,7 @@ import { WhaleTracker } from '../services/whaleTracker.js';
 import { VariantScheduler } from '../engine/predictiveEngine.js';
 import { solve } from '../strategies/solver.js';
 import { executeCandidate } from '../exec/executor.js';
+import { shadowExecProbe } from '../exec/shadowProbe.js';
 import { refreshPools, resolveTokenDecimals } from '../feed/refresh.js';
 import { topPools, poolsForTokens } from '../feed/dexscreener.js';
 import { registry } from '../pools/registry.js';
@@ -171,7 +172,13 @@ async function cycle(
   markStage('solve');
   if (!candidates.length) return;
 
-  // submit loop — best candidate first, probe gates each
+  // submit loop — best candidate first, probe gates each.
+  // WO-8 step 5: in DIAG_ONLY the shadow-probe exercises the REAL exec
+  // path read-only (state-overridden current-build executor), so
+  // probe_pass now means exec-callable, not just solver-passed.
+  if (cfg.DIAG_ONLY && process.env.SHADOW_EXEC_PROBE === '1') {
+    for (const cand of candidates.slice(0, 3)) await shadowExecProbe(chain, rpc, cand);
+  }
   for (const cand of candidates.slice(0, 3)) {
     await executeCandidate(chain, rpc, cand, scheduler);
   }
