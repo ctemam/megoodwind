@@ -159,6 +159,30 @@ export async function cancelBundle(
   return 'error' in res ? { ok: false, reason: res.error } : { ok: true };
 }
 
+/**
+ * WO-11 — mev_sendBundle. MEV-Share backrun: user tx body + max ONE
+ * backrun tx per the spec (body entries ordered; ours last). Refund hint
+ * surfaces the user's preferred refund percentage — the net model must
+ * subtract it (skill.md §MEV-Share: default 90% refund assumption).
+ */
+export async function mevSendBundle(
+  chain: ChainConfig,
+  body: ({ tx: string; canRevert?: boolean } | { bundle: { txs: string[] } })[],
+  targetBlock: number,
+  opts: { validators?: string[] } = {},
+): Promise<BundleResult> {
+  if (!flashbotsAvailable(chain)) return { kind: 'skipped', reason: 'flashbots_unavailable' };
+  const res = await fbRpc<{ bundleHash: string }>('mev_sendBundle', [
+    {
+      inclusion: { block: `0x${targetBlock.toString(16)}` },
+      body,
+      ...(opts.validators ? { preferences: { builders: opts.validators } } : {}),
+    },
+  ]);
+  if ('error' in res) return { kind: 'failed', reason: res.error.slice(0, 200) };
+  return { kind: 'sent', bundleHash: res.bundleHash };
+}
+
 /** flashbots_getFeeRefundTotalsByRecipient — weekly refund telemetry. */
 export async function feeRefundTotals(
   chain: ChainConfig,
