@@ -6,7 +6,7 @@ import { FLASH_SOURCE_ENUM, FlashSourceKey } from './flashVenues.js';
  * Encodes the executor contract's `exec(bytes)` calldata.
  * ArbPlan ABI must mirror contracts/AllBrightExecutor.sol exactly:
  *   enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }
- *   enum DexKind { V2_PAIR, V3_ROUTER }
+ *   enum DexKind { V2_PAIR, V3_ROUTER, V3_POOL, V2_SELFQUOTE }
  *   struct Hop { uint8 kind; address venue; address tokenIn; address tokenOut; uint24 fee; uint16 feeBps }
  *   struct ArbPlan { uint8 source; address borrowToken; uint256 borrowAmount;
  *                    Hop[] hops; uint256 minOut; uint256 minProfit }
@@ -36,12 +36,15 @@ export interface PlanOpts {
 }
 
 export function buildPlan(c: Candidate, o: PlanOpts): { planBytes: string; execData: string } {
+  // WO-9: v3 legs run direct pool.swap (kind 2, venue=pool) — no router
+  // ABI anywhere; velodrome-kind pools run self-quote (kind 3) so the
+  // pool's own getAmountOut carries its real fee/curve.
   const hops = c.legs.map((l) => ({
-    kind: l.pool.kind === 'v3' ? 1 : 0,          // DexKind: V2_PAIR=0, V3_ROUTER=1
-    venue: l.pool.kind === 'v3' ? v3RouterFor(l.pool) : l.pool.address,
+    kind: l.pool.kind === 'v3' ? 2 : l.pool.selfQuote ? 3 : 0,
+    venue: l.pool.address,
     tokenIn: l.tokenIn,
     tokenOut: l.tokenOut,
-    fee: l.pool.kind === 'v3' ? l.pool.feeBps * 100 : 0, // bps -> centi-bps (30bps=3000)
+    fee: 0,
     feeBps: l.pool.kind === 'v2' ? l.pool.feeBps : 0,
   }));
 

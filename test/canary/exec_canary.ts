@@ -20,7 +20,7 @@ import { startLocalBundler } from './localBundler.js';
 // ---------------------------------------------------------------- fork env
 const FORK_URL = process.env.FORK_RPC_URL;
 if (!FORK_URL) { console.error('FORK_RPC_URL (keyed eth rpc) required'); process.exit(1); }
-const SPREAD_PCT = Number(process.env.CANARY_SPREAD_PCT ?? process.argv[process.argv.indexOf('--spread') + 1] ?? '1.5');
+const SPREAD_PCT = Number(process.env.CANARY_SPREAD_PCT ?? (process.argv.includes('--spread') ? process.argv[process.argv.indexOf('--spread') + 1] : undefined) ?? '1.5');
 const PIN_BLOCK = process.env.CANARY_BLOCK ? Number(process.env.CANARY_BLOCK) : undefined;
 const ANVIL = 'http://127.0.0.1:8545';
 const BUNDLER = 'http://127.0.0.1:8546';

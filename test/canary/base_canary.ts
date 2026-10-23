@@ -24,7 +24,7 @@ const V3_ROUTER_BASE = ethers.getAddress('0x2626664c2603336E57B271c5C0b26F421741
 const BALANCER = ethers.getAddress('0xBA12222222228d8Ba445958a75a0704d566BF2C8');
 const AAVE_BASE = ethers.getAddress('0xA238Dd80C259a72e81d7e4664a9801593F98d1c5');
 const MORPHO = ethers.getAddress('0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb');
-const BORROW = 355939609935191488n; // recorded probe_pass borrowAmount
+const BORROW = BigInt(process.env.CANARY_BORROW ?? '355939609935191488'); // recorded probe_pass borrowAmount
 const BALANCER_FEE = 0n;
 const NATIVE_USD = Number(process.env.CANARY_NATIVE_USD ?? '2600');
 
@@ -91,8 +91,12 @@ const minProfitWei = BigInt(Math.floor((Number(process.env.CANARY_MIN_PROFIT_USD
 const plan = {
   source: 0, borrowToken: WETH, borrowAmount: BORROW,
   hops: [
-    { kind: 0, venue: POOL_V2, tokenIn: WETH, tokenOut: TOKEN_X, fee: 0, feeBps: 105 }, // real fee=100bps; engine's CP formula still over-demands ~0.4e18 X at 100 — 105 keeps requested out strictly below pool's getAmountOut (K() requires out < curve output)
-    { kind: 1, venue: V3_ROUTER_BASE, tokenIn: TOKEN_X, tokenOut: WETH, fee: 500, feeBps: 0 },
+    // WO-9 kind 3 V2_SELFQUOTE — the aerodrome pool's OWN getAmountOut
+    // decides out (real 100bps fee + curve), no executor fee model.
+    { kind: 3, venue: POOL_V2, tokenIn: WETH, tokenOut: TOKEN_X, fee: 0, feeBps: 0 },
+    // WO-9 kind 2 V3_POOL — direct pool.swap + callback; venue=POOL, no
+    // router ABI at all (works on SwapRouter02 chains).
+    { kind: 2, venue: POOL_V3, tokenIn: TOKEN_X, tokenOut: WETH, fee: 0, feeBps: 0 },
   ],
   minOut: BORROW + BALANCER_FEE,
   minProfit: minProfitWei,

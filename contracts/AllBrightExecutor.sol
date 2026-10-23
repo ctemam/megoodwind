@@ -16,7 +16,7 @@ import {
     IERC3156FlashBorrower,
     IERC3156FlashLender
 } from "./interfaces/IFlash.sol";
-import {ISwapRouter, IUniswapV2Pair} from "./interfaces/IDex.sol";
+import {ISwapRouter, IUniswapV2Pair, IUniswapV3Pool, ISelfQuotingPair} from "./interfaces/IDex.sol";
 
 /// @title AllBrightExecutor — flash-loan arbitrage executor.
 /// @notice Item #5 (Balancer V2 primary, 0% fee) + Item #6 (Aave V3 fallback,
@@ -30,7 +30,10 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
 
     /// Fee ladder: BALANCER 0% | MORPHO 0% | ERC3156 0% (Maker DssFlash) | AAVE 0.09%
     enum FlashSource { BALANCER, AAVE, MORPHO, ERC3156 }
-    enum DexKind { V2_PAIR, V3_ROUTER }
+    /// WO-9: V3_POOL = direct pool.swap (router-free, works on SwapRouter02
+    /// chains); V2_SELFQUOTE = pool's own getAmountOut (velodrome/aerodrome
+    /// real fee+curve — fixes WO-8 30-vs-100bps K() reverts).
+    enum DexKind { V2_PAIR, V3_ROUTER, V3_POOL, V2_SELFQUOTE }
 
     struct Hop {
         DexKind kind;
@@ -55,6 +58,7 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
     address public morpho;          // Morpho Blue — 0% fee, pull-repay
     address public erc3156Lender;   // Maker DssFlash — 0% fee, DAI only (eth)
     bool private _inFlash;
+    address private _expectedV3Pool; // V3_POOL callback auth — cleared after each leg
 
     event ArbSettled(address indexed borrowToken, uint256 borrowed, uint256 profit);
     event VenuesUpdated(address balancerVault, address aavePool);
@@ -187,6 +191,10 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
             bool last = i == n - 1;
             if (h.kind == DexKind.V2_PAIR) {
                 _swapV2(h, amountIn, last ? plan.minOut : 0);
+            } else if (h.kind == DexKind.V3_POOL) {
+                _swapV3Pool(h, amountIn, last ? plan.minOut : 0);
+            } else if (h.kind == DexKind.V2_SELFQUOTE) {
+                _swapV2SelfQuote(h, amountIn, last ? plan.minOut : 0);
             } else {
                 _swapV3(h, amountIn, last ? plan.minOut : 0);
             }
@@ -219,6 +227,43 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
                 sqrtPriceLimitX96: 0
             })
         );
+    }
+
+    /// WO-9 — direct pool.swap: pool calls back `uniswapV3SwapCallback`,
+    /// we pay tokenIn there; out measured as balance delta (curve-agnostic).
+    function _swapV3Pool(Hop memory h, uint256 amountIn, uint256 minOut) internal {
+        IUniswapV3Pool pool = IUniswapV3Pool(h.venue);
+        bool zeroForOne = pool.token0() == h.tokenIn;
+        uint160 limit = zeroForOne ? 4295128740 : 1461446703485210103287273052203988822378723970341; // MIN_SQRT+1 / MAX_SQRT-1
+        uint256 before = IERC20(h.tokenOut).balanceOf(address(this));
+        _expectedV3Pool = h.venue;
+        pool.swap(address(this), zeroForOne, int256(amountIn), limit, abi.encode(h.tokenIn));
+        _expectedV3Pool = address(0);
+        uint256 out = IERC20(h.tokenOut).balanceOf(address(this)) - before;
+        require(out >= minOut, "V3_MINOUT");
+    }
+
+    /// WO-9 — the pool's own getAmountOut decides (real per-pool fee +
+    /// curve incl. stable pools) — the executor never models the fee.
+    /// Measured on aerodrome V1 (base, fork): the pool's quote exceeds its
+    /// own K-passing max by ~1e-9 relative — getAmountOut rounding is NOT
+    /// K-safe. SELFQUOTE_SHAVE (1bps, ~10^4x headroom, negligible to net)
+    /// keeps the requested out inside the invariant.
+    function _swapV2SelfQuote(Hop memory h, uint256 amountIn, uint256 minOut) internal {
+        ISelfQuotingPair pair = ISelfQuotingPair(h.venue);
+        uint256 out = (pair.getAmountOut(amountIn, h.tokenIn) * 9_999) / 10_000;
+        require(out >= minOut, "V2_MINOUT");
+        IERC20(h.tokenIn).safeTransfer(h.venue, amountIn);
+        bool zeroForOne = pair.token0() == h.tokenIn;
+        pair.swap(zeroForOne ? 0 : out, zeroForOne ? out : 0, address(this), "");
+    }
+
+    /// UniV3-class swap callback — only the pool we just called may pull.
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        if (msg.sender != _expectedV3Pool || _expectedV3Pool == address(0)) revert NotFlashProvider();
+        int256 owed = amount0Delta > 0 ? amount0Delta : amount1Delta;
+        if (owed <= 0) revert BadPlan();
+        IERC20(abi.decode(data, (address))).safeTransfer(msg.sender, uint256(owed));
     }
 
     function _checkProfit(ArbPlan memory plan, uint256 pre) internal {

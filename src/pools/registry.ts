@@ -19,7 +19,9 @@ export interface PoolRef {
   symbol1: string;
   dec0: number;
   dec1: number;
-  feeBps: number;       // v2 swap fee or v3 tier in bps (5/30/100)
+  feeBps: number;       // v2 swap fee or v3 tier in bps (5/30/100) — WO-9: on-chain per-pool read for velodrome-kind
+  stable?: boolean;     // velodrome stable-curve pool — CP model INVALID, solver skips
+  selfQuote?: boolean;  // pool exposes getAmountOut (aero/velodrome) — exec uses V2_SELFQUOTE
   liquidityUsd: number;
   priceUsd?: number;
 }

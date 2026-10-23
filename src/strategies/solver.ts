@@ -57,7 +57,7 @@ const log = logger('solver');
 export function legOut(pool: PoolState, amountIn: bigint, tokenIn: string): bigint {
   const t0 = pool.token0.toLowerCase();
   const inIs0 = tokenIn.toLowerCase() === t0;
-  if (pool.kind === 'v2') {
+  if (pool.kind === 'v2' && !pool.stable) {
     if (!pool.reserve0 || !pool.reserve1) return 0n;
     const r = inIs0
       ? { reserveIn: pool.reserve0, reserveOut: pool.reserve1 }

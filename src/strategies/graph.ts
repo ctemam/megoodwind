@@ -28,7 +28,7 @@ const EPS = 1e-9;
 function edgeRate(p: PoolState, tokenIn: string): number {
   const inIs0 = p.token0.toLowerCase() === tokenIn.toLowerCase();
   const feeMul = 1 - p.feeBps / 10_000;
-  if (p.kind === 'v2') {
+  if (p.kind === 'v2' && !p.stable) { // stable velodrome pools: CP model invalid — no edge
     if (!p.reserve0 || !p.reserve1) return 0;
     const rIn = inIs0 ? p.reserve0 : p.reserve1;
     const rOut = inIs0 ? p.reserve1 : p.reserve0;

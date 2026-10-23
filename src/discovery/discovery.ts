@@ -125,14 +125,14 @@ export class Discovery {
       const chunk = combos.slice(i, i + cfg.DISCOVERY_BATCH_SIZE);
       // velodrome probes BOTH slots (volatile + stable) per pair — track
       // which call belongs to which combo for the results walk.
-      const calls: { to: string; data: string; ci: number }[] = [];
+      const calls: { to: string; data: string; ci: number; stable?: boolean }[] = [];
       for (let ci = 0; ci < chunk.length; ci++) {
         const c = chunk[ci];
-        const enc = (frag: string) => calls.push({ to: f.address, data: frag, ci });
+        const enc = (frag: string, stable?: boolean) => calls.push({ to: f.address, data: frag, ci, stable });
         if (f.kind === 'v3') enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,uint24)', [c.a.address, c.b.address, c.fee]));
         else if (f.kind === 'velodrome') {
-          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, false]));
-          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, true]));
+          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, false]), false);
+          enc(FACTORY_ABI.encodeFunctionData('getPool(address,address,bool)', [c.a.address, c.b.address, true]), true);
         } else if (f.kind === 'algebra') enc(FACTORY_ABI.encodeFunctionData('poolByPair', [c.a.address, c.b.address]));
         else enc(FACTORY_ABI.encodeFunctionData('getPair', [c.a.address, c.b.address]));
       }
@@ -162,11 +162,15 @@ export class Discovery {
         const pool = ethers.getAddress(`0x${value.slice(-40)}`);
         if (pool === ZERO) return;
         const { a, b, fee } = chunk[calls[k].ci];
-        this.upsertPool(f, pool, a, b, fee);
+        this.upsertPool(f, pool, a, b, fee, calls[k].stable);
         chunkPools.push(pool);
         found++;
       });
       breaker.checkRealVolumes(this.chain.key, chunkPools); // ONE batched Bitquery query per chunk
+      // WO-9: velodrome pools get their REAL per-pool fee on-chain —
+      // factory.getFee(pool, stable) returns bps (100 = 1%); the 30bps
+      // default produced 3x out-demand and K() reverts.
+      if (f.kind === 'velodrome' && chunkPools.length) await this.readRealFees(f, chunkPools);
       // Adaptive throttle — delay doubles while batches keep failing,
       // decays back to base on clean batches. Cap 2s.
       delay = failures > 10
@@ -177,7 +181,7 @@ export class Discovery {
     return found;
   }
 
-  private upsertPool(f: FactoryRef, pool: string, a: DiscoveredToken, b: DiscoveredToken, fee?: number) {
+  private upsertPool(f: FactoryRef, pool: string, a: DiscoveredToken, b: DiscoveredToken, fee?: number, stable?: boolean) {
     if (breaker.isConvicted(this.chain.key, pool)) return;
     breaker.checkReputation(this.chain.key, pool); // async explorer verdict — convicts scam-flagged addresses
     const [t0, t1] = [a, b].sort((x, y) => x.address.toLowerCase().localeCompare(y.address.toLowerCase()));
@@ -190,7 +194,28 @@ export class Discovery {
       symbol0: t0.symbol, symbol1: t1.symbol,
       dec0: t0.decimals, dec1: t1.decimals,
       feeBps: f.kind === 'v3' ? (fee ?? 3000) / 100 : f.defaultFeeBps,
+      stable: f.kind === 'velodrome' ? stable : undefined,
+      selfQuote: f.kind === 'velodrome' ? true : undefined,
       liquidityUsd: 0, // unknown until a feed enriches; graph still quotes it
+    });
+  }
+
+  /** WO-9 — real per-pool fee for velodrome-kind pools, one multicall. */
+  private async readRealFees(f: FactoryRef, pools: string[]): Promise<void> {
+    const GET_FEE = 'function getFee(address,bool) view returns (uint256)';
+    const iface = new ethers.Interface([GET_FEE]);
+    const keyed = pools.map((p) => {
+      const st = registry.get(`${this.chain.key}:${p.toLowerCase()}`);
+      return { pool: p, stable: st?.stable ?? false };
+    });
+    const calls = keyed.map((k) => ({ to: f.address, data: iface.encodeFunctionData('getFee', [k.pool, k.stable]), ci: 0 }));
+    const res = await multicall(this.rpc, calls, calls.length).catch(() => null);
+    if (!res) return;
+    res.forEach((v, i) => {
+      if (v.length < 66) return;
+      const fee = Number(BigInt(v));
+      const st = registry.get(`${this.chain.key}:${keyed[i].pool.toLowerCase()}`);
+      if (st && fee > 0 && fee < 10_000) st.feeBps = fee;
     });
   }
 
