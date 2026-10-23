@@ -24,3 +24,5 @@ WOREPO.MD
 data/swap_rows_*.jsonl
 data/shadow_candidates.jsonl
 data/reports/raw/
+data/reports/loop.log
+workorders/
