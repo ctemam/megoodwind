@@ -12,6 +12,7 @@ import { diagRecord } from '../telemetry/diagLog.js';
 import { buildEdges, findCycles } from './graph.js';
 import { pickFlashSource, flashPremium } from '../exec/flashVenues.js';
 import { routeGasUnits } from '../exec/gasModel.js';
+import { closedFormCycle } from '../math/sizing.js';
 
 /**
  * Strategy solver — CPU-eval ALL items before any RPC.
@@ -281,9 +282,28 @@ function emit(
 
   let ceilingHit = false;
   if (cfg.SIZING_MODE === 'optimal') {
+    // WO-9 R1: pure-v2-volatile cycles get the closed-form optimum — the
+    // search is kept ONLY for paths the closed form can't cover (v3 legs).
+    const phi = flSource === 'AAVE' ? 0.0009 : 0;
+    const cf = closedFormCycle(legs.map((l) => ({ pool: l.pool, tokenIn: l.tokenIn })), phi);
+    if (cf) {
+      if (cf.profitable) {
+        for (const m of [0.99, 1, 1.01]) {
+          const sz = BigInt(Math.max(1, Math.floor(Number(cf.tStar) * m)));
+          if (sz <= boundMax) consider(sz);
+        }
+        // t* beyond cap: evaluate the cap itself (feasible boundary point).
+        if (cf.tStar > boundMax) consider(boundMax);
+      } else {
+        // closed form certifies no arb — evaluate once so the normal
+        // funnel counters (no_spread etc.) still classify the miss.
+        consider(boundMax);
+      }
+    }
     // golden-section argmax — netUsd(x) is unimodal for constant-product
     // round-trips (fee-favored below breakeven, impact-penalized above).
-    let lo = 0, hi = Number(boundMax);
+    // WO-9: skipped when the closed form produced a best (v2-volatile paths).
+    let lo = 0, hi = Number(cf ? 0 : boundMax);
     const INVPHI = 0.6180339887498949;
     let x1 = hi - Math.floor((hi - lo) * INVPHI);
     let x2 = lo + Math.floor((hi - lo) * INVPHI);
