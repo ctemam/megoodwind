@@ -1,70 +1,68 @@
-# WO-8 verdict — static-scan arbitrage on Base
+# WO-8.6 verdict — static-scan arbitrage on Base
 
-## Verdict: **DEAD** (as built)
+## Verdict: **DEAD as built / counterfactual UNDECIDED**
 
-Not for lack of candidates — for execution. Every candidate the solver ever
-passed on base is un-executable under the current contract stack, and the
-counterfactual edge even with both bugs fixed is floor-scale.
+- As built: **DEAD.** p = exec-pass rate = **0/148 measured** → every
+  candidate the solver passed is un-executable; realized D = $0.
+- Counterfactual (both exec bugs fixed): **UNDECIDED** per THRESHOLDS §2 —
+  D ≈ **$33–61/day** vs C_run = **REQUESTED** (host invoice + engineering
+  cost + redeploy amortization are Commander inputs, not assumed).
+  Resolves to FIX-WORTHY iff D_lo > C_run.
 
-## The numbers (raw, from persisted rows + live counters)
+## Funnel (live counters, base shadow)
 
-**Funnel (cumulative, base shadow):**
+```
+detected              761,028
+forensic-bait       2,059,493   (peer divergence convictions)
+profit-margin      17,069,808   (depth 16.34M · no_spread 705k · impact 16.3k
+                                 · below_gas 924 · min_profit_floor 8,194)
+passed_to_simulation_probe    148
+exec-probe pass                 0/148   (100% revert 0xa932492f = aerodrome K())
+```
 
-| gate | rows |
-|---|---|
-| total_detected_opportunities | 761,028 |
-| rejected depth | 16,339,366 |
-| rejected no_spread | 705,024 |
-| rejected price_impact | 16,300 |
-| rejected forensic divergence | 2,059,493 |
-| rejected below_gas_multiple | 924 |
-| rejected min_profit_floor | 8,194 |
-| **passed_to_simulation_probe** | **148** |
-| **exec-probe pass (state-overridden current executor)** | **0** |
-| exec-probe deterministic revert | **148 / 148 (100%)** |
+## Distinct paths
 
-Every one of the 148 exec-probes reverted `0xa932492f` (aerodrome `K()`).
+All 148 probe_pass events = **one path**: aerodrome-V1 VIRTUAL/WETH
+`0x21594b…` → UniV3-500 `0x9c087e…`. Recurs in bursts (11–23 events/hr).
+14 distinct paths exist across near-miss + pass rows.
 
-**Distinctness:** all 148 probe_pass events are **one path** —
-aerodrome V1 VIRTUAL/WETH `0x21594b…` → UniV3 fee=500 VIRTUAL/WETH
-`0x9c087e…`. Emissions recur in bursts (h0: 23, h7: 11, h8: 14) with
-modelled net $3.14–$5.30 — always sub-floor or phantom.
+## Counterfactual EV (THRESHOLDS §1, computed not picked)
 
-**Counterfactual (bugs fixed):** near-miss + pass rows deduped by path —
-floor $0.25 → 6 paths, sum-of-best-net **$9.38**; $0.50 → $8.58;
-$1.00 → $7.90; $2.50 → 1 path $5.30. One path produces ~$3.4–5.3 per
-emission window; the *entire observed base edge* is one persistent
-VIRTUAL/WETH dislocation worth ≤$5.30 per occurrence.
+735 emit rows → **44 distinct (path, hour)** opportunities over 0.47 days
+(≈88/day). Nets corrected −13% for the 30→100bps aerodrome fee misread
+(measured on the replayed candidate: $2.57 → $2.246).
 
-**v3 fidelity:** 14 real SwapRouter02 swaps on fork — model error ≈ 0.00%
-(p50/p90/max). The pricing math is not the problem; the exec stack is.
+| p (post-fix exec agreement) | f* (break-even floor) | argmax EV floor | candidates/day | EV/day |
+|---|---|---|---|---|
+| 0.5 | $0.0085 | $0.00 | ~88 | **$33.43** |
+| 0.9 | $0.0009 | $0.00 | ~88 | **$60.78** |
 
-**Memory:** mem_telemetry running, no snapshot files generated this run
-(HEAP_SNAP_MINUTES=0); rss trend flat (see reports/wo8_shadow_*.txt tail).
+Floor binders: f* ≈ 0 (cheap base gas c≈$0.0085); the binding gate is the
+configured MIN_PROFIT_USD=$2.50, not EV — under f*≈0 the system should
+attempt everything with positive modelled net, letting the atomic
+minOut/minProfit guards reject failures at cost c only.
 
-**Swap persistence:** only 8 raw rows in ~20h — the per-block getLogs
-scanner is starved by shared free-tier rate limits competing with the
-shadow runner itself. Raw swap coverage this window: insufficient for
-offline re-threshold; the in-flight counters (0 dislocations ≥10bps on
-16 peer-evaluated swaps when the process was breathing) stand as
-log-derived, not raw-persisted, evidence.
+## v3 fidelity
 
-## Required fixes to change the verdict (WO-9 scope — NOT approved)
+14 real SwapRouter02 swaps on fork — model error ≈0.00% (p50/p90/max).
+Math is not the problem; exec encoding is.
 
-1. Per-pool fee reads (`getFee`/`fee()`) at discovery — aerodrome pools
-   charge real fees ≠ 30bps (this pool: 100bps).
-2. V3 leg via SwapRouter02 7-param `exactInputSingle` or direct
-   `pool.swap` — base has no deadline-ABI router.
-3. Redeploy executor (deployed 0x6614… is stale, 11,060B vs 9,016B
-   source, venue getters dead) — on base AND eth/arb.
+## Memory (WO-1 regression)
 
-## Cost of the fix vs measured edge
+mem_telemetry flat in sampled windows; post-GC flag did not thread the
+tsx wrapper (pre-GC heapUsed only — flagged, not hidden).
 
-Even granting all three fixes: the best observed single-path net is
-$3.4–$5.3/event, ~12 events/hour *during bursts*, and bursts occupy
-~3 of the observed 11 hours — a theoretical ceiling of roughly
-**$100–150/day** if exec worked and the dislocation were unclaimed.
-But a persistent recurring dislocation is precisely the profile of an
-edge someone already farms (contested-share unmeasured — swap coverage
-was starved). That ceiling does not survive a redeploy + arming risk
-profile, and it does not generalize beyond this one pair.
+## Could NOT verify
+
+- Contested share / competitor extraction (swap persistence starved —
+  8 rows/20h).
+- Post-fix exec agreement p (needs WO-9 + agreement measurement; the
+  sweep brackets it at 0.5/0.9).
+- Whether the recurring VIRTUAL/WETH dislocation is already farmed.
+- C_run — REQUESTED from Commander.
+
+## What would make it FIX-WORTHY
+
+D_lo > C_run: at ~$50/day counterfactual, payback horizon > redeploy +
+ops cost decides. Requires: WO-9 shipped, agreement p measured ≥ a*,
+and competition measured — not assumed away.
