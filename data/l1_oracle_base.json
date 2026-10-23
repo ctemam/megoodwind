@@ -1,8 +1,8 @@
 {
-  "l1BaseFeeWei": "43781475",
-  "blobBaseFeeWei": "2725264",
+  "l1BaseFeeWei": "137215210",
+  "blobBaseFeeWei": "6586039",
   "baseFeeScalar": 2269,
   "blobBaseFeeScalar": 1055762,
-  "l1DataFeeWei": "446667283",
-  "at": 1792746791554
+  "l1DataFeeWei": "1193475069",
+  "at": 1792773255310
 }

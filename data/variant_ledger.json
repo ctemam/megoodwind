@@ -17,35 +17,35 @@
       "lane": "predictive"
     },
     "V03@predictive": {
-      "hits": 55,
-      "misses": 150,
+      "hits": 59,
+      "misses": 197,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1874.1310363552159,
+      "netUsd": 1889.2292669452468,
       "lane": "predictive"
     },
     "V04@predictive": {
-      "hits": 53,
-      "misses": 81,
+      "hits": 56,
+      "misses": 112,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1918.9365115162952,
+      "netUsd": 1930.050671751476,
       "lane": "predictive"
     },
     "V05@predictive": {
-      "hits": 53,
-      "misses": 168,
+      "hits": 56,
+      "misses": 208,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1867.2006583122818,
+      "netUsd": 1878.0845292112015,
       "lane": "predictive"
     },
     "V06@predictive": {
-      "hits": 54,
-      "misses": 106,
+      "hits": 57,
+      "misses": 151,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1984.2485694347517,
+      "netUsd": 1995.0812595789143,
       "lane": "predictive"
     },
     "V07@predictive": {
@@ -57,11 +57,11 @@
       "lane": "predictive"
     },
     "V08@predictive": {
-      "hits": 50,
-      "misses": 80,
+      "hits": 53,
+      "misses": 97,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1853.8372760903655,
+      "netUsd": 1864.8084597101756,
       "lane": "predictive"
     },
     "V09@predictive": {
@@ -89,16 +89,16 @@
       "lane": "predictive"
     },
     "V12@predictive": {
-      "hits": 49,
-      "misses": 119,
+      "hits": 52,
+      "misses": 157,
       "minProfitFloorUsd": 2.5,
       "maxProfitUsd": 79.96541357696755,
-      "netUsd": 1853.642679052545,
+      "netUsd": 1865.2628800209902,
       "lane": "predictive"
     }
   },
   "laneProfitUsd": {
-    "predictive": 22958.3383522393,
+    "predictive": 23028.858688695847,
     "whale": 0
   },
   "peakProfitUsd": 79.96541357696755
