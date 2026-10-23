@@ -61,6 +61,7 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
     address private _expectedV3Pool; // V3_POOL callback auth — cleared after each leg
 
     event ArbSettled(address indexed borrowToken, uint256 borrowed, uint256 profit);
+    event LiquidationSettled(address indexed protocol, address indexed user, uint256 profit);
     event VenuesUpdated(address balancerVault, address aavePool);
     event ZeroFeeVenuesUpdated(address morpho, address erc3156Lender);
     event Swept(address indexed token, address indexed to, uint256 amount);
@@ -129,6 +130,14 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
         bytes memory userData
     ) external override {
         if (msg.sender != balancerVault || !_inFlash) revert NotFlashProvider();
+        if (_inLiq) {
+            LiqPlan memory lp = abi.decode(userData, (LiqPlan));
+            uint256 pre = IERC20(lp.debtAsset).balanceOf(address(this)) - amounts[0];
+            _runLiq(lp);
+            IERC20(tokens[0]).safeTransfer(balancerVault, amounts[0] + feeAmounts[0]);
+            _checkLiqProfit(lp, pre);
+            return;
+        }
         ArbPlan memory plan = abi.decode(userData, (ArbPlan));
         uint256 pre = IERC20(plan.borrowToken).balanceOf(address(this)) - amounts[0];
         _runHops(plan);
@@ -146,6 +155,14 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
         bytes calldata params
     ) external override returns (bool) {
         if (msg.sender != aavePool || initiator != address(this) || !_inFlash) revert NotFlashProvider();
+        if (_inLiq) {
+            LiqPlan memory lp = abi.decode(params, (LiqPlan));
+            uint256 pre = IERC20(asset).balanceOf(address(this)) - amount;
+            _runLiq(lp);
+            IERC20(asset).forceApprove(aavePool, amount + premium);
+            _checkLiqProfitPull(lp, pre, amount + premium);
+            return true;
+        }
         ArbPlan memory plan = abi.decode(params, (ArbPlan));
         uint256 pre = IERC20(asset).balanceOf(address(this)) - amount;
         _runHops(plan);
@@ -158,6 +175,14 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
     /// after this returns; identical accounting shape to the Aave path.
     function onMorphoFlashLoan(uint256 assets, bytes calldata data) external override {
         if (msg.sender != morpho || !_inFlash) revert NotFlashProvider();
+        if (_inLiq) {
+            LiqPlan memory lp = abi.decode(data, (LiqPlan));
+            uint256 pre = IERC20(lp.debtAsset).balanceOf(address(this)) - assets;
+            _runLiq(lp);
+            IERC20(lp.debtAsset).forceApprove(morpho, assets);
+            _checkLiqProfitPull(lp, pre, assets);
+            return;
+        }
         ArbPlan memory plan = abi.decode(data, (ArbPlan));
         uint256 pre = IERC20(plan.borrowToken).balanceOf(address(this)) - assets;
         _runHops(plan);
@@ -175,6 +200,14 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
         bytes calldata data
     ) external override returns (bytes32) {
         if (msg.sender != erc3156Lender || initiator != address(this) || !_inFlash) revert NotFlashProvider();
+        if (_inLiq) {
+            LiqPlan memory lp = abi.decode(data, (LiqPlan));
+            uint256 pre = IERC20(token).balanceOf(address(this)) - amount;
+            _runLiq(lp);
+            IERC20(token).forceApprove(erc3156Lender, amount + fee);
+            _checkLiqProfitPull(lp, pre, amount + fee);
+            return keccak256("ERC3156FlashBorrower.onFlashLoan");
+        }
         ArbPlan memory plan = abi.decode(data, (ArbPlan));
         uint256 pre = IERC20(token).balanceOf(address(this)) - amount;
         _runHops(plan);
@@ -279,6 +312,74 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
         uint256 post = bal - repay;
         if (post < pre + plan.minProfit) revert ProfitFloor(post - pre, plan.minProfit);
         emit ArbSettled(plan.borrowToken, plan.borrowAmount, post - pre);
+    }
+
+    // ---------- WO-10 liquidation lane ----------
+
+    struct LiqPlan {
+        FlashSource source;
+        address protocol;      // Aave V3 Pool (liquidationCall lives there)
+        address user;          // borrower being liquidated
+        address collateralAsset;
+        address debtAsset;     // also the flash-borrowed token
+        uint256 debtToCover;   // <= close-factor-max, computed off-chain per R5
+        Hop[] hops;            // sells seized collateral -> debtAsset
+        uint256 minProfit;     // post-repay profit floor in debtAsset units
+    }
+
+    /// Owner entry — flash-fund a liquidation, sell collateral, keep bonus.
+    function liquidate(bytes calldata planBytes) external onlyOwner nonReentrant {
+        LiqPlan memory lp = abi.decode(planBytes, (LiqPlan));
+        if (lp.user == address(0) || lp.debtAsset == address(0) || lp.debtToCover == 0) revert BadPlan();
+        _inFlash = true;
+        _inLiq = true;
+        if (lp.source == FlashSource.BALANCER) {
+            if (balancerVault == address(0)) revert VenueUnset(lp.source);
+            address[] memory t = new address[](1);
+            uint256[] memory a = new uint256[](1);
+            t[0] = lp.debtAsset; a[0] = lp.debtToCover;
+            IBalancerVault(balancerVault).flashLoan(address(this), t, a, planBytes);
+        } else if (lp.source == FlashSource.MORPHO) {
+            if (morpho == address(0)) revert VenueUnset(lp.source);
+            IMorphoFlash(morpho).flashLoan(lp.debtAsset, lp.debtToCover, planBytes);
+        } else if (lp.source == FlashSource.ERC3156) {
+            if (erc3156Lender == address(0)) revert VenueUnset(lp.source);
+            IERC3156FlashLender(erc3156Lender).flashLoan(
+                IERC3156FlashBorrower(address(this)), lp.debtAsset, lp.debtToCover, planBytes);
+        } else {
+            if (aavePool == address(0)) revert VenueUnset(lp.source);
+            IAavePool(aavePool).flashLoanSimple(address(this), lp.debtAsset, lp.debtToCover, planBytes, 0);
+        }
+        _inFlash = false; _inLiq = false;
+    }
+
+    bool private _inLiq;
+
+    /// Runs inside every flash callback (liquidate path): liquidationCall
+    /// seizes collateral at the protocol bonus, hops sell it back to the
+    /// debt asset, repay+profit accounting follows the arb path exactly.
+    function _runLiq(LiqPlan memory lp) internal {
+        IERC20(lp.debtAsset).forceApprove(lp.protocol, lp.debtToCover);
+        IAavePool(lp.protocol).liquidationCall(lp.collateralAsset, lp.debtAsset, lp.user, lp.debtToCover, false);
+        ArbPlan memory fake;
+        fake.borrowToken = lp.debtAsset;
+        fake.hops = lp.hops;
+        fake.minOut = 0;
+        fake.minProfit = lp.minProfit;
+        _runHops(fake);
+    }
+
+    function _checkLiqProfit(LiqPlan memory lp, uint256 pre) internal {
+        uint256 post = IERC20(lp.debtAsset).balanceOf(address(this));
+        if (post < pre + lp.minProfit) revert ProfitFloor(post - pre, lp.minProfit);
+        emit LiquidationSettled(lp.protocol, lp.user, post - pre);
+    }
+    function _checkLiqProfitPull(LiqPlan memory lp, uint256 pre, uint256 repay) internal {
+        uint256 bal = IERC20(lp.debtAsset).balanceOf(address(this));
+        if (bal < repay) revert ProfitFloor(0, repay);
+        uint256 post = bal - repay;
+        if (post < pre + lp.minProfit) revert ProfitFloor(post - pre, lp.minProfit);
+        emit LiquidationSettled(lp.protocol, lp.user, post - pre);
     }
 
     /// @notice Profit sweep to PROFIT_WALLET (owner decides recipient).

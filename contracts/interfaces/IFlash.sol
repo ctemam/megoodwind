@@ -22,6 +22,15 @@ interface IFlashLoanRecipient {
 
 /// Item #6 — Aave V3 (fallback engine, 0.09% fee).
 interface IAavePool {
+    /// WO-10 — seize collateral at the per-asset bonus; debtToCover
+    /// bounded by the close factor (50%, or 100% when HF < 0.95).
+    function liquidationCall(
+        address collateralAsset,
+        address debtAsset,
+        address user,
+        uint256 debtToCover,
+        bool receiveAToken
+    ) external;
     function flashLoanSimple(
         address receiverAddress,
         address asset,
