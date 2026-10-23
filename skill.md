@@ -9,6 +9,25 @@
   Screening approximation multiplies by `(1 - fee)`; final arbiter is the exec-probe.
 - **Tick-walk guard** — skip legs whose swap crosses >`MAX_TICK_DISTANCE` (200)
   ticks; beyond that the constant-liquidity approximation breaks (ToR §2).
+- **Closed-form cycle sizing** (VERIFIED — Architect brute-force check, 980
+  random profitable 2-pool cases vs ternary search, max relative error
+  5.6e-12): any n-hop constant-product cycle collapses to (P,Q,R) by leg
+  composition `(p1p2, q1q2, q2r1 + p1r2)` where each leg contributes
+  `f(t) = p t/(q + r t)`; for two pools with fees g_a,g_b and reserves
+  x_a,y_a,x_b,y_b: `P = g_a g_b x_b y_a`, `Q = y_b x_a`, `R = g_a y_b + g_a g_b y_a`.
+  Optimal input `t* = (sqrt(P Q) - Q)/R`; max gross `(sqrt(P) - sqrt(Q(1+phi)))^2 / R`
+  with flash premium phi; profitable iff `P > Q(1+phi)`. Replaces the
+  golden-section/ratio ladder (SIZING_MODE) — Devin lands the same unit
+  test in WO-9; old search survives as test cross-check only.
+  V3 legs: within one tick the same form holds with virtual reserves —
+  fee taken from input (`amountRemainingLessFee = amount*(1e6 - feePips)/1e6`,
+  Uniswap `SwapMath.computeSwapStep` — VERIFIED against source); across
+  ticks the function is piecewise — solve per segment, confirm on-chain.
+  Cross-check pending: Wang et al. arXiv:2105.02784 §3/App-B closed form
+  (abstract read; full text NOT read — UNVERIFIED until fetched).
+- **Per-pool fees** — NEVER hardcode 30bps: aerodrome factory `getFee(pool,stable)`
+  returned 100bps where 30bps was assumed → `K()` reverts (measured WO-8).
+  Fee is a per-pool on-chain read carried through discovery → solver → exec.
 
 ## Profit constraint
 
@@ -22,8 +41,18 @@ net_usd = gross_token_usd
 
 - `auction_bribe = (gross - gas - premium) * COINBASE_BRIBE_PCT_MAX` — worst-case
   builder tip deducted BEFORE the floor (honest capturable-net).
+  `COINBASE_BRIBE_PCT=50 / MAX=80` is an UNSOURCED placeholder (repo env,
+  no citation) — replaced by the WO-11 learned bid model.
 - Floor: `net_usd >= MIN_PROFIT_USD` and `STRICT_PROFIT_FLOOR_GUARD` blocks any bypass.
 - EIP-1559 circuit breaker: dormant above `MAX_BASE_FEE_GWEI` (300).
+- **Exact gas gate** (THRESHOLDS §8b): accept iff closed-form gross >
+  gas in token units. `GAS_PROFIT_MULT` survives only as a model-error
+  margin `K = 1 + 2σ_g/g` (σ_g = std of predicted−realized gas from
+  canary receipts; 2σ = named convention, THRESHOLDS §1).
+- **MEV-Share lane net** (VERIFIED — Flashbots docs): gross − gas −
+  premium − builder payment − user refund (node default 90% of MEV to
+  the user; searcher sets `validity.refund`). A model without the
+  refund leg overstates profit — corrected per RESEARCH_BRIEF R4.
 
 ## Dynamic Graph Discovery — Bellman-Ford pathfinder (`src/strategies/graph.ts`)
 
@@ -48,12 +77,23 @@ negative cycle ⇒ Π rates > 1 ⇒ arbitrage cycle
 - Cycles map to strategy families: 2-hop → P01, ≥3-hop → P02.
 - Borrow tokens without a USD reference are skipped — an unpriced leg
   produces dishonest net math.
+- **BF is size-blind** — it finds cycles, not sizes. The network-level
+  optimum over CFMMs is CONVEX without fixed costs and mixed-integer
+  with gas (VERIFIED — Angeris et al., Optimal Routing for CFMMs,
+  arXiv:2204.05238); the same problem can certify NO arbitrage exists.
+  Bellman-Ford-Moore on DeFi graphs: DeFiPoser, arXiv:2103.02228
+  (abstract read). Sizing/leg-inclusion is where money and gas trade
+  off — convex solve over the touched sub-graph is the principled
+  upgrade (open, R2).
 
 ## Predictive drift (item #16)
 
 Variants define `slippageBps / minDepthUsd / maxBlockDelay / sizeCapUsd`;
 `effectiveGuards()` merges env floors — a variant may only tighten, never loosen.
 Projected price is discounted by `slippageBps` before profit check.
+**HAND-SET, unjustified** (THRESHOLDS §9): the 12 variant presets
+(slippageBps 5–25, minDepthUsd 100k–500k, sizeCapUsd 25k–100k) and
+`FLASH_BORROW_USD=10000` — WO-13 must derive or learn them.
 
 ## Credibility ceiling
 
@@ -233,6 +273,22 @@ the route arms when the exec path produces signed raw txs. mev_sendBundle
 (MEV-Share) = different body format (inclusion/body/validity), one backrun
 tx max as of 2025-10 — keep separate from eth_sendBundle.
 
+**Bundle pricing** (VERIFIED — Flashbots docs): the builder maximises
+TOTAL BLOCK PROFIT — bundles are not ranked by effective gas price alone,
+are not guaranteed top-of-block, and other transactions may land between
+bundles. Payment = fee per gas + priority fee + direct validator payment.
+Flashbots advises logging what was paid per opportunity per block — that
+log is the bid model's training data (WO-11).
+
+**MEV-Share** (VERIFIED — docs): `mev_sendBundle` body carries
+inclusion / body / validity / privacy; backruns only; the user is
+refunded a stated share of MEV (default 90%) — the searcher-side net
+subtracts the refund leg. Hints (SSE stream): tx hash, logs, affected
+contracts — enough to target pools without the full calldata.
+Bidding is a game (VERIFIED — Flash Boys 2.0, arXiv:1904.05234):
+priority gas auctions are continuous-time partial-information games —
+win probability vs bid share is estimated from OUR bundle logs, not assumed.
+
 ## RPC routing config overlay (`rpc_pool_config.json` + `src/providers/rpcPoolConfig.ts`)
 
 Operational state lives in the JSON, templates/budgets live in the TS
@@ -354,3 +410,73 @@ Node/project ops (`list_nodes`, `create_node`, `get_deployment_options`)
 need a console API key (console.chainstack.com → user settings → API keys)
 as `Authorization: Bearer`. The `mt_` RPC token is NOT a console API key —
 the two auth planes are separate.
+
+## Liquidation mechanics — Aave V3 (VERIFIED — LiquidationLogic.sol source)
+
+- Close factor: **50%** of debt by default; **100% only when HF < 0.95**
+  (`CLOSE_FACTOR_HF_THRESHOLD = 0.95e18`).
+- Collateral seized = (debt price × debt covered / collateral price) ×
+  liquidationBonus, capped by the borrower's collateral balance (debt
+  needed recomputed against the cap).
+- Protocol fee applies to the BONUS portion only:
+  bonus part = collateral − collateral/bonus;
+  liquidator net bonus = `(bonus − 1) × (1 − liquidationProtocolFee)`.
+- `liquidationBonus` and `liquidationProtocolFee` are PER-ASSET reserve
+  configuration — read on-chain, never assumed.
+- Competition is a MEASURE input (Qin et al. count liquidations as BEV
+  next to arbitrage — a contested priority race, not low-competition).
+
+## Pool-ranking prior — LVR (UNVERIFIED)
+
+- VERIFIED (abstract): LP returns decompose into market-risk beta plus
+  an alpha equal to fees minus losses to arbitrageurs (Milionis et al.,
+  Automated Market Making and Loss-Versus-Rebalancing, arXiv:2208.06046).
+- UNVERIFIED: the claim "arbitrage loss rate ≈ σ²·V/8" is from memory —
+  NOT confirmed (Lemma 2 + examples unread). If confirmed, a pool's
+  expected arb supply scales with σ²·TVL → ranks chain/token/pool
+  candidates before spending RPC. Devin confirms before reliance.
+- Caveat: LVR quantifies arb supply to the POOL's LPs; fee tier and
+  volume change the trade flow arriving, so ranking uses σ²·TVL as a
+  prior, corrected by observed DEXTrades volume (Bitquery, MEASURE).
+
+## Competition and bidding game (R3)
+
+- Priority gas auctions: continuous-time, partial-information
+  (VERIFIED — Flash Boys 2.0, arXiv:1904.05234).
+- Per bundle per block, LOG: expected gross, bid %, builders fanned,
+  included Y/N, block delta to inclusion, realized net — the win-rate
+  and bid-distribution posterior for WO-11.
+- Builder ranks by total block profit — a bundle can lose to a
+  lower-fee bundle that improves block composition (VERIFIED —
+  Flashbots bundle-pricing doc).
+- Win probability and bid curves are MEASURE: live-market properties,
+  only our logs answer them.
+
+## Source ledger & reading status
+
+| Source | Status |
+|---|---|
+| arXiv:2204.05238 Angeris et al. — Optimal Routing for CFMMs | READ (abstract) |
+| arXiv:2105.02784 Wang et al. — Cyclic Arbitrage in DEXes | READ (abstract); §3/App-B NOT read |
+| arXiv:2103.02228 Zhou et al. — DeFiPoser | READ (abstract) |
+| arXiv:2101.05511 Qin, Zhou, Gervais — Quantifying BEV | READ (abstract) |
+| arXiv:1904.05234 Daian et al. — Flash Boys 2.0 | READ (abstract) |
+| arXiv:2003.03810 Qin et al. — Flash-loan attacks | READ (abstract) |
+| arXiv:2208.06046 Milionis et al. — LVR | READ (abstract+structure); exact formula NOT confirmed |
+| Flashbots: bundle pricing, MEV-Share overview/bundles | READ in full |
+| Aave V3 LiquidationLogic.sol | READ (relevant functions) |
+| Uniswap v3-core SwapMath.sol | READ in full |
+| Uniswap v3 whitepaper PDF | UNREADABLE — not used |
+| Aave docs URLs | 404 — replaced by contract source |
+| First-pass IDs 2102.05956 / 2012.08040 / 2009.14021 | WRONG papers — discarded |
+
+Papers are 2019–2022: their dollar figures describe an older market —
+NOT expectations for 2026. Rule: no citation without a fetched page.
+
+## Open research queue (do not assume)
+
+1. Sequencer ordering rules on Base and Arbitrum today.
+2. Builder landscape 2026 — private block share, who accepts our bundles.
+3. Competitor density on eth/base/arb.
+4. Oracle-update vs liquidation timing races.
+5. Wang et al. closed form (full text) — cross-check of R1.
