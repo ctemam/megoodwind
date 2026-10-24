@@ -38,16 +38,31 @@ const canon = aggs.map((a, i) => canonicalReport(a.id, KEY, cards[i], a,
   { ok: bench.top3.some((b) => b.id === a.id), why: bench.insufficient.find((x) => x.id === a.id)?.why },
   { eligible: bench.eligible, total: bench.universe }));
 
+// CMMC — mandatory metrics contract, hard gate before publish
+const { buildTable, gate } = await import('../src/ci/cmmc.js');
+const funnel = [{ stage: 'visibility', entered: recs.length, lost: recs.filter((r) => r.attribution?.outcome === 'visibility_failure').length }];
+const econStatus: Record<string, number> = {}; for (const r of recs) if (r.econ?.status) econStatus[r.econ.status] = (econStatus[r.econ.status] ?? 0) + 1;
+let reconOk = 0, reconFail = 0, noGross = 0;
+for (const r of recs.filter((x) => x.econ?.netUsd !== undefined)) { const e = r.econ!; if ((e as any).grossUsd === undefined) { noGross++; continue; } Math.abs(e.grossUsd! - (e.gasCostUsd ?? 0) - ((e as any).flashFeeUsd ?? 0) - ((e as any).builderPayUsd ?? 0) - e.netUsd!) < 0.01 ? reconOk++ : reconFail++; }
+const quality: Record<string, number> = {}; for (const c of canon) for (const [, f2] of Object.entries(c.sections.evidence_quality)) quality[(f2 as any).status] = (quality[(f2 as any).status] ?? 0) + 1;
+const cmmcRows = buildTable({ records: recs, entities: aggs.length, eligible: bench.eligible, scored: uni, provisional: bench.top3.filter((b) => b.provisional).length, top3neg: bench.top3.filter((b) => (b.netUsd ?? 0) < 0).length, funnel, recon: { ok: reconOk, fail: reconFail, noGross }, econStatus, quality });
+const cmmc = gate(cmmcRows);
+if (!cmmc.ok) { console.log(`FAILED_METRICS_CONTRACT: ${cmmc.fails.join(' | ')}`); process.exit(3); }
+
 const out = {
   generatedAt: new Date().toISOString(), chain: KEY, schema: 'comptool-v1.2',
-  benchmark: bench, scorecards: cards, canonicalReports: canon,
+  benchmark: bench, scorecards: cards, canonicalReports: canon, cmmc: { version: 'cmmc-v1', rows: cmmcRows, gate: cmmc },
   counters: { records: recs.length, entities: aggs.length, scored: uni, complete: cards.filter((c) => c.completeness === 'COMPLETE').length },
 };
 const hash = createHash('sha256').update(JSON.stringify(out)).digest('hex').slice(0, 12);
 writeFileSync(`data/ci/dashboard_${KEY}.json`, JSON.stringify({ ...out, hash }, null, 1));
 
 // md view — preserved prev report pattern: write only on success
-const L: string[] = [`# COMPTOOL v1.2 — ${KEY}`, `generated ${out.generatedAt} | hash=${hash}`, '', `## Top-3 benchmark (eligible=${bench.eligible}/${bench.universe})`];
+const L: string[] = [`# COMPTOOL v1.2 — ${KEY}`, `generated ${out.generatedAt} | hash=${hash}`, '',
+  `## CMMC mandatory metrics (${cmmcRows.length} rows, gate=${cmmc.ok ? 'PASS' : 'FAIL'})`,
+  '| metric_id | metric_name | value | unit | num | den | status | reason |', '|---|---|---|---|---|---|---|---|'];
+for (const m of cmmcRows) L.push(`| ${m.metric_id} | ${m.metric_name} | ${m.value ?? 'null'} | ${m.unit} | ${m.numerator ?? '-'} | ${m.denominator ?? '-'} | ${m.status} | ${m.reason_unavailable ?? '-'} |`);
+L.push('', `## Top-3 benchmark (eligible=${bench.eligible}/${bench.universe})`);
 for (const b of bench.top3) L.push(`- #${b.rank} ${b.id.slice(0, 12)} score=${b.score?.toFixed(3)} n=${b.n} net=${b.netUsd?.toFixed(4)} conf=${b.confidence.toFixed(2)}`);
 L.push('', `## Scorecards (${cards.length})`, '| entity | score | rank | net$ | winRate | spanDays | active | completeness |');
 L.push('|---|---|---|---|---|---|---|---|');
