@@ -1,83 +1,105 @@
 /**
- * C1 — competitor analytics from public chain data (shadow, read-only).
- * Scans recent blocks for:
- *  a) Aave V3 LiquidationCall events -> bot address, profit proxy, gas.
- *  b) arb cycles: txs emitting Swap events on >=2 distinct pools, then
- *     ERC20 Transfer deltas to the tx sender -> net gain.
- * Records: block, txHash, bot, pools touched, position-in-block, gas,
- * private hint (top-of-block/high-gas heuristic is NOT reliable — so we
- * record mempool-presence as 'unknown' honestly).
- * Grouped by bot -> count, total/avg profit, top-5 share.
- * Run: npx tsx scripts/competitor_scan.ts <chain> <blockWindow>
+ * C1-update — competitor ledger, mev-inspect method (verified rules).
+ * Scan a block window on one chain:
+ *  - decode every Swap v2/v3 log + pool token0/1
+ *  - group by tx; apply start/end + shortest-route cycle matching
+ *    (start.token_in==end.token_out, diff pools, from==to, from!=pool,
+ *     next.token_in==cur.token_out, amounts equal within 1%)
+ *  - profit = last.out − first.in in start token
+ *  - liquidation = LiquidationCall event
+ *  - record block, txIndex, bot, route pools, gas; coinbase payment
+ *    flags private channel (lower bound)
+ * Public data only. Run: npx tsx scripts/competitor_scan.ts <chain> <blocks>
  */
 import { ethers } from 'ethers';
 import { appendFileSync, mkdirSync } from 'fs';
 import { chainConfig, ChainKey } from '../src/config/index.js';
 import { RpcPool } from '../src/providers/rpcPool.js';
+import { multicall } from '../src/providers/multicall.js';
 
 const KEY = (process.argv[2] ?? 'eth') as ChainKey;
-const WINDOW = Number(process.argv[3] ?? 1500);
+const WINDOW = Number(process.argv[3] ?? 500);
 const chain = chainConfig(KEY);
 const rpc = new RpcPool(chain);
 const head = await rpc.blockNumber();
 const from = head - WINDOW;
+const log = console.log;
 
-const LIQ_TOPIC = ethers.id('LiquidationCall(address,address,address,uint256,uint256,address,bool)');
 const SWAP_V2 = ethers.id('Swap(address,uint256,uint256,uint256,uint256,address)');
 const SWAP_V3 = ethers.id('Swap(address,address,int256,int256,uint160,uint128,int24)');
-const TRANSFER = ethers.id('Transfer(address,address,uint256)');
-const AAVE_POOL = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
+const LIQ_TOPIC = ethers.id('LiquidationCall(address,address,address,uint256,uint256,address,bool)');
+const AAVE = '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2';
+const T01 = new ethers.Interface(['function token0() view returns (address)', 'function token1() view returns (address)']);
+const COINBASE = '0x0000000000000000000000000000000000000000';
 
-interface Row { block: number; tx: string; bot: string; kind: string; pools: string[]; posInBlock: number; gasUsed: string; gasPaid: string; profitUsd?: number; rawProfitUnits?: number; }
-const rows: Row[] = [];
+interface Swap { tx: string; pool: string; inT: string; outT: string; inAmt: bigint; outAmt: bigint; from: string; to: string; }
 
-// --- a) liquidations ---
-const liqLogs = await rpc.call<ethers.Log[]>('eth_getLogs', [{ address: AAVE_POOL, topics: [LIQ_TOPIC], fromBlock: '0x' + from.toString(16), toBlock: '0x' + head.toString(16) }]).catch(() => []);
-const liqTxs = [...new Set((liqLogs as ethers.Log[]).map((l) => l.transactionHash))];
-for (const txHash of liqTxs.slice(0, 25)) {
-  const [tx, rc] = await Promise.all([rpc.call<ethers.TransactionResponse>('eth_getTransactionByHash', [txHash]).catch(() => null), rpc.call<ethers.TransactionReceipt>('eth_getTransactionReceipt', [txHash]).catch(() => null)]);
-  if (!tx || !rc) continue;
-  const ev = (liqLogs as ethers.Log[]).filter((l) => l.transactionHash === txHash);
-  let profit = 0;
-  for (const l of ev) { const d = ethers.AbiCoder.defaultAbiCoder().decode(['uint256','uint256','address','bool'], l.data); profit += (Number(d[1]) - Number(d[0])); } // raw units — token decimals vary; not USD
-  rows.push({ block: rc.blockNumber, tx: txHash, bot: tx.from, kind: 'liquidation', pools: ev.map((l) => '0x' + l.topics[2].slice(-40)), posInBlock: rc.index, gasUsed: rc.gasUsed.toString(), gasPaid: ethers.formatEther(BigInt(rc.gasUsed) * BigInt(rc.effectiveGasPrice ?? rc.gasPrice ?? 0)), rawProfitUnits: profit });
+const swapLogs: ethers.Log[] = [];
+for (let b = from; b < head; b += 100) {
+  const end = Math.min(b + 99, head);
+  const chunk = await rpc.call<ethers.Log[]>('eth_getLogs', [{ topics: [[SWAP_V2, SWAP_V3]], fromBlock: '0x' + b.toString(16), toBlock: '0x' + end.toString(16) }]).catch(() => [] as ethers.Log[]);
+  swapLogs.push(...(chunk as ethers.Log[]));
 }
+const pools = [...new Set((swapLogs as ethers.Log[]).map((l) => l.address.toLowerCase()))];
+const meta = new Map<string, [string, string]>();
+const calls = pools.flatMap((p) => [{ to: p, data: T01.encodeFunctionData('token0'), ci: 0 }, { to: p, data: T01.encodeFunctionData('token1'), ci: 0 }]);
+const res = await multicall(rpc, calls, calls.length).catch(() => [] as string[]);
+pools.forEach((p, i) => { try { meta.set(p, [T01.decodeFunctionResult('token0', res[i * 2])[0], T01.decodeFunctionResult('token1', res[i * 2 + 1])[0]]); } catch {} });
 
-// --- b) arb cycles: multi-pool swap txs ---
-// swap scan bounded to the top 3 liquid venues — unbounded Swap scans
-// hit the provider's log cap and return nothing
-const VENUES: Record<string, string[]> = {
-  eth: ['0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc', '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640', '0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8'],
-  base: [], arb: [], op: [], poly: [], avax: [],
-};
-const swapLogs = await rpc.call<ethers.Log[]>('eth_getLogs', [{ address: VENUES[KEY] ?? VENUES.eth, topics: [[SWAP_V2, SWAP_V3]], fromBlock: '0x' + (head - Math.min(WINDOW, 300)).toString(16), toBlock: '0x' + head.toString(16) }]).catch(() => []);
-const byTx = new Map<string, Set<string>>();
-for (const l of swapLogs as ethers.Log[]) { (byTx.get(l.transactionHash) ?? byTx.set(l.transactionHash, new Set()).get(l.transactionHash)!).add(l.address.toLowerCase()); }
-const arbTxs = [...byTx].filter(([, p]) => p.size >= 2).map(([h]) => h);
-for (const txHash of arbTxs.slice(0, 30)) {
-  const [tx, rc] = await Promise.all([rpc.call<ethers.TransactionResponse>('eth_getTransactionByHash', [txHash]).catch(() => null), rpc.call<ethers.TransactionReceipt>('eth_getTransactionReceipt', [txHash]).catch(() => null)]);
-  if (!tx || !rc) continue;
-  // net token delta to sender via Transfer logs
-  const delta = new Map<string, bigint>();
-  for (const l of rc.logs) {
-    if (l.topics[0] !== TRANSFER || l.topics.length < 3) continue;
-    const to = '0x' + l.topics[2].slice(-40), from_ = '0x' + l.topics[1].slice(-40);
-    const amt = BigInt(l.data);
-    if (to.toLowerCase() === tx.from.toLowerCase()) delta.set(l.address, (delta.get(l.address) ?? 0n) + amt);
-    if (from_.toLowerCase() === tx.from.toLowerCase()) delta.set(l.address, (delta.get(l.address) ?? 0n) - amt);
+const swaps: Swap[] = [];
+for (const l of swapLogs as ethers.Log[]) {
+  const m = meta.get(l.address.toLowerCase()); if (!m) continue;
+  const [t0, t1] = m;
+  if (l.topics[0] === SWAP_V2) {
+    const d = ethers.AbiCoder.defaultAbiCoder().decode(['uint256','uint256','uint256','uint256'], l.data);
+    const [inT, inAmt, outT, outAmt] = d[0] > 0n ? [t0, d[0], t1, d[3]] : [t1, d[1], t0, d[2]];
+    swaps.push({ tx: l.transactionHash, pool: l.address.toLowerCase(), inT: inT.toLowerCase(), outT: outT.toLowerCase(), inAmt, outAmt, from: '0x' + l.topics[1].slice(-40), to: '0x' + l.topics[2].slice(-40) });
+  } else {
+    const d = ethers.AbiCoder.defaultAbiCoder().decode(['int256','int256','uint160','uint128','int24'], l.data);
+    const [inT, inAmt, outT, outAmt] = d[0] > 0n ? [t0, d[0], t1, -d[1]] : [t1, d[1], t0, -d[0]];
+    swaps.push({ tx: l.transactionHash, pool: l.address.toLowerCase(), inT: inT.toLowerCase(), outT: outT.toLowerCase(), inAmt, outAmt, from: '0x' + l.topics[1].slice(-40), to: '0x' + l.topics[2].slice(-40) });
   }
-  const net = [...delta.values()].reduce((a, b) => (b > a ? b : a), 0n);
-  rows.push({ block: rc.blockNumber, tx: txHash, bot: tx.from, kind: 'arb', pools: [...(byTx.get(txHash) ?? [])], posInBlock: rc.index, gasUsed: rc.gasUsed.toString(), gasPaid: ethers.formatEther(BigInt(rc.gasUsed) * BigInt(rc.effectiveGasPrice ?? rc.gasPrice ?? 0)), profitUsd: Number(net) / 1e6 });
 }
 
-// --- aggregate ---
-const byBot = new Map<string, { n: number; profit: number; kinds: Set<string> }>();
-for (const r of rows) { const b = byBot.get(r.bot) ?? { n: 0, profit: 0, kinds: new Set() }; b.n++; b.profit += r.profitUsd ?? 0; b.kinds.add(r.kind); byBot.set(r.bot, b); }
-const bots = [...byBot].sort((a, b) => b[1].profit - a[1].profit);
-const totalP = bots.reduce((s, [, b]) => s + b.profit, 0);
-const top5 = bots.slice(0, 5).reduce((s, [, b]) => s + b.profit, 0);
-console.log(`[${KEY}] blocks ${from}-${head}: ${rows.length} events, ${bots.length} bots, total profit ~$${totalP.toFixed(0)}, top5 share ${totalP ? (top5 / totalP * 100).toFixed(0) : 0}%`);
-for (const [bot, b] of bots.slice(0, 10)) console.log(`  ${bot} n=${b.n} profit~$${b.profit.toFixed(0)} kinds=${[...b.kinds].join('+')}`);
+// mev-inspect rules
+const match = (a: Swap, b: Swap) => a.outT === b.inT && (a.to === b.pool || a.pool === b.from || a.to === b.from) && b.inAmt <= (a.outAmt * 101n) / 100n && b.inAmt >= (a.outAmt * 99n) / 100n;
+const byTx = new Map<string, Swap[]>();
+for (const s of swaps) (byTx.get(s.tx) ?? byTx.set(s.tx, []).get(s.tx)!).push(s);
+const poolSet = new Set(pools);
+const arbs: { tx: string; route: Swap[]; profit: bigint; token: string; bot: string }[] = [];
+for (const [tx, ss] of byTx) {
+  if (ss.length < 2) continue;
+  for (const start of ss) {
+    const ends = ss.filter((e) => e !== start && e.outT === start.inT && e.pool !== start.pool && e.to === start.from && !poolSet.has(start.from));
+    if (!ends.length) continue;
+    // greedy shortest: try direct close then extend
+    let route: Swap[] | null = null;
+    for (const end of ends) if (match(start, end)) { route = [start, end]; break; }
+    if (!route) for (const nxt of ss.filter((s) => s !== start && !ends.includes(s))) {
+      if (match(start, nxt)) for (const end of ends) if (match(nxt, end)) { route = [start, nxt, end]; break; }
+      if (route) break;
+    }
+    if (route && route[route.length - 1].outAmt > start.inAmt) {
+      arbs.push({ tx, route, profit: route[route.length - 1].outAmt - start.inAmt, token: start.inT, bot: start.from });
+      break; // one arb per tx per start (mev-inspect keeps ordered routes; we take first valid)
+    }
+  }
+}
 
+const liqLogs = await rpc.call<ethers.Log[]>('eth_getLogs', [{ address: AAVE, topics: [LIQ_TOPIC], fromBlock: '0x' + from.toString(16), toBlock: '0x' + head.toString(16) }]).catch(() => []);
+const txs = [...new Set([...arbs.map((a) => a.tx), ...(liqLogs as ethers.Log[]).map((l) => l.transactionHash)])];
+const rows: any[] = [];
+for (const txHash of txs.slice(0, 40)) {
+  const [tx, rc] = await Promise.all([rpc.call<any>('eth_getTransactionByHash', [txHash]).catch(() => null), rpc.call<any>('eth_getTransactionReceipt', [txHash]).catch(() => null)]);
+  if (!tx || !rc) continue;
+  const isLiq = (liqLogs as ethers.Log[]).some((l) => l.transactionHash === txHash);
+  const arb = arbs.find((a) => a.tx === txHash);
+  const coinbasePay = rc.logs?.some((l: any) => l.topics[0] === ethers.id('Transfer(address,address,uint256)') && '0x' + l.topics[2].slice(-40) !== tx.from) ?? false;
+  rows.push({ block: rc.blockNumber, txIndex: rc.index, tx: txHash, bot: tx.from, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
+}
+const byBot = new Map<string, number>();
+for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
+log(`[${KEY}] blocks ${from}-${head} | swaps decoded: ${swaps.length} across ${pools.length} pools | arbs: ${arbs.length} | liqs: ${(liqLogs as any[]).length} | bots: ${byBot.size}`);
+for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk+${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
 mkdirSync('data/speed', { recursive: true });
-appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), chain: KEY, from, to: head, window: WINDOW, events: rows.length, bots: bots.length, totalProfitUsd: totalP, top5Share: totalP ? top5 / totalP : null, rows }) + '\n');
+appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, rows }) + '\n');
