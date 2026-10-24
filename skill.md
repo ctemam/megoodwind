@@ -464,3 +464,25 @@ after onMorphoLiquidate approve. Liquidate partial when
 repaidAssets·incentive/px would exceed position collateral (Panic 0x11
 guard — measured on fork).
 Net = seized collat value − repaid − fees − gas − flash premium.
+
+## Competitive-capability assessment framework (Commander spec, 2026-10-24)
+
+A searcher is decomposed into 12 capability categories: information
+advantage, opportunity intelligence, strategy portfolio, latency &
+infrastructure, execution engineering, block-space access, competitive
+intelligence, capital & inventory, risk & security, learning &
+adaptation, operational resilience, operating economics. Each
+sub-category is scored 0-10 on a defined evidence scale:
+0 absent | 1-2 conceptual/incomplete | 3-4 implemented, weakly verified |
+5-6 functionally verified (tests pass, ops unproven) | 7-8 operationally
+validated (repeated tests or production observation) | 9 competitively
+demonstrated vs baseline | 10 sustained independently-verified advantage.
+A missing measurement is scored **unknown**, never zero — zero means
+demonstrably absent. Score per-dimension: implementation, verification,
+operational reliability, competitive effectiveness, evidence confidence.
+Separate scorecards per strategy (liquidation / DEX-arb / backrun) —
+their information, latency and execution requirements differ.
+References: Daian et al. 2019 (Flash Boys 2.0 — VERIFIED-CONCEPT),
+Paradigm Dark Forest 2020 (VERIFIED-CONCEPT), Flashbots MEV-Share docs
+(VERIFIED-CONCEPT), Gupta/Pai/Resnick 2023 private-order-flow research
+(UNVERIFIED — cited not read).
