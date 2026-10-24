@@ -45,6 +45,29 @@ export class Discovery {
     const factories = factoriesFor(this.chain.key).slice(0, cfg.DISCOVERY_MAX_FACTORIES);
     let found = 0;
 
+    // Phase 0: COMPTOOL discovery priority — visibility-failure pools enumerated FIRST
+    // (Phase B-a consumer; empty/stale evidence → fallback = normal order, documented)
+    try {
+      const { discoveryPriority } = await import('../ci/discoveryPriority.js');
+      const pri = discoveryPriority(undefined, this.chain.key);
+      if (pri.verdict === 'evidence') {
+        const missing = pri.priorityPools.filter((p) => !registry.all(this.chain.key).some((x: any) => x.address.toLowerCase() === p.toLowerCase()));
+        log.info(`${this.chain.key} COMPTOOL priority: ${missing.length}/${pri.priorityPools.length} visibility-gap pools (n=${pri.sourceRecords} recs, age=${(pri.storeAgeMs / 3600000).toFixed(1)}h)`);
+        // verify each priority pool exists + resolve tokens before registering — evidence ≠ eligibility
+        const T_ABI = new (await import('ethers')).Interface(['function token0() view returns (address)', 'function token1() view returns (address)']);
+        for (const p of missing.slice(0, 50)) {
+          const code = await this.rpc.call<string>('eth_getCode', [p, 'latest']).catch(() => '0x');
+          if (code === '0x') continue;
+          try {
+            const t0 = T_ABI.decodeFunctionResult('token0', await this.rpc.call<string>('eth_call', [{ to: p, data: T_ABI.encodeFunctionData('token0') }, 'latest']))[0];
+            const t1 = T_ABI.decodeFunctionResult('token1', await this.rpc.call<string>('eth_call', [{ to: p, data: T_ABI.encodeFunctionData('token1') }, 'latest']))[0];
+            registry.upsert({ chain: this.chain.key, address: p.toLowerCase(), token0: t0, token1: t1, source: 'comptool_priority' } as any);
+            found++;
+          } catch { /* non-standard pool shape → skip, not a failure */ }
+        }
+      }
+    } catch { /* COMPTOOL absent → normal boot; never blocks discovery */ }
+
     // Phase 1: candidate-pair verify — token pairs observed by the feed
     // (one factory call per pair, not the full Cartesian matrix)
     const candidatePairs = await this.feedPairs(tokens);

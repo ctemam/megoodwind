@@ -754,3 +754,12 @@ Implemented: `src/ci/metricRegistry.ts` (mr-v1) — 9 metric defs covering all V
 
 ## Metric source map + observability classes (Commander 2026-10-24 addendum)
 Every metric maps to NAMED authoritative sources w/ exact endpoint/event/field — not categories. Observability classes: 1 directly_observable | 2 reconstructable | 3 partially_observable (public sample ≠ full population) | 4 private/unavailable. Prohibited inferences from public successes alone: competitor total profit, true win rate, total attempts, uptime, private strategies, launch date → report observed-* only. Named sources: eth JSON-RPC (ethereum.org docs — receipts=tx outcomes not business P&L), UniV3 factory PoolCreated + V2 PairCreated (GitHub verified contracts, per-chain factory registry), Aave V3 + Balancer flash-loan docs (verify deployed contract+fee config at tx block), Flashbots/MEV-Boost docs (public builder data ≠ private bundles), Dune/analytics = discovery+corroboration only (validate vs chain evidence). Per-chain: validate addresses/versions — never assume universal.
+
+## COMPTOOL→Discovery integration (Phase B-a, approved 2026-10-24)
+`src/ci/discoveryPriority.ts` — contract: visibility_failure records → {priorityPools, priorityTokens, sourceRecords, stale, verdict}. Wired into `discovery.ts` Phase-0: gap pools resolved (token0/token1 on-chain) + registry.upsert BEFORE the feed/matrix phases. Fallback: stale>24h or empty → 'fallback_empty' = normal boot order, never blocks. NOT strategy weighting — discovery-priority ≠ profitability. Causal tests `test/ci_discovery_pri_test.ts` (6/6): more gaps→more priority, unrelated attrs excluded, unverified excluded, empty→fallback.
+## Winner-selection separation (Commander order)
+`benchmark.ts qualifiedWinner()` — OBSERVED_ENTITY_RANKING (score-v1, preserved) vs QUALIFIED gate (predeclared: n≥10, pricedShare≥0.8, 0 econ unknowns). Per-entity: QUALIFIED|PROVISIONAL|INSUFFICIENT_EVIDENCE|EXCLUDED. No qualifier → NO_QUALIFIED_WINNER (current corpus verdict). Rank#1 ≠ winner.
+## CMMC contract (`src/ci/cmmc.ts`, cmmc-v1)
+6-family metrics table + hard gate() before dashboard publish — FAILED_METRICS_CONTRACT+exit3 on missing family/null-no-reason/missing num-den. 18 rows live; legacy unreconcilable exposed as own row. Tests `test/ci_cmmc_test.ts` (9/9).
+## Econ decomposition persistence (fix)
+`competitor_scan.ts:142` previously dropped grossUsd/flashFeeUsd/builderPayUsd → now persisted; store schema widened. 88 legacy records unreconcilable forever (never captured) — documented, not hidden.
