@@ -8,6 +8,7 @@ import { baseFeeOk, execProbe, gasProbe } from './verify.js';
 import { submitExecUserOp, awaitUserOp } from './pimlico.js';
 import { sendUserOpViaFlashbots } from './privateRoute.js';
 import { mayExecute, dayNotionalUsd, noteNotional, recordLoss } from '../ops/killSwitch.js';
+import { LatencyTracker } from '../speed/latency.js';
 import { flashbotsAvailable } from './flashbots.js';
 import { breaker, peerDivergence } from '../forensics/baitPool.js';
 import { routeGasUnits } from './gasModel.js';
@@ -40,6 +41,8 @@ export async function executeCandidate(
   // submitUserOp and the Flashbots rail are all structurally unreachable.
   if (cfg.DIAG_ONLY) { metrics.inc('diag_exec_skipped', { chain: chain.key }); return; }
   const t0 = performance.now();
+  const lat = new LatencyTracker(chain.key);
+  lat.detect();
   metrics.inc('arb_eval_total', { chain: chain.key, strategy: cand.strategy });
   scheduler.recordEmit(cand.variant); // scheduler evidence — unlocks the
   // emitted>=5 settled-score pick (was never called: permanent round-robin)
@@ -50,8 +53,10 @@ export async function executeCandidate(
     if (amt === 0n) return 0n;
     return legOut(leg.pool, amt, leg.tokenIn);
   }, cand.borrowAmount);
+  lat.solved();
   if (reSim <= cand.borrowAmount) {
     metrics.inc('arb_resim_fail_total', { chain: chain.key });
+    lat.emit('filtered', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>') });
     return;
   }
 
@@ -72,6 +77,7 @@ export async function executeCandidate(
   const { execData } = buildPlan(cand, { source, premium, minProfit: cand.minProfitToken });
   const probe = await execProbe(rpc, cfg.SMART_ACCOUNT_ADDRESS, chain.executor!, execData);
   scheduler.recordLatency(cand.variant, performance.now() - t0);
+  lat.probed();
 
   if (probe.kind === 'deterministic_revert') {
     scheduler.recordRevert(cand.variant);
@@ -86,10 +92,12 @@ export async function executeCandidate(
         breaker.convict(chain.key, l.pool.address, 'exec_probe_revert_divergent');
       }
     }
+    lat.emit('revert', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>') });
     return;
   }
   if (probe.kind === 'transport') {
     metrics.inc('arb_probe_transport_total', { chain: chain.key });
+    lat.emit('timeout', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>'), note: 'transport' });
     return; // transport proves nothing — skip, don't penalize
   }
   for (const l of cand.legs) breaker.recordProbe(chain.key, l.pool.address, false);
@@ -148,12 +156,15 @@ export async function executeCandidate(
     if (priv.kind === 'sent') {
       metrics.inc('arb_submit_total', { chain: chain.key, strategy: cand.strategy });
       metrics.inc('arb_submit_private_total', { chain: chain.key, strategy: cand.strategy });
+      lat.submitted();
       log.info(`PRIVATE submit ${cand.strategy} ${chain.key} bundle=${priv.bundleHash ?? priv.txHash}`);
       const rc = await awaitTxReceipt(rpc, priv.txHash!);
-      if (!rc.landed) { metrics.inc('arb_unlanded_total', { chain: chain.key }); return; }
-      if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: rc.txHash }); return; }
+      lat.landed();
+      if (!rc.landed) { metrics.inc('arb_unlanded_total', { chain: chain.key }); lat.emit('timeout', { note: 'unlanded' }); return; }
+      if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: rc.txHash }); lat.emit('revert', { txHash: rc.txHash }); return; }
       scheduler.recordSettle(cand.variant, cand.netUsd);
       metrics.addSettled(chain.key, cand.strategy, cand.netUsd, rc.txHash!, cand.spreadPct);
+      lat.emit('settled', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>') });
       log.info(`SETTLED(private) ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${rc.txHash}`);
       return;
     }
@@ -168,11 +179,14 @@ export async function executeCandidate(
     return;
   }
   metrics.inc('arb_submit_total', { chain: chain.key, strategy: cand.strategy });
+  lat.submitted();
 
   // 5. receipt — settled evidence ONLY
   const receipt = await awaitUserOp(chain, sub.userOpHash);
+  lat.landed();
   if (!receipt.landed) {
     metrics.inc('arb_unlanded_total', { chain: chain.key });
+    lat.emit('timeout', { note: 'unlanded' });
     return;
   }
   if (!receipt.success) {
@@ -180,12 +194,14 @@ export async function executeCandidate(
     metrics.inc('arb_landed_revert_total', { chain: chain.key });
     // WO-15: failed-tx gas is a real cost — feeds the daily loss breaker
     recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: receipt.txHash });
+    lat.emit('revert', { txHash: receipt.txHash });
     return;
   }
 
   // HONESTY FLOOR: only arb_settled_net_usd on landed records is profit.
   scheduler.recordSettle(cand.variant, cand.netUsd);
   metrics.addSettled(chain.key, cand.strategy, cand.netUsd, receipt.txHash!, cand.spreadPct);
+  lat.emit('settled', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>'), txHash: receipt.txHash });
   log.info(`SETTLED ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${receipt.txHash}`);
 }
 

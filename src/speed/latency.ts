@@ -25,6 +25,7 @@ export interface LatencyStamp {
   chain: string;
   path?: string;
   competitorTx?: string;   // tx that moved the pool state first (lost-race attribution)
+  txHash?: string;
   note?: string;
 }
 

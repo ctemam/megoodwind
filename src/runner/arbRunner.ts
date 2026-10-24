@@ -18,6 +18,8 @@ import { Discovery } from '../discovery/discovery.js';
 import { classifyMarketRegime } from '../engine/marketRegime.js';
 import { nextVariant, routeWhaleAlphaSignal } from '../engine/strategyRouter.js';
 import { emitSignal } from '../telemetry/signalSink.js';
+import { LiquidationIndexer, HF_LIQUIDATABLE } from '../liquidation/lane.js';
+import { diagRecord } from '../telemetry/diagLog.js';
 import { isOpStack, l1DataFeeWei, l1FeeScalars } from '../providers/l1Fee.js';
 import { startMemWatch } from '../telemetry/memWatch.js';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -43,6 +45,10 @@ export const lastStageMs = new Map<string, number>();
 // and the higher profit floor ($25 default vs $2.50 predictive)
 const whaleUntil = new Map<string, number>();
 const WHALE_LANE_MS = 30_000;
+
+// WO-10 liquidation watch — per-chain indexer + last Borrow-log sync block
+const liqIndexers = new Map<string, LiquidationIndexer>();
+const liqLastSync = new Map<string, number>();
 
 // deterministic borrow sizing — USD target converted to token units with
 // the borrow token's own decimals (1e18 raw USDC = $1e12: raw-unit sizing
@@ -190,6 +196,30 @@ async function cycle(
     await executeCandidate(chain, rpc, cand, scheduler);
   }
   markStage('exec_candidates');
+
+  // WO-10 liquidation watch (shadow): band-refresh of tracked borrowers.
+  // Sync borrowers from Borrow logs periodically; HF<1 band positions are
+  // diag-recorded — no execution path armed (redeploy + Commander gate).
+  const liq = liqIndexers.get(chain.key);
+  if (liq?.enabled()) {
+    const lastSync = liqLastSync.get(chain.key) ?? 0;
+    const head = await rpc.blockNumber().catch(() => 0);
+    if (head > lastSync + 40_000) {
+      const added = await liq.syncBorrowers(Math.max(0, head - 50_000), head).catch(() => 0);
+      if (added) log.info(`${chain.key} liq-index: +${added} borrowers (${liq.borrowers.size} total)`);
+      liqLastSync.set(chain.key, head);
+    }
+    const band = await liq.watchBand(0.08).catch(() => []);
+    const hot = band.filter((p) => p.hf < HF_LIQUIDATABLE);
+    for (const p of band.slice(0, 5)) {
+      diagRecord('liq_position', { chain: chain.key, user: p.user, hf: (Number(p.hf) / 1e18).toFixed(4), debtBase: p.totalDebtBase.toString(), liquidatable: p.hf < HF_LIQUIDATABLE });
+    }
+    if (hot.length) {
+      metrics.inc('liq_liquidatable_total', { chain: chain.key });
+      log.warn(`${chain.key} LIQUIDATABLE positions: ${hot.map((p) => `${p.user.slice(0, 8)} hf=${(Number(p.hf) / 1e18).toFixed(3)}`).join(' | ')}`);
+    }
+    markStage('liq_watch');
+  }
 }
 
 async function main() {
@@ -207,6 +237,7 @@ async function main() {
 
   const rpcs = new Map<string, RpcPool>(chains.map((c) => [c.key, poolFor(c)]));
   const scheduler = new VariantScheduler();
+  for (const c of chains) liqIndexers.set(c.key, new LiquidationIndexer({ chain: c, rpc: rpcs.get(c.key)! }));
 
   const scout = new ScoutListener(chains, rpcs);
   const lastWhaleUsd = new Map<string, number>(); // chain:token -> usd size of latest alert
