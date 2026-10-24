@@ -35,8 +35,9 @@ for (;;) {
       const head = await e.rpc.blockNumber();
       if (Date.now() - e.lastSync > H1) {
         const added = await e.aave.syncBorrowers(Math.max(0, head - 30_000), head).catch(() => 0);
+        if (e.morpho.enabled()) await e.morpho.sync(Math.max(0, head - 30_000), head).catch(() => {});
         e.lastSync = Date.now();
-        row(e.key, { kind: 'sync', borrowers: e.aave.borrowers.size, added, head });
+        row(e.key, { kind: 'sync', borrowers: e.aave.borrowers.size, added, morphoMarkets: e.morpho.markets.size, morphoBorrowers: e.morpho.borrowers.size, head });
       }
       // Aave band — HF < 1.5 watchlist
       const band = await e.aave.watchBand(0.5).catch(() => []);
