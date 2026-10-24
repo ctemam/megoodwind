@@ -660,3 +660,6 @@ docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
 **Boundaries:** auto = discover/verify/flag/rank/offline+shadow eval/propose. Suspicious activity never auto-triggers live changes; L4 always Commander-held.
 
 **Gap declaration rule:** a competitor tx AllBright didn't make is not automatically a gap — may be unavailable, unprofitable after costs, mis-reconstructed, or unsuitable for our environment. Gaps need reproducible evidence.
+
+## CI data-integrity layer (`src/ci/store.ts`) — WO-03, tests green 2026-10-24
+Canonical eventId `chain:tx[:logIndex]`; content-hash dedupe (idempotent ingest survives replay/restart/reprocess); reconciliation fills missing fields + correction trail on conflict (no silent erase); provenance: evidence[] per record, versioned classHistory; quarantine excludes from trusted() until policy-satisfied release; quality counters (received/unique/dups/incomplete/quarantined/released/unpricedProfit/unresolvedIdentity/reconciled). Unknown stays undefined — never fabricated. Test: `npx tsx test/ci_store_test.ts` (12/12 adversarial cases).

@@ -185,3 +185,22 @@ for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk=${
 mkdirSync('data/speed', { recursive: true });
 for (const r of rows) r.entityClass = botClass.get(r.bot) ?? 'unclassifiable';
 appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), schema: 'ci-v3', chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, entityClasses: classCounts, join, operatorClusters: clusters.map(([e, s]) => ({ executor: e, signers: [...s] })), fingerprints: Object.fromEntries(fingerprints), rows }) + '\n');
+
+// === WO-03 durable store: canonical ids + idempotent ingest + provenance ===
+const { CiStore } = await import('../src/ci/store.js');
+const store = new CiStore();
+const clusterOf = (signer: string) => clusters.find(([, s]) => s.has(signer))?.[0];
+let ingestStats = { new: 0, dup: 0, reconciled: 0, corrected: 0 };
+for (const r of rows) {
+  const res = store.ingest({
+    schema: 'ci-v3', chain: KEY, kind: r.kind, block: r.block, txIndex: r.txIndex, tx: r.tx,
+    signer: r.bot, executor: r.to, pools: r.pools, routeLen: r.pools.length,
+    profitRaw: r.profitRaw === 'unpriced' ? undefined : r.profitRaw, profitToken: r.profitToken,
+    profitUsd: r.profitUsd, gasUsed: r.gasUsed, receiptVerified: true,
+    entityClass: r.entityClass, fingerprint: r.pools?.length ? `${r.pools.length}hop/${new Set(r.pools).size}venue` : undefined,
+    clusterId: clusterOf(r.bot),
+  });
+  ingestStats[res]++;
+}
+store.flush();
+log(`  store: ${Object.entries(ingestStats).map(([k, n]) => `${k}=${n}`).join(' ')} | counters: ${JSON.stringify(store.counters())}`);
