@@ -115,7 +115,7 @@ for (const txHash of txs.slice(0, 40)) {
       profitUsd = (Number(arb.profit) / 10 ** d) * px;
     }
   }
-  rows.push({ block: rc.blockNumber, txIndex: rc.index, tx: txHash, bot: tx.from, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
+  rows.push({ block: Number(BigInt(rc.blockNumber)), txIndex: Number(BigInt(rc.transactionIndex ?? 0)), tx: txHash, bot: tx.from, to: tx.to, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
 }
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
@@ -130,10 +130,23 @@ for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
 const botClass = new Map<string, string>();
 const uniqueBots = new Set(rows.map((r) => r.bot));
 for (const b of uniqueBots) {
+  const bRows = rows.filter((r) => r.bot === b);
   if (/^0x0{8,}/.test(b.toLowerCase())) { botClass.set(b, 'unclassifiable_decode_artifact'); continue; }
-  const code = await rpc.call<string>('eth_getCode', [b, 'latest']).catch(() => '0x');
-  if (!code || code === '0x') botClass.set(b, 'provisional_eoa');
-  else botClass.set(b, rows.filter((r) => r.bot === b).length >= 2 ? 'verified_active' : 'provisional_contract');
+  const [fromCode, toCode] = await Promise.all([
+    rpc.call<string>('eth_getCode', [b, 'latest']).catch(() => '0x'),
+    rpc.call<string>('eth_getCode', [bRows[0]?.to ?? b, 'latest']).catch(() => '0x'),
+  ]);
+  const fromIsEOA = !fromCode || fromCode === '0x';
+  const toIsContract = !!(toCode && toCode !== '0x');
+  // WO-02 identity model: signer(from) + executor(to) are separate roles.
+  // EOA-signer + contract-executor = normal searcher architecture (verified if
+  // receipt-verified arb + repeat behavior), not a downgrade. Contract-from =
+  // the contract itself signed or smart-account (verified). EOA+EOA = direct
+  // wallet arb (rarer, provisional). Evidence: ≥2 verified receipt-status arbs.
+  const verified = bRows.length >= 2 && bRows.every((r) => r.kind === 'arb' || r.kind === 'liquidation');
+  if (fromIsEOA && toIsContract) botClass.set(b, verified ? 'verified_active_eoa_signer' : 'provisional_eoa_signer');
+  else if (!fromIsEOA) botClass.set(b, verified ? 'verified_active_contract' : 'provisional_contract');
+  else botClass.set(b, verified ? 'verified_active_eoa_direct' : 'provisional_eoa_direct');
 }
 const classCounts: Record<string, number> = {};
 for (const c of botClass.values()) classCounts[c] = (classCounts[c] ?? 0) + 1;
@@ -152,6 +165,7 @@ for (const a of arbs) {
 log(`  pipeline-join: in_registry=${join.in_registry} partial=${join.partial} not_in_registry=${join.not_in_registry} (registry pools=${ourPools.size})`);
 
 log(`[${KEY}] blocks ${from}-${head} | swaps decoded: ${swaps.length} across ${pools.length} pools | arbs: ${arbs.length} | liqs: ${(liqLogs as any[]).length} | bots: ${byBot.size}`);
-for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk+${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
+for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk=${r.block} txidx=${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
 mkdirSync('data/speed', { recursive: true });
-appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, rows }) + '\n');
+for (const r of rows) r.entityClass = botClass.get(r.bot) ?? 'unclassifiable';
+appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, entityClasses: classCounts, join, rows }) + '\n');
