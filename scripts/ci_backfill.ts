@@ -26,7 +26,7 @@ const PC_V3 = ethers.id('PoolCreated(address,address,uint24,int24,address)');
 const PC_V2 = ethers.id('PairCreated(address,address,address,uint256)');
 const factories = factoriesFor(KEY);
 const head = await rpc.blockNumber();
-const from = head - BACK;
+const from = Math.max(head - BACK, 10_000_000); // UniV2 deployment floor — earlier blocks empty
 console.log(`backfill: ${factories.length} factories, blocks ${from}-${head} (${BACK} blk)`);
 
 // load H-005 candidate set for reconciliation
@@ -35,11 +35,20 @@ const recs = store.trusted().filter((r) => r.chain === KEY && r.kind === 'arb' &
 const ourPools = new Set(registry.all(KEY).map((p: any) => p.address.toLowerCase()));
 const candidates = new Set(recs.flatMap((r) => (r.pools ?? []).filter((p) => !ourPools.has(p.toLowerCase()))));
 
-// scan creation logs in bounded chunks
+// scan creation logs in bounded chunks — PROTECTED resumable checkpoint (Phase 1B)
+const { saveCheckpoint, loadCheckpoint } = await import('../src/ci/checkpoint.js');
+const CKPT = `data/ci/backfill_${KEY}.json`;
+let startFrom = from;
 const found = new Map<string, { t0: string; t1: string; block: number; factory: string }>();
+const prev = loadCheckpoint<{ t0: string; t1: string; block: number; factory: string }>(CKPT);
+if (prev.ok) {
+  startFrom = prev.nextBlock;
+  for (const [k, v] of Object.entries(prev.records)) found.set(k, v);
+  console.log(`resuming from block ${startFrom} with ${found.size} pools (source=${prev.source}${prev.reason ? ', ' + prev.reason : ''})`);
+} else if (prev.reason && prev.source !== 'none') console.log(`checkpoint rejected: ${prev.reason} — starting fresh`);
 let rpcCalls = 0, chunks = 0, failed = 0;
 const CHUNK = 10_000;
-for (let b = from; b < head && found.size < 20_000; b += CHUNK) {
+for (let b = startFrom; b < head && found.size < 200_000; b += CHUNK) {
   const end = Math.min(b + CHUNK - 1, head);
   for (const f of factories) {
     rpcCalls++;
@@ -54,6 +63,7 @@ for (let b = from; b < head && found.size < 20_000; b += CHUNK) {
     }
   }
   chunks++;
+  if (chunks % 20 === 0) { saveCheckpoint(CKPT, 'bf-v1', b + CHUNK, Object.fromEntries(found)); console.log(`  ckpt @${b + CHUNK} pools=${found.size}`); }
 }
 console.log(`scanned ${chunks} chunks | ${rpcCalls} rpc calls | ${failed} failed | ${found.size} pools discovered from creation logs`);
 

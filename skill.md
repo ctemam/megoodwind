@@ -687,3 +687,6 @@ One consolidated view: mc-v1 windows, entity classes, econ statuses, both rankin
 
 ## CI stage diagnostics (`src/ci/diagnostics.ts` → `scripts/ci_diagnostics.ts`) — WO-14, tests green
 Nine-stage read-only funnel: detection→observation→validation→projection→replay→candidate→qualification→readiness→settlement. Each record counted once at its loss stage; never-entered = n/a not 0%; unresolved (unverified receipt) separated from eligible. Live eth funnel (95 records, registry=207): stage-1 87.4% visibility loss, stages 2-4 clean, stage-5 100% indeterminate (replay corpus pending), stages 6-9 never entered. Command: `npx tsx scripts/ci_diagnostics.ts eth` → docs/ci_funnel_eth.md. Tests: `npx tsx test/ci_diagnostics_test.ts` (8/8).
+
+## Checkpoint protection (`src/ci/checkpoint.ts`) — Phase 1B, tests green
+Atomic tmp+rename writes; `.prev` backup before every overwrite; load validates schema+block+count+hash; corrupt current → prev fallback; both corrupt → safe-fail (evidence preserved, not overwritten). Backfill uses it — the 37,962-pool loss cannot recur via interruption or corruption. Tests: `npx tsx test/ci_checkpoint_test.ts` (8/8: interrupted write, corrupt current/prev/both, hash tamper, count tamper).
