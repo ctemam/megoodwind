@@ -152,6 +152,22 @@ const classCounts: Record<string, number> = {};
 for (const c of botClass.values()) classCounts[c] = (classCounts[c] ?? 0) + 1;
 log(`  entity classes: ${Object.entries(classCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
 
+// === WO-02 operator clusters + strategy fingerprints ===
+// Cluster heuristic (evidence-labeled, NOT identity proof): two signers
+// hitting the same executor contract (tx.to) are probably one operator.
+// Strategy fingerprint: routeLen + venueCount + pool-set signature.
+const byExecutor = new Map<string, Set<string>>();
+for (const r of rows) if (r.to) (byExecutor.get(r.to) ?? byExecutor.set(r.to, new Set()).get(r.to)!).add(r.bot);
+const clusters = [...byExecutor.entries()].filter(([, s]) => s.size > 1);
+const fingerprints = new Map<string, number>();
+for (const a of arbs) {
+  const venues = new Set(a.route.map((s) => s.pool)).size;
+  const fp = `${a.route.length}hop/${venues}venue`;
+  fingerprints.set(fp, (fingerprints.get(fp) ?? 0) + 1);
+}
+log(`  operator clusters (shared executor, ≥2 signers): ${clusters.length}${clusters.length ? ' — ' + clusters.map(([e, s]) => `${e.slice(0, 8)}←${s.size}signers`).join(', ') : ''}`);
+log(`  strategy fingerprints: ${[...fingerprints.entries()].sort((a, b) => b[1] - a[1]).map(([f, n]) => `${f}×${n}`).join(' | ')}`);
+
 // === C1-v2 pipeline join: is each competitor route inside our registry? ===
 const ourPools = new Set<string>();
 try { for (const p of registryAll(KEY)) ourPools.add(p.address.toLowerCase()); } catch {}
@@ -168,4 +184,4 @@ log(`[${KEY}] blocks ${from}-${head} | swaps decoded: ${swaps.length} across ${p
 for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk=${r.block} txidx=${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
 mkdirSync('data/speed', { recursive: true });
 for (const r of rows) r.entityClass = botClass.get(r.bot) ?? 'unclassifiable';
-appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, entityClasses: classCounts, join, rows }) + '\n');
+appendFileSync('data/speed/competitors.jsonl', JSON.stringify({ ts: Date.now(), schema: 'ci-v3', chain: KEY, from, to: head, swaps: swaps.length, pools: pools.length, arbs: arbs.length, liqs: (liqLogs as any[]).length, bots: byBot.size, entityClasses: classCounts, join, operatorClusters: clusters.map(([e, s]) => ({ executor: e, signers: [...s] })), fingerprints: Object.fromEntries(fingerprints), rows }) + '\n');
