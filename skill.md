@@ -422,3 +422,20 @@ never mixed.
 | observability | `diag_*` stage counters + funnel | WO-8.6 funnel 761k→148 | — |
 | safeguards | `mayExecute`, kill file, caps, fail-closed | — | not yet wired into runner submit path — **open** |
 | RPC spend trigger | `ops/rpcEconomics.ts` measured | recommendation: no spend | — |
+
+## Strategy taxonomy (Commander research spec, 2026-10-23)
+
+Distinguish: **family** (economic hypothesis), **variant** (materially
+different formulation), **configuration** (guard settings), **regime**
+(evaluation conditions), **rotation** (evidence-based reconsideration).
+A variant is independent only when it carries a different hypothesis or
+information source — a parameter grid is NOT a portfolio of strategies.
+AllBright actual: 5 families × 12 variants × 4 regimes; the "missing"
+classes are separate lanes (WO-10 liquidation, WO-11 private flow) and
+two proposed regime classes (congestion, degraded-info) are unmapped.
+See `docs/research_inventory.md`.
+
+Sources added to ledger: Uniswap protocol docs (v2/v3/v4 mechanics —
+VERIFIED-CONCEPT), Wiley 2025 price-discovery study (UNVERIFIED — cited
+not read), Flashbots bundle docs (VERIFIED-CONCEPT), Aave flash-loan docs
+(VERIFIED-CONCEPT).
