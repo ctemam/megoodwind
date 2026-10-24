@@ -31,19 +31,31 @@ Branch `feat/direct-swap-exec` @ `1aac2d2` (pushed).
 
 ## WO-17 — Profit optimization (new)
 
-Objective: maximize **realized, risk-adjusted net profit** — not detection
-count or simulator gross.
+Objective: maximize **realized, risk-adjusted net profit over time** —
+not detection count or simulator gross. Factor-by-factor status:
 
-| Item | Status | Evidence |
-|---|---|---|
-| Net accounting equation | ✅ live | `grossUsd − premiumUsd − gasUsd` + `minProfit` floor + `minOut` per leg |
-| Revert-cost accounting | ✅ live | landed reverts → `revert_gas` losses → daily breaker (WO-15) |
-| Phantom-edge fix | ✅ done | `v3AmountOutInTick` exact in-tick math replaces spot×(1−fee); replay 0/3 |
-| Sizing optimization | ✅ done | closed-form constant-product cycle sizing; V3 pinned-block probe |
-| Competition/bid model | 🟡 shadow | logistic bid model cold — no landed bundle ledger yet |
-| Ops-gate economics | ✅ live | `mayExecute` kill/loss/capital gate pre-submit |
-| Regime conditioning | ✅ live | 6 regimes incl. `CONGESTED`/`DEGRADED_INFO` (fail-closed) |
-| Remaining | — | bundle-ledger realized-net reconciliation; paid RPC trigger (WO-16 = no spend) |
+| Factor | Module | Status | Evidence |
+|---|---|---|---|
+| **Net accounting equation** | `math/profit.ts`, `solver.ts` | ✅ live | `grossUsd − premiumUsd − gasUsd = netUsd` on every candidate |
+| Atomic minOut/minProfit | `contracts/AllBrightExecutor.sol` | ✅ live | on-chain floors; `V3_MINOUT` proved honest on base replay |
+| Flash principal+repay cover | `contracts/AllBrightExecutor.sol` | ✅ live | repay checked inside callback before profit floor |
+| Revert-cost accounting | `src/ops/killSwitch.ts` | ✅ live | landed reverts → `revert_gas` → daily loss breaker |
+| **Market structure / opportunity quality** | `strategies/solver.ts` + `graph.ts` | ✅ live | Bellman-Ford cycles + cross-venue P01; distinct lanes not one count |
+| DEX-to-DEX difference post-impact | `legOut` v2 CP + `v3AmountOutInTick` | ✅ fixed | was spot×(1−fee) → exact in-tick; replay 0/3 phantom |
+| Pool-curve/liquidity differences | closed-form sizing + `priceImpactBps` | ✅ live | interior p90 err 3.5e-8 vs brute |
+| Lending-market dislocations | `src/liquidation/lane.ts` | ✅ fork-proven | Aave $61,802 + Morpho $35,963 settles |
+| Transaction-ordering effects | `src/exec/privateRoute.ts` | ✅ live | `eth_callBundle` gate + `eth_sendBundle` private rail |
+| **Execution/inclusion uncertainty** | `src/exec/executor.ts` + `pimlico.ts` | ✅ live | exec-probe → bundle gate → sponsored UserOp → receipt |
+| **Data quality/staleness** | `refresh.ts`, `rpcPool.ts`, `marketRegime.ts` | ✅ live | staleness counts, peer-divergence convictions, `DEGRADED_INFO` fail-closed |
+| **Capital/borrowing costs** | `exec/flashVenues.ts` | ✅ live | Balancer 0% → Morpho/Maker 0% → Aave 0.09% last resort |
+| **Competition/bidding** | `src/bidding/bidModel.ts` | 🟡 shadow | logistic model cold — no landed bundle ledger yet |
+| Failed-tx competition loss | `recordLoss(revert_gas)` | ✅ live | failed inclusion feeds the breaker |
+| **Operational overhead** | `src/ops/rpcEconomics.ts` | ✅ measured | paid-RPC trigger = **no spend** today |
+| **Security/ops safeguards** | `mayExecute`, `armedFor`, `DIAG_ONLY` | ✅ enforced | kill/loss/capital gate pre-submit; DIAG hard-stop |
+| **Observability/stage accounting** | `telemetry/*`, `LatencyTracker` | ✅ live | stage counts, rejection reasons, settled-only ledger |
+| **Legit vs harmful MEV** | strategy design | ✅ clean | DEX price-discovery + protocol liquidation; no sandwich path exists |
+| **Missing measurements** | — | 🟡 | bundle-ledger realized-net reconciliation; per-regime settled attribution |
+| **Unverified assumptions** | — | 🟡 | Wiley 2025 study cited-not-read; VariantScheduler has ~0 settled data |
 
 ## WO-18 — Predictive strategy × chains × tokens × pools (new)
 
