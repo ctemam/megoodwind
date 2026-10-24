@@ -23,9 +23,11 @@ const cards = aggs.map((a) => {
   const rk = perf.findIndex((r) => r.id === a.id && r.score !== undefined);
   sc.competitiveScore = rk >= 0 ? { value: perf[rk].score, status: 'estimated', evidence: `score-v1: net×conf×pricedShare` } : { status: 'unknown', evidence: 'below evidence floor' };
   sc.rankUniverse = rk >= 0 ? { value: rk + 1, status: 'estimated', evidence: `of ${uni} scored` } : { status: 'unknown', evidence: 'unranked' };
-  const missing = sc.missing.length === 0 ? Object.entries(sc).filter(([, v]) => v && typeof v === 'object' && 'status' in v && (v as any).status === 'not_assessed').map(([k]) => k) : sc.missing;
+  // completeness computed from FINAL enriched fields — never a stale pre-enrichment list
+  const REQUIRED = ['entityType','attributionConfidence','verifiedNetUsd','estimatedNetUsd','profitPerTx','gasCostUsd','unpricedShare','competitiveScore','rankUniverse','executionSuccessRate','profitableExecutionRate','firstObservedBlock','lastObservedBlock','activeWindows','fingerprints','chains','entityClass'];
+  const missing = REQUIRED.filter((k) => (sc as any)[k].status === 'not_assessed');
+  const known = REQUIRED.filter((k) => (sc as any)[k].status !== 'unknown' && (sc as any)[k].status !== 'not_assessed').length;
   sc.missing = missing;
-  const known = ['entityType','attributionConfidence','verifiedNetUsd','estimatedNetUsd','profitPerTx','gasCostUsd','unpricedShare','competitiveScore','rankUniverse','executionSuccessRate','profitableExecutionRate','firstObservedBlock','lastObservedBlock','activeWindows','fingerprints','chains','entityClass'].filter((k) => (sc as any)[k].status !== 'unknown' && (sc as any)[k].status !== 'not_assessed').length;
   sc.completeness = missing.length === 0 ? (known >= 10 ? 'COMPLETE' : 'INCOMPLETE') : 'INCOMPLETE';
   return sc;
 });

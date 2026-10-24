@@ -7,7 +7,7 @@
 import type { EntityAgg } from './rank.js';
 import type { CiRecord } from './store.js';
 
-export interface BenchmarkEntry { rank: number | null; id: string; score?: number; n: number; netUsd?: number; confidence: number; eligible: boolean; why?: string; }
+export interface BenchmarkEntry { rank: number | null; id: string; score?: number; n: number; netUsd?: number; confidence: number; eligible: boolean; provisional?: boolean; why?: string; }
 export interface Benchmark { version: 'bench-v1'; generatedAt: number; universe: number; eligible: number; top3: BenchmarkEntry[]; insufficient: BenchmarkEntry[]; }
 
 const ELIG = (a: EntityAgg) => a.evidenceClass === 'verified' && a.events.length >= 2 && a.netUsdKnown.length >= 1
@@ -16,7 +16,7 @@ const ELIG = (a: EntityAgg) => a.evidenceClass === 'verified' && a.events.length
 export function selectTop3(aggs: EntityAgg[]): Benchmark {
   const eligible = aggs.filter(ELIG);
   const scored = eligible.map((a) => ({ a, score: a.netUsdSum * a.confidence * (a.netUsdKnown.length / a.events.length) })).sort((x, y) => y.score - x.score);
-  const top3 = scored.slice(0, 3).map((s, i) => ({ rank: i + 1, id: s.a.id, score: s.score, n: s.a.events.length, netUsd: s.a.netUsdSum, confidence: s.a.confidence, eligible: true }));
+  const top3 = scored.slice(0, 3).map((s, i) => ({ rank: i + 1, id: s.a.id, score: s.score, n: s.a.events.length, netUsd: s.a.netUsdSum, confidence: s.a.confidence, eligible: true, provisional: s.a.events.length < 5 }));
   const insufficient = aggs.filter((a) => !ELIG(a)).map((a) => ({
     rank: null, id: a.id, n: a.events.length, confidence: a.confidence, eligible: false,
     why: a.evidenceClass !== 'verified' ? 'unverified evidence class' : a.events.length < 2 ? 'below min sample' : 'no priced events',
