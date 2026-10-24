@@ -672,3 +672,6 @@ Every rate publishes numerator/denominator/eligible/excluded/unresolved + unit +
 
 ## CI rankings (`src/ci/rank.ts`) — WO-06, tests green
 TWO leaderboards, never combined. Performance: verified-class entities only, ≥2 events, score = confidence-weighted net-USD (undefined when unpriced/insufficient — never ranked on gross). Threat/capability: observable volume+breadth+chains, explicitly labeled "not profit". Flags disclose limitations per row (below_min_sample, unpriced, provisional_evidence). Aggregates by cluster when shared executor. Test: `npx tsx test/ci_rank_test.ts` (9/9).
+
+## Change control (`src/ci/changeControl.ts`) — WO-10, tests green
+DNA vs Adaptive enforced at L2: classify() routes targets via DNA_PATTERNS (signing/mayExecute/kill/minProfit/budget/deploy/security → C_commander) or BOUNDED ranges (A_bounded in-range, else B_reviewed; unknown target → B). propose() applies only with the required gate: A=baseline validation, B=approval+validation, C=commander token+approval+validation. Every decision audit-logged (prev/proposed/why) for rollback; denials recorded not silent. Negative tests: `npx tsx test/ci_changecontrol_test.ts` (12/12). L4 caveat: gate covers callers through propose(); direct file edits remain outside it — operational assurance requires repo review.

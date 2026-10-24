@@ -37,3 +37,19 @@ address. Then Devin prepares cost-benefit (measured, not provider claims) and MU
 raise the reminder: "AllBright has reached the deferred RPC investment review point."
 Improvement cycle: Discover→Verify→Benchmark→Diagnose→Prioritize→Experiment→
 Validate→Integrate→Measure→Learn→Repeat. Never relax thresholds for conversion.
+
+## DNA vs ADAPTIVE — Change-Control Contract (Commander 2026-10-24)
+AllBright = two layers. DNA (static; governance-only): Commander sovereignty,
+signing/security boundaries, economic truth, evidence integrity, provenance,
+risk/safety constraints, controlled learning, architecture integrity, honest
+reporting, mission. ADAPTIVE (dynamic; evidence-gated): regime classification,
+strategy selection/variants/rotation, detection coverage, RPC routing, pricing,
+profitability estimates, simulation fidelity, execution optimization, CI
+confidence, resource allocation.
+
+Class A bounded-auto | Class B proposed→review→approve | Class C Commander-reserved
+(paid RPC, live execution, signing, protected security/governance).
+Strictest class governs multi-class changes. Every change keeps: evidence, prev
+value, proposed, reason, validation, approval record, rollback path.
+Assurance levels: L1 written < L2 enforced < L3 adversarial-tested < L4 operational
+evidence. A prompt is NOT a security boundary.
