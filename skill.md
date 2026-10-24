@@ -690,3 +690,27 @@ Nine-stage read-only funnel: detection→observation→validation→projection�
 
 ## Checkpoint protection (`src/ci/checkpoint.ts`) — Phase 1B, tests green
 Atomic tmp+rename writes; `.prev` backup before every overwrite; load validates schema+block+count+hash; corrupt current → prev fallback; both corrupt → safe-fail (evidence preserved, not overwritten). Backfill uses it — the 37,962-pool loss cannot recur via interruption or corruption. Tests: `npx tsx test/ci_checkpoint_test.ts` (8/8: interrupted write, corrupt current/prev/both, hash tamper, count tamper).
+
+## Core philosophy (Commander 2026-10-24) — Learn from the Best. Prove What Works. Outperform.
+Late-entrant advantage: systematic learning from strongest observable competitors + proven industry practices, translated into superior performance. NOT reinventing what works; NOT imitation without validation. Three non-negotiables:
+1. No reinvention without justification — reuse proven approaches that fit; innovate only where evidence shows a real gap.
+2. Continuous top-3 benchmarking — track the 3 strongest OBSERVABLE+RELEVANT competitors; reassess the set as evidence changes; parity/superiority per benchmark, not average.
+3. Performance over imitation — a competitor practice is a candidate for testing, never an automatic upgrade.
+Cycle: Discover→Understand→Benchmark→Diagnose→Adapt→Validate→Integrate→Measure→Improve. Speed≠recklessness; observation≠proof; adoption never surrenders architecture/security/economic discipline/Commander authority.
+
+## COMPTOOL — Competitive Intelligence, Benchmarking & Governed Optimization System
+Mission: identify competitive success factors; discover+evaluate competitor capabilities; benchmark vs defined set; diagnose gaps; convert validated findings into governed improvements. Success = reliable evidence of improved AllBright performance — not more data/strategies/agents/txs.
+
+Nine competitive dimensions: identity | market/opportunity visibility | strategy architecture | regime adaptation | economic competitiveness | decision quality | execution competitiveness | infrastructure resilience | learning/adaptation. Taxonomy is initial — factor-discovery process expands it on evidence.
+
+Closed loop: Discover→Observe→Reconstruct→Benchmark→Diagnose→Prioritize→Experiment→Validate→Approve→Integrate→Measure→Learn. Rejection+rollback permitted.
+
+Competitive Gap & Value Engine record: gapId, factor, evidence, confidence(verified/estimated/inferred/unknown), AllBright baseline, comparator benchmark+limits, magnitude, root-cause+alternatives, economic significance, proposed intervention, validation criteria, governance class, outcome.
+
+Economic hierarchy: PRIMARY = verified sustainable risk-adjusted net profit. Supporting: detection coverage, latency, pricing/sim accuracy, viable-candidate precision, inclusion rate, revert/gas waste, capital efficiency, time-to-improvement. CONSTRAINTS: signing/exec/kill-switch, capital limits, protected thresholds, provenance, approval gates. Competitor performance always evidence-qualified — never present inferred profit as fact.
+
+Real-time intelligence ≠ real-time adaptation: detection may be fast; adaptation gated A_bounded/B_reviewed/C_protected per change-control — no reclassification on experiment success.
+
+Completeness is measured, not claimed: known-vs-estimated competitors, taxonomy coverage, chain/pool/route coverage, evidence freshness, attribution confidence, benchmark comparability, unexplained outcomes, pending hypotheses, validated-awaiting-approval, integrated-awaiting-verification.
+
+Three inseparable products: Competitive Intelligence | Competitive Performance Optimization | Governed Continuous Adaptation. Ultimate output = demonstrable, repeatable improvement in AllBright competitive performance.
