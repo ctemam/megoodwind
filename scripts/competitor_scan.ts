@@ -244,6 +244,19 @@ log(`  econ statuses: ${Object.entries(econCounts).map(([k, n]) => `${k}=${n}`).
 log(`  rates(mc-v1): arb_detect=${arbs.length}/${swapLogs.length} swap-logs | join_matched=${join.matched}/${receiptedTx.size} verified${joinRate.rate !== undefined ? ` (${(joinRate.rate * 100).toFixed(1)}%)` : ' (n/a)'} | complete=${window.complete} ordering=${window.ordering}`);
 log(`  store: ${Object.entries(ingestStats).map(([k, n]) => `${k}=${n}`).join(' ')} | counters: ${JSON.stringify(store.counters())}`);
 
+// === WO-07 stage-level attribution over this window's verified arbs ===
+const { attribute } = await import('../src/ci/attribute.js');
+const { existsSync, readFileSync } = await import('fs');
+let convicted = new Set<string>();
+try { const f = `data/leaders/${KEY}/_bait_pools.json`; if (existsSync(f)) convicted = new Set((JSON.parse(readFileSync(f, 'utf8')) as any[]).map((x: any) => (x.pool ?? x.address ?? x).toLowerCase())); } catch {}
+const attrCounts: Record<string, number> = {};
+for (const r of rows.filter((x) => x.kind === 'arb')) {
+  const stored = store.get(`eth:${r.tx}`.replace('eth', KEY));
+  const a = attribute({ rec: stored ?? { eventId: `${KEY}:${r.tx}`, schema: 'ci-v3', chain: KEY, kind: 'arb', tx: r.tx, pools: r.pools, receiptVerified: true, profitToken: r.profitToken, econ: r.econ, evidence: [], corrections: [] }, ourPools, convictedPools: convicted, ourMinProfitUsd: 2.5 });
+  attrCounts[a.outcome] = (attrCounts[a.outcome] ?? 0) + 1;
+}
+log(`  attribution: ${Object.entries(attrCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
+
 // === WO-06 two rankings over the trusted store (all windows, not just this scan) ===
 const { aggregate, rankPerformance, rankThreat } = await import('../src/ci/rank.js');
 const aggs = aggregate(store.trusted().filter((r) => r.tx.startsWith('0x')));
