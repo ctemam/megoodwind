@@ -38,9 +38,10 @@ ok('T5 no inflation', f.stages.detection_visibility.entered === f.eligible);
 const s1 = rates[0];
 ok('T6 rate = lost/entered', Math.abs((s1.lossRate ?? 0) - 0.8) < 1e-9);
 
-// T7 empty stage → rate undefined not 0
-const s7 = rates[6];
-ok('T7 never-entered → n/a', s7.entered === 0 && s7.lossRate === undefined);
+// T7 never-entered stage → rate undefined not 0 (all-lost-at-1 funnel)
+const fVis = computeFunnel([rec({ pools: ['0xZ1', '0xZ2'] }), rec({ pools: ['0xZ3', '0xZ4'] })], { ourPools: our });
+const sVis = stageRates(fVis)[8];
+ok('T7 never-entered → n/a', sVis.entered === 0 && sVis.lossRate === undefined);
 
 // T8 reasons carry outcome:family detail
 ok('T8 reason granularity', Object.keys(f.stages.detection_visibility.reasons)[0].includes('visibility_failure'));

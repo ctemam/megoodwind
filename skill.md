@@ -684,3 +684,6 @@ Observations → investigations only (never auto-accept/integrate/execute). Gate
 
 ## CI report (`src/ci/report.ts` → `scripts/ci_report.ts`) — WO-11
 One consolidated view: mc-v1 windows, entity classes, econ statuses, both rankings, trigger states with suppression reasons (suppressed≠no-problem labeled), hypothesis lifecycle, store counters. Generated: `npx tsx scripts/ci_report.ts eth` → docs/ci_report.md. Known artifact: 14 legacy `net_profit_verified` records predate the traceVerified gate — provenance preserves original classification; re-evaluation scheduled per correction-trail policy.
+
+## CI stage diagnostics (`src/ci/diagnostics.ts` → `scripts/ci_diagnostics.ts`) — WO-14, tests green
+Nine-stage read-only funnel: detection→observation→validation→projection→replay→candidate→qualification→readiness→settlement. Each record counted once at its loss stage; never-entered = n/a not 0%; unresolved (unverified receipt) separated from eligible. Live eth funnel (95 records, registry=207): stage-1 87.4% visibility loss, stages 2-4 clean, stage-5 100% indeterminate (replay corpus pending), stages 6-9 never entered. Command: `npx tsx scripts/ci_diagnostics.ts eth` → docs/ci_funnel_eth.md. Tests: `npx tsx test/ci_diagnostics_test.ts` (8/8).
