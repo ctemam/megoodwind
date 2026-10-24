@@ -17,11 +17,19 @@ import { chainConfig, ChainKey } from '../src/config/index.js';
 import { RpcPool } from '../src/providers/rpcPool.js';
 import { multicall } from '../src/providers/multicall.js';
 import { TOKEN_USD } from '../src/config/pricing.js';
+import { registry, PoolState } from '../src/pools/registry.js';
+const registryAll = (k: ChainKey) => registry.all(k) as PoolState[];
 
 const KEY = (process.argv[2] ?? 'eth') as ChainKey;
 const WINDOW = Number(process.argv[3] ?? 500);
 const chain = chainConfig(KEY);
 const rpc = new RpcPool(chain);
+// populate OUR discovery registry so the join measures real coverage
+try {
+  const { Discovery } = await import('../src/discovery/discovery.js');
+  const d = new Discovery(chain, rpc);
+  await Promise.race([d.boot(), new Promise((r) => setTimeout(r, 90_000))]);
+} catch {}
 const head = await rpc.blockNumber();
 const from = head - WINDOW;
 const log = console.log;
@@ -111,6 +119,19 @@ for (const txHash of txs.slice(0, 40)) {
 }
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
+
+// === C1-v2 pipeline join: is each competitor route inside our registry? ===
+const ourPools = new Set<string>();
+try { for (const p of registryAll(KEY)) ourPools.add(p.address.toLowerCase()); } catch {}
+const join = { in_registry: 0, not_in_registry: 0, partial: 0 };
+for (const a of arbs) {
+  const inR = a.route.filter((s) => ourPools.has(s.pool)).length;
+  if (inR === a.route.length) join.in_registry++;
+  else if (inR === 0) join.not_in_registry++;
+  else join.partial++;
+}
+log(`  pipeline-join: in_registry=${join.in_registry} partial=${join.partial} not_in_registry=${join.not_in_registry} (registry pools=${ourPools.size})`);
+
 log(`[${KEY}] blocks ${from}-${head} | swaps decoded: ${swaps.length} across ${pools.length} pools | arbs: ${arbs.length} | liqs: ${(liqLogs as any[]).length} | bots: ${byBot.size}`);
 for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk+${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
 mkdirSync('data/speed', { recursive: true });

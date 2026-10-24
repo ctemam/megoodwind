@@ -619,3 +619,23 @@ docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
 **Acceptance:** detection ≠ validated opportunity ≠ supported capability — kept separate; duplicates checked; competitor econ reconciled; funnel joined where possible; unknowns labeled unknown; recommendations ranked by econ impact with measurable acceptance criteria; no speculative code as part of research.
 
 **Immediate priorities:** P1 validate the 101-arb sample + profitRaw; P2 complete the opportunity-to-pipeline join; P3 strategy-by-regime baseline; P4 whale-alert usefulness; P5 highest-value verified bottleneck first.
+
+## Competitive Intelligence Mode v2 — autonomous operation (Commander 2026-10-24)
+
+**Objective:** continuously discover, classify, benchmark, rank competitors; measure AllBright's relative position; identify highest-value gaps; self-trigger improvement work. Goal is better decisions + verified net outcomes — not competitor counts.
+
+**Discovery:** identify searcher entities by evidence (cycle txs, flash-loan patterns, multi-protocol execution, liquidations, repeated execution patterns, builder payments) — address ≠ operator; cluster behavior where identity unresolvable. Classes: high-performers, flash-loan-intensive, backrun, liquidation, multi-chain, strong-execution, emerging, specialized/uncertain.
+
+**Ranking dimensions:** activity, opportunity diversity, econ performance (independent estimates), execution reliability, cost efficiency, consistency, regime resilience, chain specialization, information advantage, inclusion advantage, evidence confidence. Label: observable performance ≠ total business performance — incomplete econ data reported as uncertainty, not rankings.
+
+**Benchmark (the join):** for each competitor tx answer — market visible? data captured? strategy covered? route discoverable? pricing valid? economically viable? submit-capable? ordering-plausible? outcome reconstructible? which capability explains the difference? End every case with classification + uncertainty + improvement opportunity.
+
+**Gap register fields:** id, strategy+network, competitor evidence, AllBright capability, benchmark, magnitude+confidence, cause (technical/informational/infrastructural/strategic/economic), fixes, deps+cost, expected benefit, regression risk, validation criteria, status.
+
+**Self-triggers (auto-start L1-L3 work only):** new competitor/behavior; material performance change; repeated misses; variant underperformance vs baseline; regime transition; whale-alert anomaly; source degradation; execution/settlement deterioration; new industry evidence; post-change validation. Every trigger has condition+evidence+severity+permitted response+closure; group related events, suppress duplicates.
+
+**Autonomy boundaries:** L1 observe | L2 diagnose | L3 evaluate (historical/sim/shadow) — autonomous within limits. L4 change (live trading, signing, exposure, contract behavior, security controls) requires Commander/Architect authorization.
+
+**Learning cycle:** observe→discover→classify→benchmark→identify gaps→hypothesize→prioritize→evaluate→validate→learn→reassess. One competitor tx never reallocates strategy weight.
+
+**Success measures:** competitor-activity coverage, classification confidence, reconstruction accuracy, validated-miss count, attribution accuracy, time-to-identify problems, % improvements validated, delta in settle/revert/net, per-variant×regime performance, trigger reliability.
