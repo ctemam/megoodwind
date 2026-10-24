@@ -36,7 +36,11 @@ export class LatencyTracker {
   solved() { this.marks.detect_ms = performance.now() - this.t0; this.t0 = performance.now(); }
   probed() { this.marks.solve_ms = performance.now() - this.t0; this.t0 = performance.now(); }
   submitted() { this.marks.probe_ms = performance.now() - this.t0; this.t0 = performance.now(); }
-  landed() { this.marks.submit_ms = performance.now() - this.t0; this.marks.total_ms = this.marks.submit_ms; }
+  landed() {
+    this.marks.submit_ms = performance.now() - this.t0;
+    this.marks.land_ms = this.marks.submit_ms; // sent->mined race window
+    this.marks.total_ms = (this.marks.detect_ms ?? 0) + (this.marks.solve_ms ?? 0) + (this.marks.probe_ms ?? 0) + this.marks.submit_ms;
+  }
   emit(outcome: LatencyStamp['outcome'], extra: Partial<LatencyStamp> = {}) {
     mkdirSync('data/speed', { recursive: true });
     appendFileSync('data/speed/latency.jsonl', JSON.stringify({ ts: Date.now(), chain: this.chain, outcome, ...this.marks, ...extra }) + '\n');

@@ -420,7 +420,7 @@ never mixed.
 | data consistency | peer divergence >3× conviction | 7 base pools convicted | — |
 | decimals accuracy | on-chain `decimals()` authority | `resolveTokenDecimals` | — |
 | observability | `diag_*` stage counters + funnel | WO-8.6 funnel 761k→148 | — |
-| safeguards | `mayExecute`, kill file, caps, fail-closed | — | not yet wired into runner submit path — **open** |
+| safeguards | `mayExecute`, kill file, caps, fail-closed | wired pre-submit at `executor.ts` | **closed** — landed reverts feed `revert_gas` breaker |
 | RPC spend trigger | `ops/rpcEconomics.ts` measured | recommendation: no spend | — |
 
 ## Strategy taxonomy (Commander research spec, 2026-10-23)

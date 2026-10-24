@@ -102,22 +102,34 @@ const DEPTH_ADAPT_STEP = 0.5;   // halve the requirement per step
 const DEPTH_FLOOR_USD = 2_500;  // never below — below this gas can't repay
 let depthRejectsThisSolve = 0;
 
+// A4: forensic screens are variant-independent — count them once per
+// path per solve() call so a 3-leg rejection doesn't mix per-leg and
+// per-trade units in the funnel. Depth stays per-variant (needDepth
+// differs across guard profiles) — keyed by stage+reason throughout.
+const baitCache = new Set<string>();
+
 function pathScreen(chain: ChainConfig, legs: Leg[], v: Variant, tokenUsd: Map<string, number>, depthGateUsd?: number): boolean {
   const g = effectiveGuards(v);
   const needDepth = depthGateUsd ?? g.minDepthUsd;
   for (const { pool } of legs) {
-    const s = breaker.screen(chain.key, pool);
-    if (!s.ok) {
-      metrics.inc('rejected_by_forensic_bait', { reason: s.reason ?? 'screen' });
-      if (cfg.DIAG_ONLY) diagRecord('forensic_screen', { chain: chain.key, pool: pool.address, kind: pool.kind, reason: s.reason ?? 'screen' });
-      return false;
+    const baitKey = `${chain.key}:${pool.address.toLowerCase()}`;
+    if (!baitCache.has(baitKey)) {
+      const s = breaker.screen(chain.key, pool);
+      baitCache.add(baitKey);
+      if (!s.ok) {
+        metrics.inc('rejected_by_forensic_bait', { chain: chain.key, reason: s.reason ?? 'screen' });
+        if (cfg.DIAG_ONLY) diagRecord('forensic_screen', { chain: chain.key, pool: pool.address, kind: pool.kind, reason: s.reason ?? 'screen' });
+        return false;
+      }
+    } else if (breaker.isConvicted(chain.key, pool.address)) {
+      return false; // convicted earlier — skip silently (counted once already)
     }
     // depth = feed liquidity when present, else on-chain priced-side
     // value — discovered pools carry liquidityUsd=0 and must not be
     // blanket-rejected (they are the primary discovery product)
     const dep = poolDepthUsd(pool, tokenUsd);
     if (dep < needDepth) {
-      metrics.inc('rejected_by_profit_margin', { reason: 'depth' });
+      metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: 'depth' });
       depthRejectsThisSolve++;
       if (cfg.DIAG_ONLY) diagRecord('depth', {
         chain: chain.key, pool: pool.address, kind: pool.kind,
@@ -194,7 +206,7 @@ function emit(
       boundMax = extra.flashLiquidityRaw;
     }
   }
-  if (boundMax <= 0n) { metrics.inc('rejected_by_profit_margin', { reason: 'size_zero' }); return null; }
+  if (boundMax <= 0n) { metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: 'size_zero' }); return null; }
 
   // ARGMAX BORROW SEARCH — a static size is a decorative answer to a
   // dynamic question. Impact grows with size while the venue spread is
@@ -222,7 +234,7 @@ function emit(
     if (impactBps > slipBoundBps) { sawImpactOver = true; return null; }
     const sp = spreadPct(out, sz);
     if (sp > CREDIBILITY_CEILING_PCT) {
-      metrics.inc('rejected_by_forensic_bait', { reason: 'gap_above_ceiling' });
+      metrics.inc('rejected_by_forensic_bait', { chain: chain.key, reason: 'gap_above_ceiling' });
       if (cfg.DIAG_ONLY) diagRecord('gap_above_ceiling', { chain: chain.key, path: pathSig, spreadPct: sp, size: sz.toString() });
       // >~2% = a pool is lying about reserves. Convict ONLY legs whose
       // spot quote diverges >3x from same-pair peers — blaming every leg
@@ -342,12 +354,12 @@ function emit(
     netUsd: b.netUsd,
   } : {};
   if (!sawSpread) {
-    metrics.inc('rejected_by_profit_margin', { reason: 'no_spread' });
+    metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: 'no_spread' });
     if (cfg.DIAG_ONLY) diagRecord('no_spread', { chain: chain.key, path: pathSig, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length, achievable });
     return null;
   }
   if (!b) {
-    metrics.inc('rejected_by_profit_margin', { reason: sawImpactOver ? 'price_impact' : 'no_spread' });
+    metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: sawImpactOver ? 'price_impact' : 'no_spread' });
     if (cfg.DIAG_ONLY) diagRecord(sawImpactOver ? 'price_impact' : 'no_spread', {
       chain: chain.key, path: pathSig, slipBoundBps, boundMax: boundMax.toString(), sizesTested: SIZE_RATIOS.length,
       achievable,
@@ -361,7 +373,7 @@ function emit(
   // bars is not a path worth a UserOp. Stage named below_gas_multiple.
   const gasK = cfg.GAS_PROFIT_MULT;
   if (belowGasMultiple(b.n.grossUsd, b.n.gasUsd, gasK)) {
-    metrics.inc('rejected_by_profit_margin', { reason: 'below_gas_multiple' });
+    metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: 'below_gas_multiple' });
     if (cfg.DIAG_ONLY) diagRecord('below_gas_multiple', {
       chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
       borrowToken, borrowAmount: borrow.toString(), simOut: out.toString(),
@@ -380,7 +392,7 @@ function emit(
     lane === 'whale' ? cfg.WHALE_MIN_PROFIT_USD : cfg.PREDICTIVE_MIN_PROFIT_USD,
   );
   if (cfg.STRICT_PROFIT_FLOOR_GUARD && b.netUsd < floorUsd) {
-    metrics.inc('rejected_by_profit_margin', { reason: 'min_profit_floor' });
+    metrics.inc('rejected_by_profit_margin', { chain: chain.key, reason: 'min_profit_floor' });
     metrics.recordVariantOutcome(v.id, lane, { hit: false, netUsd: b.netUsd, floorUsd });
     if (cfg.DIAG_ONLY) diagRecord('min_profit_floor', {
       chain: chain.key, path: pathSig, lane, variant: v.id, strategy,
@@ -426,6 +438,7 @@ export function solve(
   v: Variant,
   opts: { gasUnits: bigint; baseFeeWei: bigint; l1DataFeeWei?: bigint; lane?: Lane; regime?: MarketRegime; volBps?: number; tokenUsd: Map<string, number>; sizeOf: (token: string, dec: number) => bigint; nativeUsd?: number; priorityFeeWei?: bigint; flashLiquidityRaw?: bigint },
 ): Candidate[] {
+  baitCache.clear(); // A4: forensic screens dedupe within one solve() call
   const pools = registry.all(chain.key);
   const cands: Candidate[] = [];
   const seenPaths = new Set<string>();
