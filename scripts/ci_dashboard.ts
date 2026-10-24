@@ -2,7 +2,7 @@
 import { CiStore } from '../src/ci/store.js';
 import { aggregate, rankPerformance } from '../src/ci/rank.js';
 import { buildScorecard } from '../src/ci/scorecard.js';
-import { selectTop3, longevity } from '../src/ci/benchmark.js';
+import { selectTop3, longevity, qualifiedWinner, QUAL_REQ } from '../src/ci/benchmark.js';
 import { writeFileSync, existsSync, readFileSync } from 'fs';
 import { createHash } from 'crypto';
 
@@ -11,6 +11,7 @@ const store = new CiStore();
 const recs = store.trusted().filter((r) => r.chain === KEY && r.tx.startsWith('0x'));
 const aggs = aggregate(recs);
 const bench = selectTop3(aggs);
+const winner = qualifiedWinner(aggs);
 const perf = rankPerformance(aggs);
 const uni = perf.filter((r) => r.score !== undefined).length;
 
@@ -51,7 +52,7 @@ if (!cmmc.ok) { console.log(`FAILED_METRICS_CONTRACT: ${cmmc.fails.join(' | ')}`
 
 const out = {
   generatedAt: new Date().toISOString(), chain: KEY, schema: 'comptool-v1.2',
-  benchmark: bench, scorecards: cards, canonicalReports: canon, cmmc: { version: 'cmmc-v1', rows: cmmcRows, gate: cmmc },
+  benchmark: bench, winner, scorecards: cards, canonicalReports: canon, cmmc: { version: 'cmmc-v1', rows: cmmcRows, gate: cmmc },
   counters: { records: recs.length, entities: aggs.length, scored: uni, complete: cards.filter((c) => c.completeness === 'COMPLETE').length },
 };
 const hash = createHash('sha256').update(JSON.stringify(out)).digest('hex').slice(0, 12);
@@ -62,7 +63,7 @@ const L: string[] = [`# COMPTOOL v1.2 — ${KEY}`, `generated ${out.generatedAt}
   `## CMMC mandatory metrics (${cmmcRows.length} rows, gate=${cmmc.ok ? 'PASS' : 'FAIL'})`,
   '| metric_id | metric_name | value | unit | num | den | status | reason |', '|---|---|---|---|---|---|---|---|'];
 for (const m of cmmcRows) L.push(`| ${m.metric_id} | ${m.metric_name} | ${m.value ?? 'null'} | ${m.unit} | ${m.numerator ?? '-'} | ${m.denominator ?? '-'} | ${m.status} | ${m.reason_unavailable ?? '-'} |`);
-L.push('', `## Top-3 benchmark (eligible=${bench.eligible}/${bench.universe})`);
+L.push('', `## OBSERVED_ENTITY_RANKING (eligible=${bench.eligible}/${bench.universe}, corpus-bounded)`, `**winner: ${winner.verdict}** (QUAL_REQ: n≥${QUAL_REQ.minSample}, pricedShare≥${QUAL_REQ.minPricedShare}, 0 econ unknowns — predeclared)`);
 for (const b of bench.top3) L.push(`- #${b.rank} ${b.id.slice(0, 12)} score=${b.score?.toFixed(3)} n=${b.n} net=${b.netUsd?.toFixed(4)} conf=${b.confidence.toFixed(2)}`);
 L.push('', `## Scorecards (${cards.length})`, '| entity | score | rank | net$ | winRate | spanDays | active | completeness |');
 L.push('|---|---|---|---|---|---|---|---|');

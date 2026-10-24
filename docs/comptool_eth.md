@@ -1,5 +1,5 @@
 # COMPTOOL v1.2 — eth
-generated 2026-10-24T22:22:29.664Z | hash=89066770c6b0
+generated 2026-10-24T22:29:09.164Z | hash=9356b2307e83
 
 ## CMMC mandatory metrics (18 rows, gate=PASS)
 | metric_id | metric_name | value | unit | num | den | status | reason |
@@ -23,7 +23,8 @@ generated 2026-10-24T22:22:29.664Z | hash=89066770c6b0
 | quality.estimated | evidence estimated | 614 | count | 614 | - | VERIFIED | - |
 | ops.run | pipeline run | 1 | count | 1 | - | VERIFIED | - |
 
-## Top-3 benchmark (eligible=4/78)
+## OBSERVED_ENTITY_RANKING (eligible=4/78, corpus-bounded)
+**winner: NO_QUALIFIED_WINNER** (QUAL_REQ: n≥10, pricedShare≥0.8, 0 econ unknowns — predeclared)
 - #1 0x0ea2bb9720 score=0.446 n=2 net=0.5580 conf=0.80
 - #2 0x0000009ca1 score=0.196 n=2 net=0.2450 conf=0.80
 - #3 0x0759116b96 score=0.092 n=2 net=0.1151 conf=0.80
