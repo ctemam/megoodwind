@@ -139,7 +139,7 @@ for (const txHash of txs.slice(0, 40)) {
     flashLoan: flashProvider ? { provider: flashProvider, principalRaw: 0n, repayRaw: 0n, feeRaw: 0n } : undefined,
     builderPaymentWei: builderPayWei,
   });
-  rows.push({ block: Number(BigInt(rc.blockNumber)), txIndex: Number(BigInt(rc.transactionIndex ?? 0)), tx: txHash, bot: tx.from, to: tx.to, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay, flashProvider, econ: { status: econ.status, netUsd: econ.netUsd, gasCostUsd: econ.gasCostUsd, unknowns: econ.unknowns, confidence: econ.confidence } });
+  rows.push({ block: Number(BigInt(rc.blockNumber)), txIndex: Number(BigInt(rc.transactionIndex ?? 0)), tx: txHash, bot: tx.from, to: tx.to, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay, flashProvider, econ: { status: econ.status, netUsd: econ.netUsd, grossUsd: econ.grossUsd, gasCostUsd: econ.gasCostUsd, flashFeeUsd: econ.flashFeeUsd, builderPayUsd: econ.builderPayUsd, unknowns: econ.unknowns, confidence: econ.confidence } });
 }
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);

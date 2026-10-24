@@ -25,7 +25,7 @@ const sample = recs.filter((r) => r.econ?.netUsd !== undefined).slice(0, 10);
 let econOk = true, econNote = '';
 for (const r of sample) {
   const e = r.econ!;
-  const recalc = (e.grossUsd ?? 0) - (e.gasUsd ?? 0) - (e.flashFeeUsd ?? 0) - (e.builderPayUsd ?? 0);
+  const recalc = (e.grossUsd ?? 0) - (e.gasCostUsd ?? 0) - (e.flashFeeUsd ?? 0) - (e.builderPayUsd ?? 0);
   if (Math.abs(recalc - e.netUsd!) > 0.01) { econOk = false; econNote = `${r.tx}: net=${e.netUsd} vs recalc=${recalc}`; break; }
 }
 ok('W3 net=gross-gas-fee-builder reconciles tx-level', econOk || `(${econNote})`);
