@@ -38,7 +38,9 @@ export async function fork_live_chain_state(opts: {
   port?: number;
 }): Promise<ForkHandle> {
   const chain = chainConfig(opts.chain);
-  const forkUrl = chain.rpcUrls[0];
+  // ANVIL_FORK_URL overrides upstream — needed when rpcUrls[0] is a dead
+  // provider (dRPC quota) but Ankr/Alchemy remain live for archive forks
+  const forkUrl = process.env.ANVIL_FORK_URL ?? chain.rpcUrls[0];
   if (!forkUrl) throw new Error(`no keyed RPC for ${opts.chain}`);
   const port = opts.port ?? 8546;
   const args = [
@@ -85,13 +87,17 @@ export async function execute_fork_dry_run(fork: ForkHandle, tx: {
   to: string;
   data: string;
   valueWei?: bigint;
+  gasLimit?: bigint;
+  maxFeePerGas?: bigint;
 }): Promise<ForkDryRunResult> {
   await fork.rpc.send('anvil_impersonateAccount', [tx.impersonate]);
   // forensic state edit — the impersonated identity may hold ~0 native
   // on this chain's fork; gas payment is an environment artifact, not
   // the exploit surface. Funding it keeps REVERT = the PLAN reverted.
   await fork.rpc.send('anvil_setBalance', [tx.impersonate, '0x56BC75E2D63100000']).catch(() => undefined); // 100 native
-  const callArgs = { from: tx.impersonate, to: tx.to, data: tx.data, value: ethers.toBeHex(tx.valueWei ?? 0n) };
+  const callArgs = { from: tx.impersonate, to: tx.to, data: tx.data, value: ethers.toBeHex(tx.valueWei ?? 0n),
+    ...(tx.gasLimit !== undefined ? { gas: ethers.toBeHex(tx.gasLimit) } : {}),
+    ...(tx.maxFeePerGas !== undefined ? { gasPrice: ethers.toBeHex(tx.maxFeePerGas) } : {}) };
   try {
     // crime-scene replay BEFORE spending the tx: eth_call on identical
     // state captures the revert payload a mined receipt discards
