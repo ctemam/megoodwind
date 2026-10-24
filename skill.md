@@ -666,3 +666,6 @@ Canonical eventId `chain:tx[:logIndex]`; content-hash dedupe (idempotent ingest 
 
 ## CI economics layer (`src/ci/economics.ts`) — WO-04, tests green 2026-10-24
 Profit-truth contract: receipt-success ≠ profit; gross flow ≠ net USD; missing ≠ zero. Statuses: execution_failed / successful_unpriced / gross_value_estimated / net_profit_estimated / net_profit_verified / economics_incomplete. Costs: gas (gasUsed×effectiveGasPrice, priced via WETH), flash fee (Balancer/Aave-V3/ERC-3156 event detection), builder payment (tx.value, lower bound). `net_profit_verified` requires traceVerified — public logs alone cap at `net_profit_estimated`. Every unpriced/unobservable input lands in unknowns[]. Test: `npx tsx test/ci_econ_test.ts` (12/12).
+
+## CI measurement contract (`src/ci/measure.ts`, mc-v1) — WO-05, tests green
+Every rate publishes numerator/denominator/eligible/excluded/unresolved + unit + window {chain, fromBlock, toBlock, complete, schema, contract, ordering}. den=0 → rate undefined (never 0). Join outcomes enum: matched/partial/unmatched/unresolved/excluded — join denominator = receipt-verified events only. Ordering retained: eth_builder_mev vs l2_sequencer_fifo. `comparable()` rejects unit/contract/incomplete mismatches. Pre-mc-v1 join profiles are NON-COMPARABLE. Test: `npx tsx test/ci_measure_test.ts` (10/10).

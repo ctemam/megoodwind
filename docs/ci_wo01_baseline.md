@@ -26,3 +26,10 @@
 
 ## Verified run (100 blk, eth, shadow)
 29 arbs, 27 senders, 1 liq | classes: 2 verified_active_contract, 1 verified_active_eoa_signer, 6 provisional_contract, 17 provisional_eoa_signer, 1 decode_artifact | join: 1 in / 15 partial / 13 not_in (registry=207)
+
+## WO-05 annotation — historical join profiles NON-COMPARABLE
+The four earlier join profiles (1/21/5, 3/16/35, 0/8/1, 4/23/5) were computed pre-mc-v1:
+different windows, different denominators (decoded-arbs vs receipt-verified), no unresolved
+tracking, no completeness flags. Per the measurement contract they are labeled
+**non-comparable** — no coverage trend is claimed from them. mc-v1 records now persist
+window/coverage/rates per scan so future comparisons are contract-checked.

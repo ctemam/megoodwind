@@ -18,6 +18,7 @@ import { RpcPool } from '../src/providers/rpcPool.js';
 import { multicall } from '../src/providers/multicall.js';
 import { TOKEN_USD } from '../src/config/pricing.js';
 import { reconstruct } from '../src/ci/economics.js';
+import { ORDERING, CONTRACT_VERSION, newCoverage, makeRate, type ObsWindow } from '../src/ci/measure.js';
 import { registry, PoolState } from '../src/pools/registry.js';
 const registryAll = (k: ChainKey) => registry.all(k) as PoolState[];
 
@@ -44,12 +45,16 @@ const COINBASE = '0x0000000000000000000000000000000000000000';
 
 interface Swap { tx: string; pool: string; inT: string; outT: string; inAmt: bigint; outAmt: bigint; from: string; to: string; }
 
+const cov = newCoverage();
+cov.blocksExpected = head - from;
+let scanComplete = true;
 const swapLogs: ethers.Log[] = [];
 for (let b = from; b < head; b += 100) {
   const end = Math.min(b + 99, head);
-  const chunk = await rpc.call<ethers.Log[]>('eth_getLogs', [{ topics: [[SWAP_V2, SWAP_V3]], fromBlock: '0x' + b.toString(16), toBlock: '0x' + end.toString(16) }]).catch(() => [] as ethers.Log[]);
-  swapLogs.push(...(chunk as ethers.Log[]));
+  const chunk = await rpc.call<ethers.Log[]>('eth_getLogs', [{ topics: [[SWAP_V2, SWAP_V3]], fromBlock: '0x' + b.toString(16), toBlock: '0x' + end.toString(16) }]).catch(() => { scanComplete = false; return null; });
+  if (chunk) { swapLogs.push(...(chunk as ethers.Log[])); cov.blocksScanned += end - b + 1; }
 }
+const window: ObsWindow = { chain: KEY, fromBlock: from, toBlock: head, complete: scanComplete, scannedAt: Date.now(), schema: 'ci-v3', contract: CONTRACT_VERSION, ordering: ORDERING[KEY] ?? 'unknown' };
 const pools = [...new Set((swapLogs as ethers.Log[]).map((l) => l.address.toLowerCase()))];
 const meta = new Map<string, [string, string]>();
 const calls = pools.flatMap((p) => [{ to: p, data: T01.encodeFunctionData('token0'), ci: 0 }, { to: p, data: T01.encodeFunctionData('token1'), ci: 0 }]);
@@ -190,14 +195,21 @@ log(`  strategy fingerprints: ${[...fingerprints.entries()].sort((a, b) => b[1] 
 // === C1-v2 pipeline join: is each competitor route inside our registry? ===
 const ourPools = new Set<string>();
 try { for (const p of registryAll(KEY)) ourPools.add(p.address.toLowerCase()); } catch {}
-const join = { in_registry: 0, not_in_registry: 0, partial: 0 };
+// join over RECEIPT-VERIFIED arbs only; decoded-but-unreceipted → unresolved
+const receiptedTx = new Set(rows.map((r) => r.tx));
+const join = { matched: 0, partial: 0, unmatched: 0, unresolved: 0, excluded: 0 };
 for (const a of arbs) {
+  if (!receiptedTx.has(a.tx)) { join.unresolved++; continue; }
   const inR = a.route.filter((s) => ourPools.has(s.pool)).length;
-  if (inR === a.route.length) join.in_registry++;
-  else if (inR === 0) join.not_in_registry++;
+  if (inR === a.route.length) join.matched++;
+  else if (inR === 0) join.unmatched++;
   else join.partial++;
 }
-log(`  pipeline-join: in_registry=${join.in_registry} partial=${join.partial} not_in_registry=${join.not_in_registry} (registry pools=${ourPools.size})`);
+cov.join = { ...join };
+cov.swapsDecoded = swaps.length; cov.decodeFailures = swapLogs.length - swaps.length;
+for (const r of rows) { r.profitUsd !== undefined ? cov.pricedEvents++ : cov.unpricedEvents++; }
+cov.receiptsResolved = rows.length; cov.receiptsMissing = Math.max(0, arbs.length + (liqLogs as any[]).length - rows.length);
+log(`  pipeline-join (verified only): matched=${join.matched} partial=${join.partial} unmatched=${join.unmatched} unresolved=${join.unresolved} (registry pools=${ourPools.size}, complete=${window.complete})`);
 
 log(`[${KEY}] blocks ${from}-${head} | swaps decoded: ${swaps.length} across ${pools.length} pools | arbs: ${arbs.length} | liqs: ${(liqLogs as any[]).length} | bots: ${byBot.size}`);
 for (const r of rows.slice(0, 15)) log(`  ${r.kind} ${r.bot.slice(0, 10)} blk=${r.block} txidx=${r.txIndex} pools=${r.pools.length} gas=${r.gasUsed} priv=${r.privateHint} profit=${r.profitRaw}`);
@@ -221,8 +233,13 @@ for (const r of rows) {
   });
   ingestStats[res]++;
 }
+// WO-05: persist measurement contract — window + coverage + rates, one meta record per window
+const arbRate = makeRate('arb_detection', 'event', arbs.length, swapLogs.length, 0, join.unresolved, window);
+const joinRate = makeRate('pipeline_join_matched', 'event', join.matched, receiptedTx.size, 0, join.unresolved, window);
+store.ingest({ schema: 'mc-v1', chain: KEY, kind: 'arb', tx: `window:${from}-${head}`, pools: [], block: from, source: 'measure', ...({ window, coverage: cov, rates: { arbRate, joinRate } } as any) } as any);
 store.flush();
 const econCounts: Record<string, number> = {};
 for (const r of rows) if (r.econ) econCounts[r.econ.status] = (econCounts[r.econ.status] ?? 0) + 1;
 log(`  econ statuses: ${Object.entries(econCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
+log(`  rates(mc-v1): arb_detect=${arbs.length}/${swapLogs.length} swap-logs | join_matched=${join.matched}/${receiptedTx.size} verified${joinRate.rate !== undefined ? ` (${(joinRate.rate * 100).toFixed(1)}%)` : ' (n/a)'} | complete=${window.complete} ordering=${window.ordering}`);
 log(`  store: ${Object.entries(ingestStats).map(([k, n]) => `${k}=${n}`).join(' ')} | counters: ${JSON.stringify(store.counters())}`);
