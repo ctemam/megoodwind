@@ -117,16 +117,23 @@ async function cycle(
   await refreshPools(rpc, tracked);
   markStage('refresh_pools');
 
-  // Conditioning layer: the regime snapshot gates variant eligibility
-  // BEFORE the scheduler picks — suppressed families never evaluate.
-  const snap = classifyMarketRegime(chain.key);
-  emitSignal(chain, { kind: 'regime', ...snap });
-  const variant = nextVariant(scheduler, snap);
-
   const baseFeeWei = (await rpc.call<{ baseFeePerGas?: string }>('eth_getBlockByNumber', ['latest', false])
     .then((b) => (b?.baseFeePerGas ? BigInt(b.baseFeePerGas) : 0n))
     .catch(() => 0n)) ?? 0n;
   markStage('gas_oracle');
+
+  // Conditioning layer: the regime snapshot gates variant eligibility
+  // BEFORE the scheduler picks — suppressed families never evaluate.
+  // ctx feeds the congestion (baseFee vs trailing median) + degraded-info
+  // (provider health fraction) classes — audit gap closed.
+  const snap = classifyMarketRegime(chain.key, { baseFeeWei, healthFrac: rpc.healthFrac() });
+  emitSignal(chain, { kind: 'regime', ...snap });
+  const variant = nextVariant(scheduler, snap);
+  if (!variant) { // regime suppressed every family (DEGRADED_INFO) — fail closed
+    metrics.inc('regime_suppressed_cycle', { chain: chain.key, regime: snap.regime });
+    markStage('regime_suppressed');
+    return;
+  }
 
   // live priority fee — PRIORITY_FEE_GWEI is the fallback, not a constant:
   // a fixed 5 gwei phantom-charges ~$6/candidate on eth where live tips

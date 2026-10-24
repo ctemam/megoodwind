@@ -430,7 +430,7 @@ different formulation), **configuration** (guard settings), **regime**
 (evaluation conditions), **rotation** (evidence-based reconsideration).
 A variant is independent only when it carries a different hypothesis or
 information source — a parameter grid is NOT a portfolio of strategies.
-AllBright actual: 5 families × 12 variants × 4 regimes; the "missing"
+AllBright actual: 5 families × 12 variants × 6 regimes (CONGESTED + DEGRADED_INFO added post-audit; DEGRADED_INFO is fail-closed); the "missing"
 classes are separate lanes (WO-10 liquidation, WO-11 private flow) and
 two proposed regime classes (congestion, degraded-info) are unmapped.
 See `docs/research_inventory.md`.

@@ -210,6 +210,15 @@ export class RpcPool {
     return this.pick().provider;
   }
 
+  /** WO-regime: share of members neither dead nor cooling (0..1) —
+   *  degraded-information signal for the market regime classifier. */
+  healthFrac(): number {
+    if (!this.members.length) return 0;
+    const now = Date.now();
+    const live = this.members.filter((m) => !m.dead && m.cooldownUntil <= now).length;
+    return live / this.members.length;
+  }
+
   async blockNumber(): Promise<number> {
     return this.call<number>('eth_blockNumber', []).then((h) => parseInt(h as unknown as string, 16));
   }

@@ -43,6 +43,10 @@ const REGIME_GATE: Record<RegimeSnapshot['regime'], { suppress: VariantFamily[];
   HIGH_VOL_TRENDING: { suppress: ['MEAN_REVERSION'], boost: ['MOMENTUM', 'CROSS_PAIR_VOL'] },
   LOW_VOL_MEAN_REVERTING: { suppress: ['MOMENTUM', 'CROSS_PAIR_VOL'], boost: ['MEAN_REVERSION', 'STAT_ARB'] },
   ILLIQUID_CRASH: { suppress: ['CROSS_PAIR_VOL', 'MEAN_REVERSION', 'MOMENTUM', 'MICROSTRUCTURE'], boost: ['STAT_ARB'] },
+  // network congestion — elevated/unstable tx cost: only tightest lanes pay
+  CONGESTED: { suppress: ['CROSS_PAIR_VOL', 'MEAN_REVERSION', 'MICROSTRUCTURE'], boost: ['MOMENTUM', 'STAT_ARB'] },
+  // degraded information — fail-closed on new signals entirely
+  DEGRADED_INFO: { suppress: ['MOMENTUM', 'MEAN_REVERSION', 'STAT_ARB', 'CROSS_PAIR_VOL', 'MICROSTRUCTURE'], boost: [] },
   BALANCED: { suppress: [], boost: [] },
 };
 
@@ -61,13 +65,14 @@ export function evaluatePredictiveVariants(snap: RegimeSnapshot): Variant[] {
 /** Regime-conditioned variant pick — the scheduler keeps its
  *  settled-evidence rotation, but a suppressed variant is skipped
  *  (bounded walk over the matrix, never an infinite loop). */
-export function nextVariant(scheduler: VariantScheduler, snap: RegimeSnapshot): Variant {
+export function nextVariant(scheduler: VariantScheduler, snap: RegimeSnapshot): Variant | null {
   const eligible = new Set(evaluatePredictiveVariants(snap).map((v) => v.id));
+  if (!eligible.size) return null; // e.g. DEGRADED_INFO — no lawful variant
   for (let i = 0; i < VARIANTS.length; i++) {
     const v = scheduler.next();
     if (eligible.has(v.id)) return v;
   }
-  return VARIANTS[0]; // unreachable unless every variant suppressed
+  return null;
 }
 
 /** route_whale_alpha_signal — a whale transfer into a watched token

@@ -19,6 +19,8 @@ export type MarketRegime =
   | 'HIGH_VOL_TRENDING'
   | 'LOW_VOL_MEAN_REVERTING'
   | 'ILLIQUID_CRASH'
+  | 'CONGESTED'        // network congestion: elevated/unstable baseFee
+  | 'DEGRADED_INFO'    // provider health degraded: dead/cooled endpoints
   | 'BALANCED';
 
 export interface RegimeSnapshot {
@@ -38,6 +40,11 @@ const TREND_MIN = 0.35;       // directional consistency to call a trend
 const ILLIQUID_FRAC = 0.5;    // half the universe stale = crisis regime
 const HISTORY = 32;           // per-pool price ring depth
 const STALE_MS = 120_000;     // pool state older than this counts illiquid
+
+// thresholds for the two framework-gap classes
+const CONGESTION_MULT = 2.0;   // baseFee > 2x trailing median = congested
+const INFO_FLOOR_FRAC = 0.5;   // < half of endpoints healthy = degraded info
+const baseFeeHistory = new Map<string, number[]>(); // chain -> baseFee ring
 
 const history = new Map<string, number[]>(); // chain:pool -> price ring
 
@@ -69,7 +76,10 @@ const median = (xs: number[]) =>
 
 /** classify_market_regime — snapshot the regime from current pool state.
  *  Call once per solver cycle AFTER refreshPools so deltas are fresh. */
-export function classifyMarketRegime(chain: ChainKey): RegimeSnapshot {
+export function classifyMarketRegime(
+  chain: ChainKey,
+  ctx: { baseFeeWei?: bigint; healthFrac?: number } = {},
+): RegimeSnapshot {
   const pools = registry.all(chain);
   const deltas: number[] = [];   // signed bps moves per pool
   const absMoves: number[] = [];
@@ -109,7 +119,20 @@ export function classifyMarketRegime(chain: ChainKey): RegimeSnapshot {
   const illiquidFrac = pools.length ? stale / pools.length : 1;
 
   let regime: MarketRegime = 'BALANCED';
-  if (illiquidFrac > ILLIQUID_FRAC) regime = 'ILLIQUID_CRASH';
+  // congestion: trailing-median baseFee spike (network-cost class)
+  let congested = false;
+  if (ctx.baseFeeWei && ctx.baseFeeWei > 0n) {
+    const ring = baseFeeHistory.get(chain) ?? [];
+    const med = ring.length >= 8 ? median([...ring]) : 0;
+    congested = med > 0 && Number(ctx.baseFeeWei) / 1e9 > med * CONGESTION_MULT;
+    ring.push(Number(ctx.baseFeeWei) / 1e9); // store in gwei units
+    if (ring.length > HISTORY) ring.shift();
+    baseFeeHistory.set(chain, ring);
+  }
+  const degraded = ctx.healthFrac !== undefined && ctx.healthFrac < INFO_FLOOR_FRAC;
+  if (degraded) regime = 'DEGRADED_INFO';
+  else if (illiquidFrac > ILLIQUID_FRAC) regime = 'ILLIQUID_CRASH';
+  else if (congested) regime = 'CONGESTED';
   else if (volBps >= VOL_HIGH_BPS && trendScore >= TREND_MIN) regime = 'HIGH_VOL_TRENDING';
   else if (volBps <= VOL_LOW_BPS) regime = 'LOW_VOL_MEAN_REVERTING';
 

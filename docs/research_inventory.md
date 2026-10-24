@@ -40,21 +40,22 @@ Missing vs the proposal: liquidation-economics, private-order-flow, and
 cross-chain classes are not "families" here — they are separate lanes
 (WO-10/11), correctly so.
 
-### Regimes — 4 implemented (`src/engine/marketRegime.ts:18-22`)
+### Regimes — 6 implemented (`src/engine/marketRegime.ts`)
 
-`HIGH_VOL_TRENDING · LOW_VOL_MEAN_REVERTING · ILLIQUID_CRASH · BALANCED`
-vs the framework's 5 proposed (ordinary / elevated-vol / constrained-
-liquidity / congestion / degraded-information). Map:
+`HIGH_VOL_TRENDING · LOW_VOL_MEAN_REVERTING · ILLIQUID_CRASH · CONGESTED ·
+DEGRADED_INFO · BALANCED` — covers all 5 proposed classes (+BALANCED):
 
-| Proposed | Implemented | Evidence |
+| Proposed | Implemented | Gate |
 |---|---|---|
-| ordinary | `BALANCED` | default classification |
-| elevated volatility | `HIGH_VOL_TRENDING` | volBps ≥ 25 + trend ≥0.35 |
-| constrained liquidity | `ILLIQUID_CRASH` | illiquidFrac > 0.5 (stale-state share) |
-| network congestion | — | **not a class** — baseFee/priorityFee gates do this implicitly |
-| degraded information | — | **not a class** — dead-lane/timeout counts exist but don't gate regime |
+| ordinary | `BALANCED` | — |
+| elevated volatility | `HIGH_VOL_TRENDING` | suppress mean-reversion |
+| constrained liquidity | `ILLIQUID_CRASH` | depth ≥250k floor |
+| network congestion | `CONGESTED` (baseFee > 2× trailing median) | momentum+stat-arb only |
+| degraded information | `DEGRADED_INFO` (provider health <50%) | **fail closed — zero variants** |
 
-Two proposed classes have no code analog — flagged, not hidden.
+Ordering: DEGRADED_INFO > ILLIQUID_CRASH > CONGESTED > vol classes.
+
+All 5 proposed classes are now implemented (see the mapping table above).
 
 ### Rotation — `VariantScheduler` (`predictiveEngine.ts:52-103`)
 
@@ -63,13 +64,13 @@ emit counts. Regime gate pre-filters eligible families each cycle
 (`strategyRouter.ts:43-47`). Evidence basis is real but thin — 0 settles
 on any chain means the scheduler has almost no win/loss data yet.
 
-## B. Proposed 8×16×5 vs actual 5×12×4 — gap analysis
+## B. Proposed 8×16×5 vs actual 5×12×6 — gap analysis
 
 | Dimension | Proposed | Actual | Gap |
 |---|---|---|---|
 | families | 8 | 5 (+2 lanes: liq, private) | semantic — the "missing" 3 exist as lanes not families |
 | variants | 16 | 12 | 4 unused slots; more configurations ≠ more hypotheses |
-| regimes | 5 | 4 (+2 unclassified: congestion, degraded-info) | 2 proposed classes unmapped |
+| regimes | 5 | 6 (all proposed classes covered) | none — closed post-audit |
 | independence | distinct hypotheses | 1 hypothesis × 12 configs + 3 distinct sources | core audit finding |
 
 ## C. Provenance (sources cited by the framework)
@@ -87,7 +88,7 @@ on any chain means the scheduler has almost no win/loss data yet.
   the config-vs-strategy distinction is now explicit; rotation uses
   settled evidence only.
 - **Forbidden by evidence:** calling this an "8×16×5 matrix" — it is
-  5×12×4 with two regime classes unimplemented and variants that are
+  5×12×6 — all regime classes now implemented and variants that are
   configurations, not hypotheses. Do not scale the grid before the
   independent information sources (mempool, hints, liquidation) carry
   their own measured evidence.
