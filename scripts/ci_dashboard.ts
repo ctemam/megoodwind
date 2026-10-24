@@ -58,7 +58,8 @@ for (const b of bench.top3) {
   const c = canon.find((x) => x.entityId === b.id)!;
   L.push(`\n### #${b.rank} ${b.id}`);
   for (const [sec, fields] of Object.entries(c.sections)) {
-    const txt = Object.entries(fields as any).map(([k, v]: [string, any]) => `${k}=${v.value !== undefined ? String(v.value).slice(0, 40) : v.status}${v.note ? ` (${String(v.note).slice(0, 40)})` : ''}`).join('; ');
+    const render = (val: any) => val === undefined ? undefined : (typeof val === 'object' ? JSON.stringify(val).slice(0, 60) : String(val).slice(0, 40));
+    const txt = Object.entries(fields as any).map(([k, v]: [string, any]) => `${k}=${v.value !== undefined ? render(v.value) : v.status}${v.note ? ` (${String(v.note).slice(0, 40)})` : ''}`).join('; ');
     L.push(`- **${sec}**: ${txt}`);
   }
 }
