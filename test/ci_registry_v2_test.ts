@@ -1,0 +1,10 @@
+import { SOURCE_MAPS, METRIC_REGISTRY, defFor } from '../src/ci/metricRegistry.js';
+let pass = 0, fail = 0;
+const ok = (n: string, c: boolean) => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'} ${n}`); };
+ok('T1 every dashboard field has a named source map', METRIC_REGISTRY.every((m) => SOURCE_MAPS[m.dashboardField]));
+ok('T2 observability declared for all', Object.values(SOURCE_MAPS).every((s) => s.observability));
+ok('T3 exec-success honest: private_unavailable', SOURCE_MAPS.executionSuccessRate.observability === 'private_unavailable');
+ok('T4 verified net honest: private_unavailable (trace req)', SOURCE_MAPS.verifiedNetUsd.observability === 'private_unavailable');
+ok('T5 gas direct observable', SOURCE_MAPS.gasCostUsd.observability === 'directly_observable');
+ok('T6 win rate partially observable w/ sample limit', SOURCE_MAPS.profitableExecutionRate.observability === 'partially_observable');
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

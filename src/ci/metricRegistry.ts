@@ -58,3 +58,18 @@ export const METRIC_REGISTRY: MetricDef[] = [
 ];
 
 export function defFor(field: string) { return METRIC_REGISTRY.find((m) => m.dashboardField === field); }
+
+/** Named-source observability class — drives what's honestly measurable. */
+export type Observability = 'directly_observable' | 'reconstructable' | 'partially_observable' | 'private_unavailable';
+export interface SourceMap { primary: { name: string; method: string }; corroborating?: { name: string; limit: string }; fallback?: { name: string; limit: string }; observability: Observability; }
+export const SOURCE_MAPS: Record<string, SourceMap> = {
+  verifiedNetUsd: { observability: 'private_unavailable', primary: { name: 'eth debug_traceTransaction', method: 'trace balance deltas (archive-only)' }, fallback: { name: 'public receipts', limit: 'no internal transfers/pricing' } },
+  estimatedNetUsd: { observability: 'reconstructable', primary: { name: 'eth_getTransactionReceipt+Swap logs', method: 'gross flow − gasUsed×effPrice − detected fees' }, corroborating: { name: 'Dune/ EigenPhi labels', limit: 'Tier-2 corroboration only' } },
+  gasCostUsd: { observability: 'directly_observable', primary: { name: 'eth_getTransactionReceipt', method: 'gasUsed×effectiveGasPrice' }, fallback: { name: 'eth_price feed', limit: 'WETH price only' } },
+  executionSuccessRate: { observability: 'private_unavailable', primary: { name: 'unavailable publicly', method: 'failed attempts never land on-chain' } },
+  profitableExecutionRate: { observability: 'partially_observable', primary: { name: 'receipts+econ layer', method: 'netUsd>0 / priced events' }, corroborating: { name: 'third-party analytics', limit: 'sample only' } },
+  competitiveScore: { observability: 'reconstructable', primary: { name: 'aggregated trusted records', method: 'score-v1 formula' } },
+  firstObservedBlock: { observability: 'partially_observable', primary: { name: 'block scan windows', method: 'min block observed' }, fallback: { name: 'deeper backfill', limit: 'bounded by scan depth — ≠ launch' } },
+  fingerprints: { observability: 'reconstructable', primary: { name: 'Swap event decode', method: 'routeLen×venues' } },
+  completeness: { observability: 'directly_observable', primary: { name: 'scorecard statuses', method: 'usable/required ratio' } },
+};
