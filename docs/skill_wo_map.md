@@ -38,3 +38,6 @@ Numbers come from skill-formula output, not hand-typed reasoning.
    is incomplete.
 4. Any threshold not produced by THRESHOLDS.md formulas = UNDECIDED by
    default.
+
+| Profit-equation factor register (realized-risk-adjusted net) | WO-17 mapping | WO-17 (factor-by-factor audit + remediation) |
+| Strategy independence test (family vs variant vs configuration) | WO-18 matrix honesty | WO-18 (config grid != independent hypotheses) |

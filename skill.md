@@ -439,3 +439,28 @@ Sources added to ledger: Uniswap protocol docs (v2/v3/v4 mechanics —
 VERIFIED-CONCEPT), Wiley 2025 price-discovery study (UNVERIFIED — cited
 not read), Flashbots bundle docs (VERIFIED-CONCEPT), Aave flash-loan docs
 (VERIFIED-CONCEPT).
+
+## Closed-form cycle sizing (R1 — WO-8.7 capability)
+
+For a 2-hop constant-product cycle A→B→A with reserves (x1,y1),(x2,y2)
+and per-leg phi = 1-fee:
+  t* = argmax net input, computed from the composed (P,Q,R) —
+  P = φ1·x2·y1, Q = φ1·y1·y2, R = φ1·φ2·x1·x2
+  t* solves (P·t²)/(y1+φ1t)² = R·x1·y2/((y2)² + ...) — see the exact
+  derivation in `src/math/sizing.ts`; verified p90 rel-err 3.5e-8 vs
+  golden-section brute force (interior optima only; boundary/cap cases
+  diverge by construction, not error).
+Mixed/v3 paths stay on screening search + exec-probe validation —
+V3 output is piecewise across ticks (`v3AmountOutInTick`), so the
+closed form does not apply there.
+
+## Liquidation math (WO-10 capability)
+
+Aave V3: HF = Σ(collat_i · ltv_i) / debt. Liquidatable HF<1; seize up to
+CLOSE_FACTOR (50%, 100% when HF<0.95) at LIQUIDATION_BONUS.
+Morpho Blue: healthy iff borrowed ≤ collat·price·lltv/1e36 — bound
+px < borrowed·1e36/(collat·lltv); repaidAssets pulled via transferFrom
+after onMorphoLiquidate approve. Liquidate partial when
+repaidAssets·incentive/px would exceed position collateral (Panic 0x11
+guard — measured on fork).
+Net = seized collat value − repaid − fees − gas − flash premium.
