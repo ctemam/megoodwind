@@ -13,6 +13,8 @@ import {
     IFlashLoanSimpleReceiver,
     IMorphoFlash,
     IMorphoFlashCallback,
+    IMorphoLiquidation,
+    MarketParams,
     IERC3156FlashBorrower,
     IERC3156FlashLender
 } from "./interfaces/IFlash.sol";
@@ -318,11 +320,13 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
 
     struct LiqPlan {
         FlashSource source;
-        address protocol;      // Aave V3 Pool (liquidationCall lives there)
+        uint8 protocolKind;    // 0=AaveV3, 1=MorphoBlue
+        address protocol;      // Aave V3 Pool or Morpho contract
         address user;          // borrower being liquidated
         address collateralAsset;
         address debtAsset;     // also the flash-borrowed token
-        uint256 debtToCover;   // <= close-factor-max, computed off-chain per R5
+        uint256 debtToCover;   // aave: debtToCover; morpho: repaidAssets (flash borrow size)
+        bytes marketData;      // morpho: abi.encode(MarketParams, uint256 repaidShares)
         Hop[] hops;            // sells seized collateral -> debtAsset
         uint256 minProfit;     // post-repay profit floor in debtAsset units
     }
@@ -354,13 +358,29 @@ contract AllBrightExecutor is IFlashLoanRecipient, IFlashLoanSimpleReceiver, IMo
     }
 
     bool private _inLiq;
+    address private _pendingLiqRepay;
+
+    /// Morpho Blue repayment callback — Morpho pulls repaidAssets via
+    /// transferFrom right after this returns; the callback must approve.
+    function onMorphoLiquidate(uint256 repaidAssets, bytes calldata data) external {
+        address debt = _pendingLiqRepay;
+        if (debt == address(0)) revert NotFlashProvider();
+        IERC20(debt).forceApprove(msg.sender, repaidAssets);
+    }
 
     /// Runs inside every flash callback (liquidate path): liquidationCall
     /// seizes collateral at the protocol bonus, hops sell it back to the
     /// debt asset, repay+profit accounting follows the arb path exactly.
     function _runLiq(LiqPlan memory lp) internal {
-        IERC20(lp.debtAsset).forceApprove(lp.protocol, lp.debtToCover);
-        IAavePool(lp.protocol).liquidationCall(lp.collateralAsset, lp.debtAsset, lp.user, lp.debtToCover, false);
+        if (lp.protocolKind == 1) {
+            _pendingLiqRepay = lp.debtAsset;
+            (MarketParams memory mp, uint256 repaidShares) = abi.decode(lp.marketData, (MarketParams, uint256));
+            IMorphoLiquidation(lp.protocol).liquidate(mp, lp.user, 0, repaidShares, lp.marketData);
+            _pendingLiqRepay = address(0);
+        } else {
+            IERC20(lp.debtAsset).forceApprove(lp.protocol, lp.debtToCover);
+            IAavePool(lp.protocol).liquidationCall(lp.collateralAsset, lp.debtAsset, lp.user, lp.debtToCover, false);
+        }
         ArbPlan memory fake;
         fake.borrowToken = lp.debtAsset;
         fake.hops = lp.hops;

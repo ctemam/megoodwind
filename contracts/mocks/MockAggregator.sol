@@ -6,6 +6,8 @@ contract MockAggregator {
     int256 public answer;
     constructor(int256 a) { answer = a; }
     function latestAnswer() external view returns (int256) { return answer; }
+    /// Morpho Blue oracle surface — 1e36-scaled collateral-per-loan price.
+    function price() external view returns (uint256) { return uint256(answer); }
     function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
         return (1, answer, block.timestamp, block.timestamp, 1);
     }

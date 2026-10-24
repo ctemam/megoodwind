@@ -118,6 +118,73 @@ export class LiquidationIndexer {
   }
 }
 
+// ---------- WO-10 Morpho Blue lane ----------
+
+const MORPHO_BLUE = '0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb';
+const MORPHO_ABI = new ethers.Interface([
+  'function position(bytes32 id, address user) view returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral)',
+  'function market(bytes32 id) view returns (uint128 totalSupplyAssets, uint128 totalSupplyShares, uint128 totalBorrowAssets, uint128 totalBorrowShares, uint128 lastUpdate, uint128 fee)',
+  'function idToMarketParams(bytes32 id) view returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv)',
+]);
+const ORACLE_ABI = new ethers.Interface(['function price() view returns (uint256)']);
+const MORPHO_BORROW_TOPIC = ethers.id('Borrow(bytes32,address,address,address,uint256,uint256)');
+const MORPHO_CREATE_TOPIC = ethers.id('CreateMarket(bytes32,(address,address,address,address,uint256))');
+
+export interface MorphoMarket {
+  id: string;
+  loanToken: string; collateralToken: string; oracle: string; irm: string; lltv: bigint;
+}
+
+export class MorphoIndexer {
+  markets = new Map<string, MorphoMarket>();
+  borrowers = new Set<string>(); // "id:user" keys
+  constructor(private chain: ChainConfig, private rpc: RpcPool) {}
+  enabled(): boolean { return this.chain.key === 'eth' || this.chain.key === 'base'; } // Morpho Blue deployments
+
+  async sync(fromBlock: number, toBlock: number) {
+    if (!this.enabled()) return;
+    const mk = await this.rpc.call<{ topics: string[]; data: string }[]>('eth_getLogs', [{
+      address: MORPHO_BLUE, topics: [MORPHO_CREATE_TOPIC], fromBlock: '0x' + fromBlock.toString(16), toBlock: '0x' + toBlock.toString(16),
+    }]).catch(() => [] as never[]);
+    for (const l of mk) {
+      const id = l.topics[1];
+      const d = MORPHO_ABI.decodeFunctionResult('idToMarketParams', l.data.startsWith('0x') ? l.data : '0x' + l.data);
+      this.markets.set(id, { id, loanToken: d[0], collateralToken: d[1], oracle: d[2], irm: d[3], lltv: BigInt(d[4]) });
+    }
+    const bo = await this.rpc.call<{ topics: string[] }[]>('eth_getLogs', [{
+      address: MORPHO_BLUE, topics: [MORPHO_BORROW_TOPIC], fromBlock: '0x' + fromBlock.toString(16), toBlock: '0x' + toBlock.toString(16),
+    }]).catch(() => [] as never[]);
+    for (const l of bo) this.borrowers.add(`${l.topics[1]}:${'0x' + l.topics[2].slice(-40)}`);
+  }
+
+  /** Positions with effective HF < 1: borrowed > collateral×lltv (oracle-priced). */
+  async liquidatable(): Promise<{ id: string; user: string; borrowed: bigint; collatValue: bigint; lltv: bigint }[]> {
+    const rows = [...this.borrowers].map((k) => { const [id, user] = k.split(':'); return { id, user }; });
+    if (!rows.length) return [];
+    const calls = rows.flatMap((r) => [
+      { to: MORPHO_BLUE, data: MORPHO_ABI.encodeFunctionData('position', [r.id, r.user]), ci: 0 },
+      { to: MORPHO_BLUE, data: MORPHO_ABI.encodeFunctionData('market', [r.id]), ci: 0 },
+    ]);
+    const res = await multicall(this.rpc, calls, calls.length).catch(() => null);
+    if (!res) return [];
+    const out: { id: string; user: string; borrowed: bigint; collatValue: bigint; lltv: bigint }[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const p = res[i * 2], m = res[i * 2 + 1];
+      if (!p || !m) continue;
+      const pos = MORPHO_ABI.decodeFunctionResult('position', p);
+      const mkt = MORPHO_ABI.decodeFunctionResult('market', m);
+      if (!pos.borrowShares || !mkt.totalBorrowShares || !mkt.totalBorrowAssets) continue;
+      const market = this.markets.get(rows[i].id);
+      if (!market) continue;
+      const px = await this.rpc.call<string>('eth_call', [{ to: market.oracle, data: '0xa035b1fe' }, 'latest']).catch(() => '0x0');
+      const borrowed = BigInt(pos.borrowShares) * BigInt(mkt.totalBorrowAssets) / BigInt(mkt.totalBorrowShares);
+      const collatValue = (BigInt(pos.collateral) * BigInt(px)) / 10n ** 36n;
+      if (borrowed * 10n ** 18n > collatValue * BigInt(market.lltv)) out.push({ id: rows[i].id, user: rows[i].user, borrowed, collatValue, lltv: BigInt(market.lltv) });
+    }
+    return out;
+  }
+}
+
 /** R5 mechanics: liquidator economics for one position. All on-chain reads. */
 export function closeFactor(hf: bigint): number {
   return hf < CLOSE_FACTOR_HF_THRESHOLD ? 1.0 : 0.5;

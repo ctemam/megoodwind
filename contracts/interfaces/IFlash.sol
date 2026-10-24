@@ -21,6 +21,24 @@ interface IFlashLoanRecipient {
 }
 
 /// Item #6 — Aave V3 (fallback engine, 0.09% fee).
+/// WO-10 — Morpho Blue market params + liquidation surface.
+struct MarketParams {
+    address loanToken;
+    address collateralToken;
+    address oracle;
+    address irm;
+    uint256 lltv;
+}
+interface IMorphoLiquidation {
+    function liquidate(
+        MarketParams calldata marketParams,
+        address borrower,
+        uint256 seizedAssets,
+        uint256 repaidShares,
+        bytes calldata data
+    ) external returns (uint256, uint256);
+}
+
 interface IAavePool {
     /// WO-10 — seize collateral at the per-asset bonus; debtToCover
     /// bounded by the close factor (50%, or 100% when HF < 0.95).
