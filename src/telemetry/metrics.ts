@@ -26,6 +26,7 @@ export interface SettledRecord {
   netUsd: number;
   txHash: string;
   spreadPct: number;
+  regime?: string;
 }
 
 export type Lane = 'predictive' | 'whale';
@@ -218,9 +219,21 @@ class Metrics {
     };
   }
 
-  addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number) {
-    this.settled.push({ ts: Date.now(), chain, strategy, netUsd, txHash, spreadPct });
+  addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number, regime?: string) {
+    this.settled.push({ ts: Date.now(), chain, strategy, netUsd, txHash, spreadPct, regime });
     this.persist();
+  }
+
+  /** D6 — per-regime settled attribution: which market conditions
+   *  actually produced landed profit. */
+  get settled_by_regime(): Record<string, { count: number; netUsd: number }> {
+    const out: Record<string, { count: number; netUsd: number }> = {};
+    for (const r of this.settled) {
+      const k = r.regime ?? 'UNKNOWN';
+      (out[k] ??= { count: 0, netUsd: 0 }).count++;
+      out[k].netUsd += r.netUsd;
+    }
+    return out;
   }
 
   /** THE profit metric — landed only. */

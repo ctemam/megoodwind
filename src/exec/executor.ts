@@ -163,7 +163,7 @@ export async function executeCandidate(
       if (!rc.landed) { metrics.inc('arb_unlanded_total', { chain: chain.key }); lat.emit('timeout', { note: 'unlanded' }); return; }
       if (!rc.success) { scheduler.recordRevert(cand.variant); metrics.inc('arb_landed_revert_total', { chain: chain.key }); recordLoss({ ts: Date.now(), chain: chain.key, kind: 'revert_gas', usd: cand.gasUsd, txHash: rc.txHash }); lat.emit('revert', { txHash: rc.txHash }); return; }
       scheduler.recordSettle(cand.variant, cand.netUsd);
-      metrics.addSettled(chain.key, cand.strategy, cand.netUsd, rc.txHash!, cand.spreadPct);
+      metrics.addSettled(chain.key, cand.strategy, cand.netUsd, rc.txHash!, cand.spreadPct, cand.regime);
       lat.emit('settled', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>') });
       log.info(`SETTLED(private) ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${rc.txHash}`);
       return;
@@ -200,7 +200,7 @@ export async function executeCandidate(
 
   // HONESTY FLOOR: only arb_settled_net_usd on landed records is profit.
   scheduler.recordSettle(cand.variant, cand.netUsd);
-  metrics.addSettled(chain.key, cand.strategy, cand.netUsd, receipt.txHash!, cand.spreadPct);
+  metrics.addSettled(chain.key, cand.strategy, cand.netUsd, receipt.txHash!, cand.spreadPct, cand.regime);
   lat.emit('settled', { path: cand.legs.map((l) => l.pool.address.toLowerCase()).join('>'), txHash: receipt.txHash });
   log.info(`SETTLED ${cand.strategy} ${chain.key} net $${cand.netUsd.toFixed(2)} tx ${receipt.txHash}`);
 }

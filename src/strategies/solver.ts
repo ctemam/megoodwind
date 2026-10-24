@@ -52,6 +52,8 @@ export interface Candidate {
   premiumUsd: number;
   /** borrow notional in USD — ops capital-cap input */
   borrowUsd?: number;
+  /** regime at solve time — settled-record attribution (D6) */
+  regime?: MarketRegime;
 }
 
 const log = logger('solver');
@@ -156,6 +158,7 @@ function emit(
   nativeUsd = cfg.NATIVE_USD,
   priorityFeeWei = BigInt(Math.floor(cfg.PRIORITY_FEE_GWEI * 1e9)),
   extra?: { flashLiquidityRaw?: bigint },
+  regime?: MarketRegime,
 ): Candidate | null {
   metrics.inc('total_detected_opportunities', { chain: chain.key });
   const decBorrow = decOf(legs[0].pool, borrowToken);
@@ -413,6 +416,7 @@ function emit(
     impactBps, slipBoundBps, minProfitToken,
     grossUsd: b.n.grossUsd, gasUsd: b.n.gasUsd, premiumUsd: b.n.premiumUsd,
     borrowUsd: (Number(borrow) / 10 ** decBorrow) * tokenUsd,
+    regime,
   };
 }
 
@@ -485,7 +489,7 @@ export function solve(
             const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
             if (usd === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }));
+            push(emit('P01', chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }, opts.regime));
           }
         }
       }
@@ -523,7 +527,7 @@ export function solve(
             const usdA = opts.tokenUsd.get(a);
             if (usdA === undefined) continue; // unpriced borrow = dishonest net
             const borrow = opts.sizeOf(a, decOf(p1, a));
-            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw });
+            const cnd = emit('P02', chain, legs, a, borrow, v, opts.gasUnits, opts.baseFeeWei, usdA, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }, opts.regime);
             push(cnd);
           }
         }
@@ -541,7 +545,7 @@ export function solve(
     const usd = opts.tokenUsd.get(legs[0].tokenIn.toLowerCase());
     if (usd === undefined) continue; // unpriced borrow token = dishonest net
     const borrow = opts.sizeOf(legs[0].tokenIn, decOf(legs[0].pool, legs[0].tokenIn));
-    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }));
+    push(emit(label, chain, legs, legs[0].tokenIn, borrow, v, opts.gasUnits, opts.baseFeeWei, usd, opts.l1DataFeeWei ?? 0n, lane, slipBps, opts.nativeUsd, opts.priorityFeeWei, { flashLiquidityRaw: opts.flashLiquidityRaw }, opts.regime));
   }
 
   // adaptive-depth update — zero emits + depth rejections → decay the

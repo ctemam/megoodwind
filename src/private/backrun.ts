@@ -35,6 +35,7 @@ export interface BundleRow {
   builders?: string[];
   callBundleOk?: boolean;
   sent?: boolean;
+  txHash?: string;       // carrier tx hash when sent (mev_sendBundle response)
   included?: boolean;
   blockDelta?: number;
   realizedNetUsd?: number;
