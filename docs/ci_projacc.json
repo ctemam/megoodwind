@@ -1,0 +1,65 @@
+{
+ "schema": "projacc-v1",
+ "generatedAt": 1792885233239,
+ "rows": [
+  {
+   "variant": "V03",
+   "n": 27,
+   "projectedPositive": 27,
+   "probePassed": 0,
+   "falsePositives": 27,
+   "accRate": 0,
+   "meanProjectedNet": 3.6766
+  },
+  {
+   "variant": "V04",
+   "n": 27,
+   "projectedPositive": 27,
+   "probePassed": 0,
+   "falsePositives": 27,
+   "accRate": 0,
+   "meanProjectedNet": 3.6994
+  },
+  {
+   "variant": "V05",
+   "n": 27,
+   "projectedPositive": 27,
+   "probePassed": 0,
+   "falsePositives": 27,
+   "accRate": 0,
+   "meanProjectedNet": 3.6769
+  },
+  {
+   "variant": "V06",
+   "n": 26,
+   "projectedPositive": 26,
+   "probePassed": 0,
+   "falsePositives": 26,
+   "accRate": 0,
+   "meanProjectedNet": 3.7026
+  },
+  {
+   "variant": "V08",
+   "n": 25,
+   "projectedPositive": 25,
+   "probePassed": 0,
+   "falsePositives": 25,
+   "accRate": 0,
+   "meanProjectedNet": 3.7189
+  },
+  {
+   "variant": "V12",
+   "n": 25,
+   "projectedPositive": 25,
+   "probePassed": 0,
+   "falsePositives": 25,
+   "accRate": 0,
+   "meanProjectedNet": 3.73
+  }
+ ],
+ "dataGaps": [
+  "settled.json records lack projected field — realized-vs-projected pairing unavailable (persist projection going forward)",
+  "probe=simulation outcome, not realized settlement — accRate measures projected-positive vs probe-pass correlation, not profit calibration",
+  "no realized records carry projections — calibration vs real settlement impossible yet"
+ ]
+}
