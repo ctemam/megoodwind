@@ -32,6 +32,8 @@ export interface RankRow {
 }
 
 const MIN_SAMPLE = 2;            // below this → unranked, disclosed
+// AUD-D1: decode-artifact entities can NEVER reach performance eligibility
+const isArtifact = (a: EntityAgg) => a.events.some((r) => r.entityClass === 'unclassifiable_decode_artifact' || /^0x0{8,}/.test(r.signer?.toLowerCase() ?? 'x'));
 
 export function aggregate(records: CiRecord[]): EntityAgg[] {
   const byId = new Map<string, CiRecord[]>();
@@ -45,7 +47,8 @@ export function aggregate(records: CiRecord[]): EntityAgg[] {
     const priced = ev.filter((r) => r.econ?.netUsd !== undefined).map((r) => r.econ!.netUsd!);
     const gas = ev.map((r) => r.econ?.gasCostUsd).filter((x): x is number => x !== undefined);
     const confs = ev.map((r) => r.econ?.confidence ?? r.classConfidence ?? 0);
-    const cls = ev.every((r) => r.entityClass?.startsWith('verified_active')) ? 'verified'
+    const cls = ev.some((r) => r.entityClass === 'unclassifiable_decode_artifact') ? 'unverified'
+      : ev.every((r) => r.entityClass?.startsWith('verified_active')) ? 'verified'
       : ev.some((r) => r.entityClass === 'suspected_deceptive' || r.entityClass === 'unverified_frontrunner') ? 'unverified' : 'provisional';
     return {
       id, kind: ev[0].clusterId ? 'cluster' : 'signer', events: ev, verifiedCount: verified, arbCount: ev.filter((r) => r.kind === 'arb').length,
@@ -65,7 +68,7 @@ export function rankPerformance(aggs: EntityAgg[]): RankRow[] {
     if (a.events.length < MIN_SAMPLE) flags.push('below_min_sample');
     if (a.netUsdKnown.length === 0) flags.push('all_unpriced');
     if (a.netUsdKnown.length < a.events.length) flags.push(`${a.events.length - a.netUsdKnown.length}/${a.events.length} unpriced`);
-    const eligible = a.evidenceClass === 'verified' && a.events.length >= MIN_SAMPLE;
+    const eligible = a.evidenceClass === 'verified' && a.events.length >= MIN_SAMPLE && !isArtifact(a);
     // score = confidence-weighted normalized net + consistency (only when priced data exists)
     const score = eligible && a.netUsdKnown.length
       ? a.netUsdSum * a.confidence * (a.netUsdKnown.length / a.events.length)

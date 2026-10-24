@@ -10,7 +10,8 @@ import type { CiRecord } from './store.js';
 export interface BenchmarkEntry { rank: number | null; id: string; score?: number; n: number; netUsd?: number; confidence: number; eligible: boolean; why?: string; }
 export interface Benchmark { version: 'bench-v1'; generatedAt: number; universe: number; eligible: number; top3: BenchmarkEntry[]; insufficient: BenchmarkEntry[]; }
 
-const ELIG = (a: EntityAgg) => a.evidenceClass === 'verified' && a.events.length >= 2 && a.netUsdKnown.length >= 1;
+const ELIG = (a: EntityAgg) => a.evidenceClass === 'verified' && a.events.length >= 2 && a.netUsdKnown.length >= 1
+  && !a.events.some((r) => r.entityClass === 'unclassifiable_decode_artifact' || /^0x0{8,}/.test(r.signer?.toLowerCase() ?? 'x')); // AUD-D1
 
 export function selectTop3(aggs: EntityAgg[]): Benchmark {
   const eligible = aggs.filter(ELIG);

@@ -58,6 +58,13 @@ export class CiStore {
     this.s = existsSync(file)
       ? JSON.parse(readFileSync(file, 'utf8'))
       : { records: {}, counters: { received: 0, unique: 0, dupsSuppressed: 0, incomplete: 0, quarantined: 0, released: 0, unpricedProfit: 0, unresolvedIdentity: 0, reconciled: 0, reprocessed: 0 }, classHistory: {} };
+    // AUD-D3: re-grade legacy verified econ records (pre-traceVerified gate) — correction trail, not silent rewrite
+    for (const r of Object.values(this.s.records)) {
+      if (r.econ?.status === 'net_profit_verified' && !(r as any).traceVerified) {
+        r.econ.status = 'net_profit_estimated';
+        r.corrections.push({ at: Date.now(), field: 'econ.status', from: 'net_profit_verified', to: 'net_profit_estimated' });
+      }
+    }
   }
   static eventId(chain: string, tx: string, logIndex?: number) {
     return `${chain}:${tx.toLowerCase()}${logIndex !== undefined ? ':' + logIndex : ''}`;
