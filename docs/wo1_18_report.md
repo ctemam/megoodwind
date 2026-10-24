@@ -8,116 +8,116 @@ Branch `feat/direct-swap-exec` @ `5655dc1` (pushed).
 
 ## WO-1 / WO-1b — OOM diagnosis + memory verification
 
-- Traced the OOM to abandoned WSS lanes: provider disconnect/reconnect
+- ✅ Traced the OOM to abandoned WSS lanes: provider disconnect/reconnect
   cycles created new listeners that were never retired, growing RSS
   until heap exhaustion.
-- Built `memWatch` sampler: RSS, heapUsed, external, arrayBuffers,
+- ✅ Built `memWatch` sampler: RSS, heapUsed, external, arrayBuffers,
   handles count, post-GC heap via `--expose-gc`, per-endpoint latency
   EWMA — all to `data/mem_telemetry.jsonl`.
-- Launched a 60-min live soak run to prove the leak was closed:
+- ✅ Launched a 60-min live soak run to prove the leak was closed:
   post-GC heap flat, handles stable.
-- Deleted multi-GB heapsnaps, added `data/heapsnaps/` + `data/mem_telemetry/`
+- ✅ Deleted multi-GB heapsnaps, added `data/heapsnaps/` + `data/mem_telemetry/`
   to `.gitignore`, secret-grepped all commits.
 - Status: **fixed, verified**.
 
 ## WO-2 — Bounded diag lane
 
-- `DIAG_ONLY` moved from a flag check to a structural hard-stop inside
+- ✅ `DIAG_ONLY` moved from a flag check to a structural hard-stop inside
   `executeCandidate` — `submitExecUserOp`, `submitUserOp`, and the
   Flashbots rail are unreachable regardless of config drift.
-- Wrote the unreachability test proving the submit path cannot fire.
-- Per-signal capped jsonl diag log: reserves/decimals/depth/gross/gas/
+- ✅ Wrote the unreachability test proving the submit path cannot fire.
+- ✅ Per-signal capped jsonl diag log: reserves/decimals/depth/gross/gas/
   premium/net/pre-bribe — bounded file size + sampling to prevent disk
   growth.
-- Strict boolean env parsing — `DIAG_ONLY=0`, `false`, `off` all parse
+- ✅ Strict boolean env parsing — `DIAG_ONLY=0`, `false`, `off` all parse
   identically; a string slip can't silently arm the lane.
-- Counter epoch/run-id reset per code version so diag rows from stale
+- ✅ Counter epoch/run-id reset per code version so diag rows from stale
   builds can't contaminate a new run's gate-audit counters.
 - Status: **done**.
 
 ## WO-4 — Fork exec canary
 
-- Built the end-to-end anvil harness: detect → solve → probe → exec →
+- ✅ Built the end-to-end anvil harness: detect → solve → probe → exec →
   flash-borrow → atomic repay → `ArbSettled` event + receipt.
-- Fixed the `--spread` arg-parse bug that produced `NaN%` (argv[0] leak).
-- Proved the full flash-loan → swap → repay → profit floor → settle
+- ✅ Fixed the `--spread` arg-parse bug that produced `NaN%` (argv[0] leak).
+- ✅ Proved the full flash-loan → swap → repay → profit floor → settle
   pipeline on a real eth fork state.
 - Status: **accepted**.
 
 ## WO-5 / WO-5b — Measurement-grade profit + gas model
 
-- Replaced rough estimates with exact net accounting:
+- ✅ Replaced rough estimates with exact net accounting:
   `grossUsd − premiumUsd − gasUsd = netUsd` on every candidate.
-- Live baseFee + priority-fee reads (no frozen constants); L1-data-fee
+- ✅ Live baseFee + priority-fee reads (no frozen constants); L1-data-fee
   oracle for OP-Stack chains (getL1Fee + scalars).
-- Gas-aware profit gate: measured estimateGas vs model units, margin
+- ✅ Gas-aware profit gate: measured estimateGas vs model units, margin
   applied so noise can't slip a marginal path through.
-- Validation: predicted net $50.85 vs realized settle $50.95 → 0.2% error.
+- ✅ Validation: predicted net $50.85 vs realized settle $50.95 → 0.2% error.
 - Status: **accepted**.
 
 ## WO-6 — Sizing matrix + 35-min real eth census
 
-- 18-cell sizing matrix across borrow amounts × slippage × floors.
-- 35-minute live eth census: 26k signal rows.
-- Result: **0 probe_pass** — only pools quoting bait-level spreads
+- ✅ 18-cell sizing matrix across borrow amounts × slippage × floors.
+- ✅ 35-minute live eth census: 26k signal rows.
+- ✅ Result: **0 probe_pass** — only pools quoting bait-level spreads
   cleared K×gas; honest negative evidence that shaped WO-8.
 - Status: **accepted as evidence** (not profit).
 
 ## WO-7 — L2 discovery fixes + funnel + backrun census
 
-- Fixed L2 factory addresses/ABIs (Sushi, Camelot, Aerodrome, Velodrome).
-- Fixed pool `kind` labels (v2/v3/velodrome) and L2 pricing paths.
-- Discovered 377 base + 540 arb pools via on-chain factory matrix —
+- ✅ Fixed L2 factory addresses/ABIs (Sushi, Camelot, Aerodrome, Velodrome).
+- ✅ Fixed pool `kind` labels (v2/v3/velodrome) and L2 pricing paths.
+- ✅ Discovered 377 base + 540 arb pools via on-chain factory matrix —
   never hand-seeded.
-- Funnel + gate-audit counters per rejection stage.
-- Backrun census: 1 base `probe_pass` ($2.56 net vs $2.50 floor),
+- ✅ Funnel + gate-audit counters per rejection stage.
+- ✅ Backrun census: 1 base `probe_pass` ($2.56 net vs $2.50 floor),
   **0 dislocations** on base+eth — measured, not assumed.
 - Status: **submitted**.
 
 ## WO-7S — WO-7 sync/verify
 
-- Read-only verification: executor deployed at `0x6614…` on eth/base/arb
+- ✅ Read-only verification: executor deployed at `0x6614…` on eth/base/arb
   is **stale bytecode** (11,060B deployed vs 9,016B current source) —
   venue getters revert. Proved the redeploy need.
 - Status: **done**.
 
 ## WO-8 — Base candidate validation + 24h shadow
 
-- Deep funnel audit + factory audit + 24h shadow run on base.
-- Produced the raw verdict data handed to WO-8.6.
+- ✅ Deep funnel audit + factory audit + 24h shadow run on base.
+- ✅ Produced the raw verdict data handed to WO-8.6.
 - Status: **superseded** by WO-8.6 verdict.
 
 ## WO-8.6 — Close-out verdict
 
-- Probe-lane health check, 24h shadow reports, funnel analysis,
+- ✅ Probe-lane health check, 24h shadow reports, funnel analysis,
   counterfactual economics ($33–61/day vs C_run inputs).
-- Deliverable: `docs/wo8_verdict.md` — **DEAD as-built**; counterfactual
+- ✅ Deliverable: `docs/wo8_verdict.md` — **DEAD as-built**; counterfactual
   **UNDECIDED** pending C_run.
 - Status: **verdict issued**.
 
 ## WO-8.7 — skill.md upgrade + WO-map enforcement
 
-- Added closed-form sizing math (R1), Flashbots bundle pricing, Morpho/
+- ✅ Added closed-form sizing math (R1), Flashbots bundle pricing, Morpho/
   Aave liquidation math, source ledger, WO-map gate.
-- `docs/skill_wo_map.md` — every WO maps to a skill capability; a report
+- ✅ `docs/skill_wo_map.md` — every WO maps to a skill capability; a report
   cannot claim done without naming the capability that produced the
   evidence.
-- Fixed AGENTS.md drift (min-profit defaults `2.5/25` vs stale `0.50/5.00`).
+- ✅ Fixed AGENTS.md drift (min-profit defaults `2.5/25` vs stale `0.50/5.00`).
 - Status: **done — `30c8e77`**.
 
 ## WO-9 — Direct pool.swap executor + per-pool fees + sizing + replay
 
-- Contract: `V3_POOL` leg kind — direct `pool.swap` +
+- ✅ Contract: `V3_POOL` leg kind — direct `pool.swap` +
   `uniswapV3SwapCallback` (router-ABI-free, venue-stable).
-- Contract: `V2_SELFQUOTE` leg kind — pool's own `getAmountOut` +
+- ✅ Contract: `V2_SELFQUOTE` leg kind — pool's own `getAmountOut` +
   measured 1bps K-safety shave (aerodrome quote over-promises ~1e-9 at
   the rounding boundary).
-- Discovery: real per-pool `getFee(pool,stable)` reads via Multicall3 +
+- ✅ Discovery: real per-pool `getFee(pool,stable)` reads via Multicall3 +
   `stable`/`selfQuote` flags; stable pools excluded from the CP model.
-- Math: closed-form R1 sizing for constant-product cycles (p90 rel-err
+- ✅ Math: closed-form R1 sizing for constant-product cycles (p90 rel-err
   **3.5e-8** vs brute force).
-- Executor verify: eth fork `ArbSettled` $81.10 (predicted $80.02, 0.9%).
-- **Decisive replay**: 3 recorded `probe_pass` candidates through the
+- ✅ Executor verify: eth fork `ArbSettled` $81.10 (predicted $80.02, 0.9%).
+- ✅ **Decisive replay**: 3 recorded `probe_pass` candidates through the
   *fixed* executor → **0/3 settle**. Real v3 output < repay every time.
   The recorded "edge" was phantom twice: broken execution AND an
   over-predicting model. This is the WO-8.6 DEAD verdict's root cause.
@@ -126,76 +126,76 @@ Branch `feat/direct-swap-exec` @ `5655dc1` (pushed).
 
 ## WO-10 — Liquidation lane (Aave V3 + Morpho Blue)
 
-- Contract: `liquidate(LiqPlan)` path inside every flash callback —
+- ✅ Contract: `liquidate(LiqPlan)` path inside every flash callback —
   flash-funded, atomic, `LiquidationSettled` event.
-- `LiqPlan.protocolKind` — 0=AaveV3, 1=MorphoBlue.
-- `onMorphoLiquidate` callback — **approves** repaidAssets (Morpho
+- ✅ `LiqPlan.protocolKind` — 0=AaveV3, 1=MorphoBlue.
+- ✅ `onMorphoLiquidate` callback — **approves** repaidAssets (Morpho
   pulls via `transferFrom`, not push — measured, not guessed).
-- `marketData` = `(MarketParams, repaidShares)` — fixed the BAL#528
+- ✅ `marketData` = `(MarketParams, repaidShares)` — fixed the BAL#528
   shares-vs-assets flash-size bug.
-- `MorphoIndexer` — `CreateMarket`/`Borrow` log scan, position+market
+- ✅ `MorphoIndexer` — `CreateMarket`/`Borrow` log scan, position+market
   Multicall3 health check, exact bound math
   (`px < borrowed·1e36/(collat·lltv)`).
-- Fork settle Aave V3: HF 1.11 → oracle −30% → HF 0.77 →
+- ✅ Fork settle Aave V3: HF 1.11 → oracle −30% → HF 0.77 →
   `LiquidationSettled` **$61,802 USDC**.
-- Fork settle Morpho Blue: WETH/USDC market → `LiquidationSettled`
+- ✅ Fork settle Morpho Blue: WETH/USDC market → `LiquidationSettled`
   **$35,963 USDC** (294,676 gas).
-- `LiquidationIndexer` wired into `arbRunner` — Borrow-log sync +
+- ✅ `LiquidationIndexer` wired into `arbRunner` — Borrow-log sync +
   HF-band watch per cycle (shadow, no exec armed).
 - Status: **capability proven on fork — `1aac2d2`**.
 
 ## WO-11 — Private order flow + learned bidding
 
-- `src/private/hintStream.ts` — MEV-Share SSE hint stream.
-- `src/private/backrun.ts` — backrun planner with merged state refresh.
-- `mev_sendBundle` rail — bundle submission alongside `eth_sendBundle`.
-- `src/bidding/bidModel.ts` — logistic bid model for bundle pricing.
-- `data/bundle_ledger.jsonl` — observed-vs-included record; CUSUM
+- ✅ `src/private/hintStream.ts` — MEV-Share SSE hint stream.
+- ✅ `src/private/backrun.ts` — backrun planner with merged state refresh.
+- ✅ `mev_sendBundle` rail — bundle submission alongside `eth_sendBundle`.
+- ✅ `src/bidding/bidModel.ts` — logistic bid model for bundle pricing.
+- ✅ `data/bundle_ledger.jsonl` — observed-vs-included record; CUSUM
   divergence freeze keeps a drifting model from poisoning future bids.
 - Status: **built — shadow only until landed evidence accrues**.
 
 ## WO-12 — Chain×token×pool×lane allocation
 
-- `src/alloc/allocation.ts` — scored lanes on settled-rate × measured
+- ✅ `src/alloc/allocation.ts` — scored lanes on settled-rate × measured
   latency × available liquidity → `data/allocation.json`.
-- Result: **all-zero today** — no lane has qualifying settled evidence
+- ✅ Result: **all-zero today** — no lane has qualifying settled evidence
   yet. Honest output, not padded.
 - Status: **measured — `d9e1029`**.
 
 ## WO-13 — Self-learning learner
 
-- `src/learn/thompson.ts` — Beta-Gaussian arm model; feature rows per
+- ✅ `src/learn/thompson.ts` — Beta-Gaussian arm model; feature rows per
   candidate; rotation on measured win/loss + latency anomalies.
-- Designed to learn which lanes/regimes actually settle, not which
+- ✅ Designed to learn which lanes/regimes actually settle, not which
   simulate best.
 - Status: **built — cold start, ~0 settled data yet**.
 
 ## WO-14 — Latency measurement + backrun attribution
 
-- `src/speed/latency.ts` — `LatencyTracker` stamps
+- ✅ `src/speed/latency.ts` — `LatencyTracker` stamps
   detect→solve→probe→submit→land.
-- Wired into `executeCandidate` on BOTH submit paths (private +
+- ✅ Wired into `executeCandidate` on BOTH submit paths (private +
   public) with `firstMover` attribution on landed loses.
-- Emit outcomes to `data/speed/latency.jsonl`.
+- ✅ Emit outcomes to `data/speed/latency.jsonl`.
 - Status: **wired — `30aa01b`**.
 
 ## WO-15 — Ops hardening
 
-- `src/ops/killSwitch.ts` — kill-file state, daily loss breaker,
+- ✅ `src/ops/killSwitch.ts` — kill-file state, daily loss breaker,
   per-tx capital cap, daily notional cap, chain arm status.
-- `mayExecute({ chain, strategy, borrowUsd, dailyNotionalCap,
+- ✅ `mayExecute({ chain, strategy, borrowUsd, dailyNotionalCap,
   dayNotional })` wired **pre-submit** in `executeCandidate`.
-- Landed reverts → `revert_gas` losses → feed the breaker.
-- Two new regime classes: `CONGESTED` (baseFee > 2× trailing median →
+- ✅ Landed reverts → `revert_gas` losses → feed the breaker.
+- ✅ Two new regime classes: `CONGESTED` (baseFee > 2× trailing median →
   tightest lanes only) and `DEGRADED_INFO` (provider health < 50% →
   **fail closed, zero variants**).
 - Status: **enforced — `af4c238`/`d9810db`**.
 
 ## WO-16 — Paid-RPC economics
 
-- `src/ops/rpcEconomics.ts` — measures marginal inclusion gain vs
+- ✅ `src/ops/rpcEconomics.ts` — measures marginal inclusion gain vs
   measured quota burn per account → `data/rpc_upgrade_recommendation.json`.
-- Output: **no spend** under current evidence — nothing is worth paying
+- ✅ Output: **no spend** under current evidence — nothing is worth paying
   for until a lane settles.
 - Status: **measured — `d9e1029`**.
 
