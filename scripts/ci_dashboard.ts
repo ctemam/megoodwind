@@ -53,6 +53,16 @@ for (const c of cards.slice(0, 15)) {
   const wr = c.profitableExecutionRate.value as any;
   L.push(`| ${c.entityId.slice(0, 12)} | ${typeof c.competitiveScore.value === 'number' ? c.competitiveScore.value.toFixed(3) : 'n/a'} | ${c.rankUniverse.value ?? 'n/a'} | ${c.estimatedNetUsd.value?.toFixed(4) ?? 'unpriced'} | ${wr ? `${wr.num}/${wr.den}` : 'unknown'} | ${(c.firstObservedBlock.value !== undefined && c.lastObservedBlock.value !== undefined) ? 'obs' : 'n/a'} | ${c.activeWindows.value ?? 0} | ${c.completeness} |`);
 }
+L.push('', '## Canonical findings — top-3 (13-section detail, every field statused)');
+for (const b of bench.top3) {
+  const c = canon.find((x) => x.entityId === b.id)!;
+  L.push(`\n### #${b.rank} ${b.id}`);
+  for (const [sec, fields] of Object.entries(c.sections)) {
+    const txt = Object.entries(fields as any).map(([k, v]: [string, any]) => `${k}=${v.value !== undefined ? String(v.value).slice(0, 40) : v.status}${v.note ? ` (${String(v.note).slice(0, 40)})` : ''}`).join('; ');
+    L.push(`- **${sec}**: ${txt}`);
+  }
+}
+L.push('', '## Outstanding evidence requirements', '- verified net → debug_trace · true win rate → attempt denominator · capture rate → opportunity universe · inclusion latency → mempool timing · launch dates → earlier evidence');
 L.push('', '_Evidence class: shadow/public-data. estimated≠verified. Missing=unknown, never 0._');
 writeFileSync(`docs/comptool_${KEY}.md`, L.join('\n'));
 console.log(`dashboard: ${cards.length} scorecards, top3=${bench.top3.length}, complete=${out.counters.complete}, hash=${hash}`);

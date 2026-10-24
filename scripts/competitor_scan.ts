@@ -278,3 +278,6 @@ log('  == performance ranking (verified, econ-gated) ==');
 for (const r of perf) log(`    ${r.rank ? '#' + r.rank : '  -'} ${r.id.slice(0, 10)} score=${r.score?.toFixed(1) ?? 'n/a'} n=${r.sample} net=${r.netUsd?.toFixed(2) ?? 'unpriced'} conf=${r.confidence.toFixed(2)} ${r.evidenceClass} [${r.flags.join(',')}]`);
 log('  == threat/capability ranking (observable only) ==');
 for (const r of thr) log(`    ${r.rank ? '#' + r.rank : '  -'} ${r.id.slice(0, 10)} score=${r.score?.toFixed(2) ?? 'n/a'} n=${r.sample} ${r.evidenceClass} [${r.flags.join(',')}]`);
+
+// === COMPTOOL: one-run authoritative output — canonical reports + dashboard ===
+try { await import('./ci_dashboard.js'); } catch (e) { log(`  dashboard generation failed (prev report preserved): ${String(e).slice(0, 80)}`); }
