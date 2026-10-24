@@ -24,3 +24,8 @@
 | gasCostUsd at entity AND per-record | keep per-record (reconcile), entity = derived |
 ## Honest note
 ~45 surfaced → ~15 unique → ~5 genuinely CORE. But removals are display-layer only where derivable — don't delete evidence-collection fields that feed reconciliation.
+
+## Count reconciliation (Finding 2)
+Units differ: ~15 = distinct LOGICAL measurements; dispositions total 17 because they count SURFACES — e.g. econ.estimated_net exists as registry-def + scorecard-field + CMMC-row (1 logical metric, 3 surfaces, classified once at the decision surface). Disposition classes: CORE 5 | GUARDRAIL 4 | DIAGNOSTIC 4 | REPORTING 2 | REDUNDANT 2 = 17 surfaces over 15 logical metrics (2 metrics surface twice in different classes). No contradiction — counts differ by unit definition.
+## Predictive-validity mapping (Finding 3)
+predictive validity / sample sufficiency / uncertainty / robustness are NOT separate metrics — they're enforced INSIDE the qualification gate: minSample(n≥10)+pricedShare+econ-unknowns=0 (sample sufficiency), provisional flag (uncertainty), NO_QUALIFIED_WINNER (robustness), winner≠rank#1 separation. No new metrics needed — mapped to benchmark.ts qualify().
