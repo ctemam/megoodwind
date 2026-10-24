@@ -243,3 +243,13 @@ for (const r of rows) if (r.econ) econCounts[r.econ.status] = (econCounts[r.econ
 log(`  econ statuses: ${Object.entries(econCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
 log(`  rates(mc-v1): arb_detect=${arbs.length}/${swapLogs.length} swap-logs | join_matched=${join.matched}/${receiptedTx.size} verified${joinRate.rate !== undefined ? ` (${(joinRate.rate * 100).toFixed(1)}%)` : ' (n/a)'} | complete=${window.complete} ordering=${window.ordering}`);
 log(`  store: ${Object.entries(ingestStats).map(([k, n]) => `${k}=${n}`).join(' ')} | counters: ${JSON.stringify(store.counters())}`);
+
+// === WO-06 two rankings over the trusted store (all windows, not just this scan) ===
+const { aggregate, rankPerformance, rankThreat } = await import('../src/ci/rank.js');
+const aggs = aggregate(store.trusted().filter((r) => r.tx.startsWith('0x')));
+const perf = rankPerformance(aggs).slice(0, 5);
+const thr = rankThreat(aggs).slice(0, 5);
+log('  == performance ranking (verified, econ-gated) ==');
+for (const r of perf) log(`    ${r.rank ? '#' + r.rank : '  -'} ${r.id.slice(0, 10)} score=${r.score?.toFixed(1) ?? 'n/a'} n=${r.sample} net=${r.netUsd?.toFixed(2) ?? 'unpriced'} conf=${r.confidence.toFixed(2)} ${r.evidenceClass} [${r.flags.join(',')}]`);
+log('  == threat/capability ranking (observable only) ==');
+for (const r of thr) log(`    ${r.rank ? '#' + r.rank : '  -'} ${r.id.slice(0, 10)} score=${r.score?.toFixed(2) ?? 'n/a'} n=${r.sample} ${r.evidenceClass} [${r.flags.join(',')}]`);

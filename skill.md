@@ -669,3 +669,6 @@ Profit-truth contract: receipt-success ≠ profit; gross flow ≠ net USD; missi
 
 ## CI measurement contract (`src/ci/measure.ts`, mc-v1) — WO-05, tests green
 Every rate publishes numerator/denominator/eligible/excluded/unresolved + unit + window {chain, fromBlock, toBlock, complete, schema, contract, ordering}. den=0 → rate undefined (never 0). Join outcomes enum: matched/partial/unmatched/unresolved/excluded — join denominator = receipt-verified events only. Ordering retained: eth_builder_mev vs l2_sequencer_fifo. `comparable()` rejects unit/contract/incomplete mismatches. Pre-mc-v1 join profiles are NON-COMPARABLE. Test: `npx tsx test/ci_measure_test.ts` (10/10).
+
+## CI rankings (`src/ci/rank.ts`) — WO-06, tests green
+TWO leaderboards, never combined. Performance: verified-class entities only, ≥2 events, score = confidence-weighted net-USD (undefined when unpriced/insufficient — never ranked on gross). Threat/capability: observable volume+breadth+chains, explicitly labeled "not profit". Flags disclose limitations per row (below_min_sample, unpriced, provisional_evidence). Aggregates by cluster when shared executor. Test: `npx tsx test/ci_rank_test.ts` (9/9).
