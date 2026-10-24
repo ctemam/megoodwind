@@ -63,7 +63,8 @@ for (let b = startFrom; b < head && found.size < 200_000; b += CHUNK) {
     }
   }
   chunks++;
-  if (chunks % 20 === 0) { saveCheckpoint(CKPT, 'bf-v1', b + CHUNK, Object.fromEntries(found)); console.log(`  ckpt @${b + CHUNK} pools=${found.size}`); }
+  const ckptEvery = Number(process.env.BF_CKPT_EVERY ?? 20);
+  if (chunks % ckptEvery === 0) { const t0 = performance.now(); saveCheckpoint(CKPT, 'bf-v1', b + CHUNK, Object.fromEntries(found)); console.log(`  ckpt @${b + CHUNK} pools=${found.size} write=${(performance.now() - t0).toFixed(0)}ms`); }
 }
 console.log(`scanned ${chunks} chunks | ${rpcCalls} rpc calls | ${failed} failed | ${found.size} pools discovered from creation logs`);
 
