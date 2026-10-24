@@ -1,0 +1,14 @@
+import { CiStore } from '../src/ci/store.js';
+import { aggregate } from '../src/ci/rank.js';
+import { deconstructEntity } from '../src/ci/deconstruct.js';
+import { writeFileSync } from 'fs';
+const store = new CiStore();
+const recs = store.trusted().filter((r) => r.chain === 'eth' && r.receiptVerified && r.signer);
+const aggs = aggregate(recs);
+const top = aggs.filter((a) => a.netUsdKnown.length).sort((a, b) => b.netUsdSum - a.netUsdSum)[0];
+const ent = recs.filter((r) => r.signer === top.id);
+const d = deconstructEntity(ent);
+writeFileSync(`data/ci/decon_${top.id.slice(0, 10)}.json`, JSON.stringify(d, null, 1));
+console.log(`entity ${top.id.slice(0, 10)}: ${d.reports.length} txs deconstructed`);
+for (const [st, c] of Object.entries(d.coverage)) console.log(`  ${st}: ${Object.entries(c).filter(([, n]) => n).map(([k, n]) => `${k}=${n}`).join(',')}`);
+console.log(`hypotheses: ${d.hypotheses.map((h) => h.factor).join(', ') || 'none'}`);

@@ -763,3 +763,6 @@ Every metric maps to NAMED authoritative sources w/ exact endpoint/event/field �
 6-family metrics table + hard gate() before dashboard publish — FAILED_METRICS_CONTRACT+exit3 on missing family/null-no-reason/missing num-den. 18 rows live; legacy unreconcilable exposed as own row. Tests `test/ci_cmmc_test.ts` (9/9).
 ## Econ decomposition persistence (fix)
 `competitor_scan.ts:142` previously dropped grossUsd/flashFeeUsd/builderPayUsd → now persisted; store schema widened. 88 legacy records unreconcilable forever (never captured) — documented, not hidden.
+
+## Deconstruction harness (`src/ci/deconstruct.ts`, decon-v1) — gap-1 closed
+Nine-stage per-winner deconstruction: each stage labeled observed/reconstructed/unavailable/not_applicable — never manufactures private stages (candidate+qualification = always unavailable). Feeds evidence→hypothesis only (privateHint, multi-venue). Offline/replay only; no strategy weights. Tests `test/ci_deconstruct_test.ts` (7/7). Run: `npx tsx scripts/ci_deconstruct.ts`.
