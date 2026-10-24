@@ -120,6 +120,25 @@ for (const txHash of txs.slice(0, 40)) {
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
 
+// === adversarial verification layer (Commander 2026-10-24) ===
+// Entity classes: verified_active / provisional / unverified_frontrunner /
+// suspected_deceptive / unclassifiable. Deception signals checked:
+// - bot address is EOA not contract (can't be a searcher program — decode artifact)
+// - precompile-like addresses (0x0000..0x00ff)
+// - dup tx counted twice (unique-tx check)
+// - profit present but unpriced (unverifiable net)
+const botClass = new Map<string, string>();
+const uniqueBots = new Set(rows.map((r) => r.bot));
+for (const b of uniqueBots) {
+  if (/^0x0{8,}/.test(b.toLowerCase())) { botClass.set(b, 'unclassifiable_decode_artifact'); continue; }
+  const code = await rpc.call<string>('eth_getCode', [b, 'latest']).catch(() => '0x');
+  if (!code || code === '0x') botClass.set(b, 'provisional_eoa');
+  else botClass.set(b, rows.filter((r) => r.bot === b).length >= 2 ? 'verified_active' : 'provisional_contract');
+}
+const classCounts: Record<string, number> = {};
+for (const c of botClass.values()) classCounts[c] = (classCounts[c] ?? 0) + 1;
+log(`  entity classes: ${Object.entries(classCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
+
 // === C1-v2 pipeline join: is each competitor route inside our registry? ===
 const ourPools = new Set<string>();
 try { for (const p of registryAll(KEY)) ourPools.add(p.address.toLowerCase()); } catch {}

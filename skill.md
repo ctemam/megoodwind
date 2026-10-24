@@ -639,3 +639,24 @@ docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
 **Learning cycle:** observe→discover→classify→benchmark→identify gaps→hypothesize→prioritize→evaluate→validate→learn→reassess. One competitor tx never reallocates strategy weight.
 
 **Success measures:** competitor-activity coverage, classification confidence, reconstruction accuracy, validated-miss count, attribution accuracy, time-to-identify problems, % improvements validated, delta in settle/revert/net, per-variant×regime performance, trigger reliability.
+
+## Competitor verification & adversarial detection (Commander 2026-10-24)
+
+**Core rule:** learn from verified competitive evidence — never appearances, promotional claims, tx counts, or fabricated frontrunner signals.
+
+**Entity classes (separate from performance score):**
+1 verified_active | 2 verified_successful (economics supported, limits stated) | 3 provisional | 4 unverified_frontrunner | 5 suspected_deceptive | 6 confirmed_malicious (corroborated evidence required) | 7 inactive/historical | 8 unclassifiable.
+
+**Deception investigation signals (signals ≠ proof):** high tx count without verified econ value; success-looking txs with unproven net profit; reverts counted as wins; profit distorted by decimals/stale prices/illiquid tokens; duplicate txs/records/addresses counted as independent operators; artificially inflated consistency; unverifiable win-rate/speed claims; attribution errors (merged or split operators); patterns designed to poison competitor analytics.
+
+**Evidence hierarchy:** Tier1 receipts/traces/verified amounts/defensible valuations/reproducible calcs > Tier2 multi-window consistency/multi-source agreement/verified contract code > Tier3 dashboards/labels/promotional statements. Tier3 NEVER overrides Tier1.
+
+**Two rankings kept separate:** verified-performance ranking (verified success, net-econ estimates, reliability, consistency, confidence) vs threat/capability ranking (detection speed, coverage, inclusion effectiveness, infra access, regime operation, adversarial risk). No combined score that hides uncertainty.
+
+**Learning poison defense:** quarantine suspicious observations from trusted data; preserve provenance + confidence + contradictions per observation; distinguish observed behavior from inferred intent and competitor success from AllBright suitability; auditable history of classification changes.
+
+**Re-verification triggers:** new frontrunner, sharp performance change, profit-vs-receipt conflict, dup/attribution anomalies, source disagreement, behavior change, previously-trusted entity producing anomalies, stale/incomplete ranking inputs, new chain/protocol/regime verification gap. Workflow: detect→preserve→verify→cross-check→classify→re-rank→assess learning impact→update/quarantine→record→monitor.
+
+**Boundaries:** auto = discover/verify/flag/rank/offline+shadow eval/propose. Suspicious activity never auto-triggers live changes; L4 always Commander-held.
+
+**Gap declaration rule:** a competitor tx AllBright didn't make is not automatically a gap — may be unavailable, unprofitable after costs, mis-reconstructed, or unsuitable for our environment. Gaps need reproducible evidence.
