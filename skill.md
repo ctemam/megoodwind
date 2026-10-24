@@ -591,3 +591,31 @@ docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
 **What it cannot see:** private bids that never landed, builder-side ordering data, and any trade made by a bot whose routes we can't decode. Report these as unknown.
 
 **Sources:** Flashbots mev-inspect-py (archived; method only), Qin/Zhou/Gervais 2021 (arXiv 2101.05511), Weintraub et al. 2022 (arXiv 2206.04185), Flashbots historical MEV data. L2/other-chain behavior is UNVERIFIED.
+
+## Competitive Intelligence Mode v2 (Principal spec, Commander-approved 2026-10-24)
+
+**Purpose:** convert competitor observations + predictive signals + regime analysis + execution outcomes into evidence-backed performance improvements. Answer five questions: what's happening, what competitors do, which opportunities we could've executed, where/why we lose, which changes improve verified net outcomes.
+
+**A detected swap cycle is NOT a guaranteed reproducible opportunity.** Reconstruct pre-trade state, executable economics, and the divergence point before classifying a miss.
+
+**Eight dimensions:**
+- A: competitor classification by behavioral evidence only; unclassified stays unclassified until sufficient evidence.
+- B: tx/strategy reconstruction — block, position, pool sequence, token flow, flash usage, gas, builder payments, pre-state, net outcome (traces+receipts where supported).
+- C: opportunity intelligence — for each competitor trade, classify the divergence: visibility | freshness | pool-coverage | strategy-coverage | route-discovery | pricing/sim error | filter rejection | inclusion disadvantage | market-changed | no-opportunity | insufficient-evidence.
+- D: three profit figures kept separate — observed competitor economics, counterfactual AllBright economics, realized AllBright economics. Never combined. Gross asset changes ≠ profit (deduct gas, flash fees, builder payments). Unpriced tokens stay raw-labeled.
+- E: latency split — event/publication/receipt/discovery/sim/decision/submit/competitor-first/inclusion/settle measured separately; no ms-precision claims on unsynced clocks. L2 sequenced ordering analyzed separately (Arbitrum sequencer docs — public pending view ≠ sequencer queue).
+- F: per-variant record — family, signals, regimes, failure conditions, validation/out-of-sample/shadow/settled results. Parameter grids ≠ independent strategies.
+- G: 9-dimension regime matrix (volatility, liquidity, dispersion, gas, competition, activity, protocol state, data quality, stress). Regimes never auto-activate strategies.
+- H: whale alerts classified by observable behavior not size; scored on precision + downstream usefulness.
+
+**Sample integrity:** report 4 distinct quantities — detected arbs, independently validated arbs, positive-net arbs, arbs inside AllBright capability. No extrapolation from 500 blocks without longer-window variance.
+
+**Loss attribution table:** find earliest defensible divergence per competitor tx (not-observed → observed-no-candidate → rejected → replay-fail → unsubmitted → not-included → reverted → underperformed). Genuine-miss only on evidence; unavailable pending state recorded as uncertainty.
+
+**Decision framework:** every finding → decision record (problem, evidence, frequency, econ significance, confidence, action, cost, risk, validation, acceptance criteria, result). Rank by verified net-econ impact — small fix recovering a repeated miss class can beat expensive latency infra.
+
+**Sources (prioritized):** mev-inspect-py, EigenPhi, Flashbots research+MEV-Share, Dune, Ethereum JSON-RPC, Uniswap docs, Aave V3 docs, Arbitrum sequencer docs, DefiLlama, Arkham, Chainlink streams. Document coverage/latency/cost/limits before reliance.
+
+**Acceptance:** detection ≠ validated opportunity ≠ supported capability — kept separate; duplicates checked; competitor econ reconciled; funnel joined where possible; unknowns labeled unknown; recommendations ranked by econ impact with measurable acceptance criteria; no speculative code as part of research.
+
+**Immediate priorities:** P1 validate the 101-arb sample + profitRaw; P2 complete the opportunity-to-pipeline join; P3 strategy-by-regime baseline; P4 whale-alert usefulness; P5 highest-value verified bottleneck first.
