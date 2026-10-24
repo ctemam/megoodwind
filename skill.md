@@ -714,3 +714,36 @@ Real-time intelligence ≠ real-time adaptation: detection may be fast; adaptati
 Completeness is measured, not claimed: known-vs-estimated competitors, taxonomy coverage, chain/pool/route coverage, evidence freshness, attribution confidence, benchmark comparability, unexplained outcomes, pending hypotheses, validated-awaiting-approval, integrated-awaiting-verification.
 
 Three inseparable products: Competitive Intelligence | Competitive Performance Optimization | Governed Continuous Adaptation. Ultimate output = demonstrable, repeatable improvement in AllBright competitive performance.
+
+## COMPTOOL V1.1 — Core Performance, Ranking, Transparency & Dashboard Standard (Commander 2026-10-24)
+Permanent standardized CI. Objective: reach/exceed top-3 relevant competitors' demonstrated performance while maximizing AllBright's verified risk-adjusted net profit. Profitability = PRIMARY economic objective; score/rank/win-rate/longevity = supporting indicators. No superiority from tx-count/gross profit/score/longevity alone.
+
+### Mandatory competitor metrics (unavailable = unknown/unverified, never invented)
+A. Economics: verified net vs estimated (separate), gross vs net, gas+failed-tx costs, flash/builder fees, profit/tx & per-gas/capital, distribution/median/variance/concentration, by chain+family+regime, profitable-vs-loss rates, unpriced+confidence per estimate. Receipt≠profit; gross≠net; public sample≠complete record.
+B. Score+ranking: Competitive Performance Score w/ all components+weights+formulas+coverage+uncertainty+window+version+sensitivity; rank in universe + benchmark group; top-3 identified; profit must not be obscured by secondary scores; security/reliability failures = warnings not compensated. Insufficient evidence → "provisional"/"insufficient", never forced.
+C. Win rates (each w/ num/den/window/exclusions/sample/confidence): execution success, opportunity capture, inclusion, profitable-execution, benchmark win rate. Public successes alone ≠ true win rate (failed attempts invisible).
+D. Longevity: first/last observed, span days, active days+definition, persistence across windows, inactivity gaps, performance stability. "Observed operating history" ≠ creation date.
+E. Strategy/ops: families+variants, chain/protocol/venue/pool/token/route coverage, regime sensitivity+adaptation, detection+execution latency, pricing/sim accuracy, revert rates, infra resilience, change-over-time. Private systems stay unknown/inferred+labeled.
+
+### Standardized scorecard (same layout every target)
+identity+confidence | overall score+scale+formula-version+confidence | rank+universe+window | profitability verified-vs-estimated | profit evidence quality | win rates | operating history | execution performance | strategy coverage | risk/warnings | AllBright gap | recommended improvement+validation plan | completeness (COMPLETE|INCOMPLETE|INSUFFICIENT). Full metric register+evidence appendix retained.
+
+### Top-3 benchmark group — continuous, defensible
+Defined universe+eligibility → same scoring method → coverage+confidence per rank → reassess on new evidence → flag instability/ties → preserve historical snapshots. Incomparable chains/windows → disclose, no misleading universal rank. Benchmark = refreshed target, not claimed position.
+
+### Commander dashboard (real-time)
+top-3+confidence | target scorecard+analysis status | profitability+win rates+history+execution | AllBright-vs-competitor | gaps+economically-prioritized recommendations | coverage+source health+freshness+unknowns | changes over time | experiments+approvals+integration outcomes | anomalies+source failures+warnings. Every metric exposes definition/window/provenance/timestamp/confidence/limitations via detail view. Show last-update+freshness; distinguish live/historical/estimated/stale; preserve previous valid report during update; never present stale as current or missing as zero; versioned history of reports+corrections+rank changes.
+
+### Permanent transparency
+Every claim traceable to evidence or marked estimate/inference/unknown. Preserve: source+timestamps, metric/scoring versions, methods+assumptions+exclusions+corrections, windows+samples, confidence+comparability, rejection reasons, classification/rank changes, experiment basis. No concealing failures, no selective reporting, no profit inflation, zero-confirmed-misses ≠ no misses.
+
+### Completion gate
+Every target analysis evaluates the full canonical catalogue + versioned template. COMPLETE only when every required metric has explicit status + validations done + limitations disclosed. Else INCOMPLETE/INSUFFICIENT with outstanding items — interim artifacts never presented as full analysis.
+
+### Governance
+COMPTOOL discovers/measures/ranks/diagnoses/recommends/validates — cannot authorize protected changes (execution, signing, capital, min-profit, kill switch, budgets, deployment). Approval via change control.
+
+### Dashboard must separate three things
+competitor performance (evidence about them) | AllBright relative position (ahead/behind) | improvement opportunity (realistically testable) — prevents score≠profit and success≠reproducibility confusions.
+
+Governing standard: every target, every core metric, every win rate, every ranking, every history measure, every limitation — one protocol, one reproducible report. Success = demonstrable improvement in verified risk-adjusted net profitability + sustainable competitive performance.
