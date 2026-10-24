@@ -486,3 +486,92 @@ References: Daian et al. 2019 (Flash Boys 2.0 — VERIFIED-CONCEPT),
 Paradigm Dark Forest 2020 (VERIFIED-CONCEPT), Flashbots MEV-Share docs
 (VERIFIED-CONCEPT), Gupta/Pai/Resnick 2023 private-order-flow research
 (UNVERIFIED — cited not read).
+
+## Industry research — competitor intelligence & predictive performance (Commander standard, 2026-10-24)
+
+**Objective:** improve the proportion of opportunities correctly identified,
+independently validated, executable, and economically worthwhile after costs
+— not the number of strategies, endpoints, alerts, or detections.
+
+**Evidence levels — every claim carries one:**
+Observed (chain data/provider telemetry/receipts) · Inferred (plausible
+interpretation) · Hypothesized (needs test) · Verified (repeatable
+measurement). Competitor profitability/architecture/private flow is NEVER
+presented as fact unless independently established.
+
+**Opportunity lifecycle to instrument** (a win at one stage must not hide
+losses elsewhere): market observation → signal detection → prediction →
+opportunity discovery → pricing → qualification → execution prep →
+inclusion → settlement → economics → feedback.
+
+**Economic measurement:** distinct opportunities observed, % surviving
+validation, % profitable at real size, inclusion+settlement rates, gross
+realized profit, flash fees, swap fees+impact, gas, builder payments,
+failed-tx costs, infra spend, net realized profit, profit/attempt,
+profit/infra-unit — by chain, variant, regime. Simulated ≠ realized;
+borrowed principal ≠ revenue; reverts are not costless.
+
+**Sources (tiered):**
+- Tier 1 primary: protocol docs + chain receipts + contract events.
+- Tier 2 MEV research: Flashbots docs/research, EigenPhi (profit calcs
+  need independent reconciliation).
+- Tier 3 historical: Dune, DefiLlama (research context, not live feeds).
+- Tier 4 intelligence: Arkham alerts/address labels (intelligence claims,
+  not proof), Chainlink streams (timestamps/freshness).
+Adopt a source only for measurable information advantage, a verified
+coverage gap, or a demonstrated error reduction — not popularity.
+
+**Competitor analysis method:**
+1. Identify by repeated DEX-router/pool interactions, multi-pool asset
+   flows, flash-loan borrow+repay, recurring arbitrage-like activity —
+   every address classification carries a confidence level.
+2. Reconstruct tx economics: chain+block, txHash, address, protocols,
+   asset flow, ordering, flash usage, gas, other payments, final
+   balances, profit-assumptions, confidence.
+3. Compare only on measurable dimensions: activity frequency, venue
+   spread, flash usage, gas, inclusion outcomes, net-profit estimate,
+   concentration, trend — same windows, same assumptions.
+4. Missed-opportunity classification for each competitor trade:
+   visibility gap | data-freshness gap | pool-coverage gap |
+   strategy-coverage gap | pricing/simulation error |
+   profitability-threshold rejection | execution/inclusion disadvantage |
+   genuine non-opportunity | insufficient evidence.
+
+**Strategy/regime discipline:** separate family (economic hypothesis)
+vs variant (materially different method) vs regime (market conditions)
+vs configuration (operating constraints) — parameter grids are NOT
+independent strategies. Regime dimensions: volatility, liquidity,
+depth imbalance, cross-venue dispersion, gas costs, block-space
+competition, activity, stress, protocol state, data quality. No regime
+auto-activates a strategy. Prevent overfitting: training/validation/
+out-of-sample/shadow/live are distinct evaluation classes.
+
+**Whale-alert quality:** every alert retains chain+tx ref, token, amount,
+timestamps, source, label confidence, event type, market relevance,
+follow-up observation, whether it produced a validated signal. Alert
+streams are scored on precision + false-positive rate + latency +
+coverage + downstream usefulness — not notification volume.
+
+**Missed-opportunity → fix ordering:** fix the earliest stage with the
+largest measurable loss of valid opportunities. Data sources are added
+only for completeness/freshness/reliability/discovery gains that exceed
+their cost.
+
+**Research workflow (10 phases):** audit capabilities → baseline
+pipeline performance → competitor sample set → tx reconstruction →
+missed-opportunity classification → variant/regime evidence →
+whale-alert quality → ranked bottlenecks → source cost-benefit →
+validated changes vs baseline. Each phase yields an auditable result.
+
+**Acceptance criteria:** no invented competitor strategy; every finding
+traceable; third-party profit ≠ verified economics; family/variant/
+regime/config kept separate; alerts evaluated on usefulness; failures
+distinguished by data vs non-opportunity vs simulation vs execution;
+improvements ranked by measurable value; history ≠ future guarantee;
+no speculative code as part of research.
+
+**Final principle:** competitor intelligence explains the market;
+predictive analysis identifies opportunities; validation determines
+whether they're real; settlement establishes the economic result.
+Sources: Flashbots Research, EigenPhi, Dune, Arkham, Aave flash-loan
+docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
