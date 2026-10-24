@@ -56,15 +56,23 @@ for (const c of cards.slice(0, 15)) {
   L.push(`| ${c.entityId.slice(0, 12)} | ${typeof c.competitiveScore.value === 'number' ? c.competitiveScore.value.toFixed(3) : 'n/a'} | ${c.rankUniverse.value ?? 'n/a'} | ${c.estimatedNetUsd.value?.toFixed(4) ?? 'unpriced'} | ${wr ? `${wr.num}/${wr.den}` : 'unknown'} | ${(c.firstObservedBlock.value !== undefined && c.lastObservedBlock.value !== undefined) ? 'obs' : 'n/a'} | ${c.activeWindows.value ?? 0} | ${c.completeness} |`);
 }
 L.push('', '## Canonical findings — top-3 (13-section detail, every field statused)');
-for (const b of bench.top3) {
-  const c = canon.find((x) => x.entityId === b.id)!;
-  L.push(`\n### #${b.rank} ${b.id}`);
+const renderEnt = (c: any, rankLabel: string) => {
+  L.push(`\n### ${rankLabel} ${c.entityId}`);
   for (const [sec, fields] of Object.entries(c.sections)) {
     const render = (val: any) => val === undefined ? undefined : (typeof val === 'object' ? JSON.stringify(val).slice(0, 60) : String(val).slice(0, 40));
     const txt = Object.entries(fields as any).map(([k, v]: [string, any]) => `${k}=${v.value !== undefined ? render(v.value) : v.status}${v.note ? ` (${String(v.note).slice(0, 40)})` : ''}`).join('; ');
     L.push(`- **${sec}**: ${txt}`);
   }
+};
+for (const b of bench.top3) renderEnt(canon.find((x) => x.entityId === b.id)!, `#${b.rank}${b.provisional ? ' (provisional n<5)' : ''}`);
+
+L.push('', `## All entities — canonical summaries (${canon.length})`, '| entity | eligible | score | estNet | profitableExec | spanDays | activeBlks | fingerprints | completeness | missing |', '|---|---|---|---|---|---|---|---|---|---|');
+for (const c of canon) {
+  const s = c.sections as any;
+  const wr = s.win_rates.profitableExecution.value;
+  L.push(`| ${c.entityId.slice(0, 12)} | ${s.benchmark_eligibility.eligible.value} | ${s.competitive_score.score.value !== undefined ? Number(s.competitive_score.score.value).toFixed(3) : 'n/a'} | ${s.profitability.estimatedNet.value !== undefined ? Number(s.profitability.estimatedNet.value).toFixed(4) : 'unpriced'} | ${wr ? `${wr.num}/${wr.den}` : 'unknown'} | ${s.longevity_activity.spanDays.value ?? 'n/a'} | ${s.longevity_activity.activeBlocks.value ?? 0} | ${JSON.stringify(s.strategy_coverage.fingerprints.value ?? []).slice(0, 40)} | ${s.conclusion.completeness.value} | ${JSON.stringify(s.conclusion.missing.value)} |`);
 }
+L.push('', '_Full 13-section detail for any entity: `data/ci/dashboard_eth.json` → canonicalReports[entityId]. Same run, same source of truth._');
 L.push('', '## Outstanding evidence requirements', '- verified net → debug_trace · true win rate → attempt denominator · capture rate → opportunity universe · inclusion latency → mempool timing · launch dates → earlier evidence');
 L.push('', '_Evidence class: shadow/public-data. estimated≠verified. Missing=unknown, never 0._');
 writeFileSync(`docs/comptool_${KEY}.md`, L.join('\n'));
