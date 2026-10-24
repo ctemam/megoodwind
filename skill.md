@@ -681,3 +681,6 @@ Six outcomes: confirmed_missed (replay-backed only) / visibility_failure (stage1
 
 ## CI trigger engine (`src/ci/triggers.ts`) — WO-09, tests green
 Observations → investigations only (never auto-accept/integrate/execute). Gates in order: minSample → minCoverage → dedupe → hysteresis+persistence → cooldown → daily cap → kill. State persisted (streak survives restart). Actions: investigate(hypothesis)/request_replay/recommend_review/escalate_commander. DEFAULT_TRIGGERS wires visibility_failure_rate>0.5 (persist=2, recovery=0.35, n≥20, cov≥95%, 30min cooldown, 4/day)→H-001 and indeterminate_rate>0.1→H-002. Test: `npx tsx test/ci_triggers_test.ts` (13/13).
+
+## CI report (`src/ci/report.ts` → `scripts/ci_report.ts`) — WO-11
+One consolidated view: mc-v1 windows, entity classes, econ statuses, both rankings, trigger states with suppression reasons (suppressed≠no-problem labeled), hypothesis lifecycle, store counters. Generated: `npx tsx scripts/ci_report.ts eth` → docs/ci_report.md. Known artifact: 14 legacy `net_profit_verified` records predate the traceVerified gate — provenance preserves original classification; re-evaluation scheduled per correction-trail policy.
