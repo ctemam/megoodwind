@@ -766,3 +766,6 @@ Every metric maps to NAMED authoritative sources w/ exact endpoint/event/field �
 
 ## Deconstruction harness (`src/ci/deconstruct.ts`, decon-v1) — gap-1 closed
 Nine-stage per-winner deconstruction: each stage labeled observed/reconstructed/unavailable/not_applicable — never manufactures private stages (candidate+qualification = always unavailable). Feeds evidence→hypothesis only (privateHint, multi-venue). Offline/replay only; no strategy weights. Tests `test/ci_deconstruct_test.ts` (7/7). Run: `npx tsx scripts/ci_deconstruct.ts`.
+
+## Projection accuracy (`src/ci/projAccuracy.ts`, projacc-v1) — gap-2
+Shadow-probe corpus: projected netUsd vs probe outcome. FINDING: 157/157 positive projections (~$3.70 mean) reverted — acc=0 across all variants. Data-gaps disclosed: settled.json lacks projected field (pairing impossible), probe≠settlement. Persists projection requirement going forward.
