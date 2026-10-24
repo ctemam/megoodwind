@@ -575,3 +575,19 @@ predictive analysis identifies opportunities; validation determines
 whether they're real; settlement establishes the economic result.
 Sources: Flashbots Research, EigenPhi, Dune, Arkham, Aave flash-loan
 docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
+
+## Competitor analytics (Commander-ordered 2026-10-24)
+
+**Purpose:** measure what other searchers actually capture on each chain, and find where our pipeline loses it. This is the real market size. It replaces every guess.
+
+**Method (from published research):**
+1. Per block, decode swaps and token transfers. Classify a transaction as an *arbitrage* when its swaps form a closed token cycle ending with a net gain in the start token; classify a *liquidation* from the lending protocol's liquidation event. (mev-inspect-py model: swaps → arbitrages, profit token + amount.)
+2. Net profit per transaction = profit token gain (in USD at block price) − gas paid − any direct payment to the block builder (coinbase transfer). Gross profit without costs is not the competitor's profit.
+3. Group by **bot address and its contract**. Report per chain: active bots, trades, total net, average net per trade, top-5 share. (Qin et al. profit-per-address method.)
+4. Classify each trade's channel: public mempool, or private (a direct builder payment, or a top-of-block position with no public pending record). Private share is a lower bound, because some private trades look public after the fact. (Weintraub: most MEV runs through private pools.)
+5. Record for each trade: block, index in block, route (pools), borrow source if any (flash loan venue), size, gas used, gas price, whether it used a private route.
+6. Join with our pipeline: for each competitor trade, replay at its block and record *found / not found* and the stage where we lose it (depth, suspect-pool, no spread, size, profit floor, gas multiple, other).
+
+**What it cannot see:** private bids that never landed, builder-side ordering data, and any trade made by a bot whose routes we can't decode. Report these as unknown.
+
+**Sources:** Flashbots mev-inspect-py (archived; method only), Qin/Zhou/Gervais 2021 (arXiv 2101.05511), Weintraub et al. 2022 (arXiv 2206.04185), Flashbots historical MEV data. L2/other-chain behavior is UNVERIFIED.
