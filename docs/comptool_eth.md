@@ -1,5 +1,5 @@
 # COMPTOOL v1.2 — eth
-generated 2026-10-24T21:09:32.860Z | hash=6dc1a76375be
+generated 2026-10-24T21:37:19.275Z | hash=1df7e9649087
 
 ## Top-3 benchmark (eligible=3/65)
 - #1 0x0ea2bb9720 score=0.446 n=2 net=0.5580 conf=0.80

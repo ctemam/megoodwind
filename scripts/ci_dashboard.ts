@@ -30,9 +30,15 @@ const cards = aggs.map((a) => {
   return sc;
 });
 
+// canonical 13-section reports per entity (spec §3) — wired, not authored
+const { canonicalReport } = await import('../src/ci/canonicalReport.js');
+const canon = aggs.map((a, i) => canonicalReport(a.id, KEY, cards[i], a,
+  { ok: bench.top3.some((b) => b.id === a.id), why: bench.insufficient.find((x) => x.id === a.id)?.why },
+  { eligible: bench.eligible, total: bench.universe }));
+
 const out = {
   generatedAt: new Date().toISOString(), chain: KEY, schema: 'comptool-v1.2',
-  benchmark: bench, scorecards: cards,
+  benchmark: bench, scorecards: cards, canonicalReports: canon,
   counters: { records: recs.length, entities: aggs.length, scored: uni, complete: cards.filter((c) => c.completeness === 'COMPLETE').length },
 };
 const hash = createHash('sha256').update(JSON.stringify(out)).digest('hex').slice(0, 12);
