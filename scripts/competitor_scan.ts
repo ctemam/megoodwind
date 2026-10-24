@@ -16,6 +16,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { chainConfig, ChainKey } from '../src/config/index.js';
 import { RpcPool } from '../src/providers/rpcPool.js';
 import { multicall } from '../src/providers/multicall.js';
+import { TOKEN_USD } from '../src/config/pricing.js';
 
 const KEY = (process.argv[2] ?? 'eth') as ChainKey;
 const WINDOW = Number(process.argv[3] ?? 500);
@@ -92,10 +93,21 @@ const rows: any[] = [];
 for (const txHash of txs.slice(0, 40)) {
   const [tx, rc] = await Promise.all([rpc.call<any>('eth_getTransactionByHash', [txHash]).catch(() => null), rpc.call<any>('eth_getTransactionReceipt', [txHash]).catch(() => null)]);
   if (!tx || !rc) continue;
+  if (rc.status !== '0x1' && rc.status !== 1) continue; // reverted txs are not competitor profit
   const isLiq = (liqLogs as ethers.Log[]).some((l) => l.transactionHash === txHash);
   const arb = arbs.find((a) => a.tx === txHash);
   const coinbasePay = rc.logs?.some((l: any) => l.topics[0] === ethers.id('Transfer(address,address,uint256)') && '0x' + l.topics[2].slice(-40) !== tx.from) ?? false;
-  rows.push({ block: rc.blockNumber, txIndex: rc.index, tx: txHash, bot: tx.from, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
+  // price profit via token decimals + TOKEN_USD; unpriced stays raw-labeled
+  let profitUsd: number | undefined;
+  if (arb) {
+    const px = TOKEN_USD[arb.token.toLowerCase()];
+    if (px !== undefined) {
+      const dec = await rpc.call<string>('eth_call', [{ to: arb.token, data: '0x313ce567' }, 'latest']).catch(() => null);
+      const d = dec ? Number(BigInt(dec)) : 18;
+      profitUsd = (Number(arb.profit) / 10 ** d) * px;
+    }
+  }
+  rows.push({ block: rc.blockNumber, txIndex: rc.index, tx: txHash, bot: tx.from, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
 }
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
