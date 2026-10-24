@@ -17,6 +17,7 @@ import { chainConfig, ChainKey } from '../src/config/index.js';
 import { RpcPool } from '../src/providers/rpcPool.js';
 import { multicall } from '../src/providers/multicall.js';
 import { TOKEN_USD } from '../src/config/pricing.js';
+import { reconstruct } from '../src/ci/economics.js';
 import { registry, PoolState } from '../src/pools/registry.js';
 const registryAll = (k: ChainKey) => registry.all(k) as PoolState[];
 
@@ -104,18 +105,36 @@ for (const txHash of txs.slice(0, 40)) {
   if (rc.status !== '0x1' && rc.status !== 1) continue; // reverted txs are not competitor profit
   const isLiq = (liqLogs as ethers.Log[]).some((l) => l.transactionHash === txHash);
   const arb = arbs.find((a) => a.tx === txHash);
-  const coinbasePay = rc.logs?.some((l: any) => l.topics[0] === ethers.id('Transfer(address,address,uint256)') && '0x' + l.topics[2].slice(-40) !== tx.from) ?? false;
+  const TRANSFER = ethers.id('Transfer(address,address,uint256)');
+  const coinbasePay = rc.logs?.some((l: any) => l.topics[0] === TRANSFER && '0x' + l.topics[2].slice(-40) !== tx.from) ?? false;
+  // WO-04: flash-loan detection — known provider event topics in receipt logs
+  const FL_TOPICS: Record<string, string> = {
+    [ethers.id('FlashLoan(address,address,uint256,uint256)')]: 'balancer',
+    [ethers.id('FlashLoan(address,address,address,uint256,uint256,uint16)')]: 'aave_v3',
+    [ethers.id('FlashLoan(address,address,address,uint256,uint256)')]: 'erc3156',
+  };
+  const flLogs = (rc.logs ?? []).filter((l: any) => FL_TOPICS[l.topics[0]]);
+  const flashProvider = flLogs.length ? FL_TOPICS[(flLogs[0] as any).topics[0]] : undefined;
+  // builder payment = sum of plain-ETH value in tx (tx.value) + coinbase-directed transfers (lower bound)
+  const builderPayWei = tx.value && BigInt(tx.value) > 0n ? BigInt(tx.value) : undefined;
   // price profit via token decimals + TOKEN_USD; unpriced stays raw-labeled
-  let profitUsd: number | undefined;
+  let profitUsd: number | undefined; let profitDecimals: number | undefined;
   if (arb) {
     const px = TOKEN_USD[arb.token.toLowerCase()];
     if (px !== undefined) {
       const dec = await rpc.call<string>('eth_call', [{ to: arb.token, data: '0x313ce567' }, 'latest']).catch(() => null);
-      const d = dec ? Number(BigInt(dec)) : 18;
-      profitUsd = (Number(arb.profit) / 10 ** d) * px;
+      profitDecimals = dec ? Number(BigInt(dec)) : 18;
+      profitUsd = (Number(arb.profit) / 10 ** profitDecimals) * px;
     }
   }
-  rows.push({ block: Number(BigInt(rc.blockNumber)), txIndex: Number(BigInt(rc.transactionIndex ?? 0)), tx: txHash, bot: tx.from, to: tx.to, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay });
+  const econ = reconstruct({
+    receiptStatus: 1, gasUsed: BigInt(rc.gasUsed ?? 0), effectiveGasPrice: rc.effectiveGasPrice ? BigInt(rc.effectiveGasPrice) : undefined,
+    grossProfitRaw: arb?.profit, profitDecimals, profitUsdRate: arb ? TOKEN_USD[arb.token.toLowerCase()] : undefined,
+    ethUsdRate: TOKEN_USD['0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'], // WETH
+    flashLoan: flashProvider ? { provider: flashProvider, principalRaw: 0n, repayRaw: 0n, feeRaw: 0n } : undefined,
+    builderPaymentWei: builderPayWei,
+  });
+  rows.push({ block: Number(BigInt(rc.blockNumber)), txIndex: Number(BigInt(rc.transactionIndex ?? 0)), tx: txHash, bot: tx.from, to: tx.to, kind: arb ? 'arb' : 'liquidation', pools: arb?.route.map((s) => s.pool) ?? [], profitRaw: arb ? arb.profit.toString() : 'unpriced', profitToken: arb?.token, profitUsd, gasUsed: rc.gasUsed?.toString(), privateHint: coinbasePay, flashProvider, econ: { status: econ.status, netUsd: econ.netUsd, gasCostUsd: econ.gasCostUsd, unknowns: econ.unknowns, confidence: econ.confidence } });
 }
 const byBot = new Map<string, number>();
 for (const r of rows) byBot.set(r.bot, (byBot.get(r.bot) ?? 0) + 1);
@@ -196,11 +215,14 @@ for (const r of rows) {
     schema: 'ci-v3', chain: KEY, kind: r.kind, block: r.block, txIndex: r.txIndex, tx: r.tx,
     signer: r.bot, executor: r.to, pools: r.pools, routeLen: r.pools.length,
     profitRaw: r.profitRaw === 'unpriced' ? undefined : r.profitRaw, profitToken: r.profitToken,
-    profitUsd: r.profitUsd, gasUsed: r.gasUsed, receiptVerified: true,
+    profitUsd: r.profitUsd, gasUsed: r.gasUsed, receiptVerified: true, econ: r.econ,
     entityClass: r.entityClass, fingerprint: r.pools?.length ? `${r.pools.length}hop/${new Set(r.pools).size}venue` : undefined,
     clusterId: clusterOf(r.bot),
   });
   ingestStats[res]++;
 }
 store.flush();
+const econCounts: Record<string, number> = {};
+for (const r of rows) if (r.econ) econCounts[r.econ.status] = (econCounts[r.econ.status] ?? 0) + 1;
+log(`  econ statuses: ${Object.entries(econCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
 log(`  store: ${Object.entries(ingestStats).map(([k, n]) => `${k}=${n}`).join(' ')} | counters: ${JSON.stringify(store.counters())}`);

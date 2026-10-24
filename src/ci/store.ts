@@ -31,6 +31,7 @@ export interface CiRecord {
   profitUsd?: number;         // absent = unpriced, never fabricated
   gasUsed?: string;
   receiptVerified?: boolean;  // status=1 confirmed
+  econ?: { status: string; netUsd?: number; gasCostUsd?: number; unknowns: string[]; confidence: number };
   entityClass?: ClassLabel;
   classConfidence?: number;   // 0..1
   fingerprint?: string;

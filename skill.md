@@ -663,3 +663,6 @@ docs, Uniswap concentrated-liquidity docs, Chainlink Data Streams.
 
 ## CI data-integrity layer (`src/ci/store.ts`) — WO-03, tests green 2026-10-24
 Canonical eventId `chain:tx[:logIndex]`; content-hash dedupe (idempotent ingest survives replay/restart/reprocess); reconciliation fills missing fields + correction trail on conflict (no silent erase); provenance: evidence[] per record, versioned classHistory; quarantine excludes from trusted() until policy-satisfied release; quality counters (received/unique/dups/incomplete/quarantined/released/unpricedProfit/unresolvedIdentity/reconciled). Unknown stays undefined — never fabricated. Test: `npx tsx test/ci_store_test.ts` (12/12 adversarial cases).
+
+## CI economics layer (`src/ci/economics.ts`) — WO-04, tests green 2026-10-24
+Profit-truth contract: receipt-success ≠ profit; gross flow ≠ net USD; missing ≠ zero. Statuses: execution_failed / successful_unpriced / gross_value_estimated / net_profit_estimated / net_profit_verified / economics_incomplete. Costs: gas (gasUsed×effectiveGasPrice, priced via WETH), flash fee (Balancer/Aave-V3/ERC-3156 event detection), builder payment (tx.value, lower bound). `net_profit_verified` requires traceVerified — public logs alone cap at `net_profit_estimated`. Every unpriced/unobservable input lands in unknowns[]. Test: `npx tsx test/ci_econ_test.ts` (12/12).
