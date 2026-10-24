@@ -257,6 +257,18 @@ for (const r of rows.filter((x) => x.kind === 'arb')) {
 }
 log(`  attribution: ${Object.entries(attrCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
 
+// === WO-09 trigger engine: observations → investigations (never auto-accepts) ===
+const { TriggerEngine, DEFAULT_TRIGGERS } = await import('../src/ci/triggers.js');
+const engine = new TriggerEngine(DEFAULT_TRIGGERS);
+const nAttr = rows.filter((x) => x.kind === 'arb').length;
+const evid = `${KEY}:${from}-${head}`;
+for (const [metric, val] of [['visibility_failure_rate', (attrCounts['visibility_failure'] ?? 0) / nAttr], ['indeterminate_rate', (attrCounts['indeterminate'] ?? 0) / nAttr]] as [string, number][]) {
+  const actions = engine.evaluate({ metric, value: val, sample: nAttr, coverage: window.complete ? 1 : cov.blocksScanned / cov.blocksExpected, window: evid, evidenceId: evid });
+  for (const a of actions) log(`  TRIGGER[${a.kind}]${a.hypothesisId ? ' → ' + a.hypothesisId : ''} ${'evidence' in a ? a.evidence : ''}`);
+}
+const ts = engine.stats();
+log(`  triggers: fired=${ts.fired} dup=${ts.suppressed_dup} cooldown=${ts.suppressed_cooldown} hyst=${ts.suppressed_hysteresis} quality=${ts.suppressed_quality} minsample=${ts.suppressed_minsample}`);
+
 // === WO-06 two rankings over the trusted store (all windows, not just this scan) ===
 const { aggregate, rankPerformance, rankThreat } = await import('../src/ci/rank.js');
 const aggs = aggregate(store.trusted().filter((r) => r.tx.startsWith('0x')));

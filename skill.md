@@ -678,3 +678,6 @@ DNA vs Adaptive enforced at L2: classify() routes targets via DNA_PATTERNS (sign
 
 ## CI attribution (`src/ci/attribute.ts`) — WO-07, tests green
 Six outcomes: confirmed_missed (replay-backed only) / visibility_failure (stage1 pools) / pipeline_rejection (stage2 convicted, stage3 token) / execution_failure / not_economically_viable (stage6 net≤0 or <floor) / indeterminate. Unmatched ≠ missed — replay counterfactual required before any "missed" claim; estimate-only stays indeterminate. Alternatives preserved per verdict (wrongful conviction, timing, registry gap). Live eth 80-blk: visibility_failure=26 indeterminate=8 confirmed_missed=0 (correctly zero — no replays run). Test: `npx tsx test/ci_attribute_test.ts` (12/12).
+
+## CI trigger engine (`src/ci/triggers.ts`) — WO-09, tests green
+Observations → investigations only (never auto-accept/integrate/execute). Gates in order: minSample → minCoverage → dedupe → hysteresis+persistence → cooldown → daily cap → kill. State persisted (streak survives restart). Actions: investigate(hypothesis)/request_replay/recommend_review/escalate_commander. DEFAULT_TRIGGERS wires visibility_failure_rate>0.5 (persist=2, recovery=0.35, n≥20, cov≥95%, 30min cooldown, 4/day)→H-001 and indeterminate_rate>0.1→H-002. Test: `npx tsx test/ci_triggers_test.ts` (13/13).
