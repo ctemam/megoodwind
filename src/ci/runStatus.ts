@@ -3,7 +3,7 @@
  * Guard: exclusive-create lock file (O_EXCL = atomic on NTFS/POSIX).
  * Status: single doc {lastAttempt, lastSuccess} — attempt never erases success.
  */
-import { existsSync, openSync, closeSync, unlinkSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { existsSync, openSync, closeSync, unlinkSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'fs';
 import { execSync } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { dirname } from 'path';
@@ -18,17 +18,19 @@ function rev(): string { try { return execSync('git rev-parse --short HEAD').toS
 export function newRun(chain: string): RunRecord { return { runId: `${rev()}-${randomUUID().slice(0, 8)}`, rev: rev(), chain, startedAt: Date.now(), status: 'running' }; }
 
 /** Atomic guard: O_EXCL create fails if lock exists. Stale locks (>maxAgeMs) reclaimed. */
-export function acquireGuard(maxAgeMs = 30 * 60 * 1000): { ok: boolean; why?: string } {
+export function acquireGuard(maxAgeMs = 30 * 60 * 1000, owner = ''): { ok: boolean; why?: string; token?: string } {
   mkdirSync(DIR, { recursive: true });
   if (existsSync(LOCK)) {
-    const age = Date.now() - Number(readFileSync(LOCK, 'utf8') || '0');
+    const raw = readFileSync(LOCK, 'utf8').split(':');
+    const age = Date.now() - Number(raw[0] || '0');
     if (age < maxAgeMs) return { ok: false, why: `run active (age ${(age / 1000).toFixed(0)}s)` };
-    try { unlinkSync(LOCK); } catch {} // stale lock — reclaim (interrupted run left it)
+    // reclaim: re-verify age via mtime at unlink instant (narrows TOCTOU race)
+    try { if (Date.now() - statSync(LOCK).mtimeMs >= maxAgeMs) unlinkSync(LOCK); else return { ok: false, why: 'lock refreshed (concurrent)' }; } catch { /* already gone */ }
   }
-  try { const fd = openSync(LOCK, 'wx'); writeFileSync(fd, String(Date.now())); closeSync(fd); return { ok: true }; }
+  try { const fd = openSync(LOCK, 'wx'); writeFileSync(fd, Date.now() + ':' + owner); closeSync(fd); return { ok: true, token: owner }; }
   catch { return { ok: false, why: 'lock exists (concurrent)' }; }
 }
-export function releaseGuard() { try { unlinkSync(LOCK); } catch {} }
+export function releaseGuard(token?: string) { try { if (token !== undefined && !readFileSync(LOCK, 'utf8').includes(':' + token)) return; unlinkSync(LOCK); } catch {} }
 
 function readStatus(): { lastAttempt?: RunRecord; lastSuccess?: RunRecord } {
   try { return JSON.parse(readFileSync(STATUS, 'utf8')); } catch { return {}; }
