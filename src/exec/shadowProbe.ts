@@ -86,6 +86,7 @@ export async function shadowExecProbe(chain: ChainConfig, rpc: RpcPool, cand: Ca
       gasUsd: cand.gasUsd, netUsd: cand.netUsd, spreadPct: cand.spreadPct,
       probe: probe.kind, reason: probe.kind !== 'pass' ? (probe as { reason?: string }).reason : undefined,
       execDataLen: execData.length / 2 - 1,
+      ...spreadDiag,   // Stage-3G: optional spreadBps/spreadStatus/spreadVenues/spreadAgeMs — reporting-only
     }) + '\n');
     log.info(`${chain.key} shadow-probe ${probe.kind} ${path.slice(0, 40)} net=${cand.netUsd.toFixed(3)}${probe.kind !== 'pass' ? ' ' + (probe as { reason?: string }).reason : ''}`);
   } catch (e) {
