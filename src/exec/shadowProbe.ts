@@ -50,9 +50,16 @@ function overrideFor(chain: ChainConfig): StateOverride {
   };
 }
 
+const STALE_MS = Number(process.env.SHADOW_STALE_MS ?? 30_000); // reserves older than this → reject, not silent-K
 export async function shadowExecProbe(chain: ChainConfig, rpc: RpcPool, cand: Candidate): Promise<void> {
   const path = cand.legs.map((l) => l.pool.address.toLowerCase()).join('>');
   try {
+    // Stage-3B: reject stale pool state before probing — reserves drift → K() is state-error, not strategy error
+    const stale = cand.legs.filter((l) => (l.pool as any).updatedAt && Date.now() - (l.pool as any).updatedAt > STALE_MS);
+    if (stale.length) {
+      appendFileSync(FILE, JSON.stringify({ ts: new Date().toISOString(), stage: 'shadow_exec_probe', chain: chain.key, path, probe: 'stale_state_rejected', stalePools: stale.length, reason: `reserves older than ${STALE_MS}ms` }) + '\n');
+      return;
+    }
     const source = pickFlashSource(chain.key, cand.borrowToken);
     const premium = flashPremium(source, cand.borrowAmount);
     const { planBytes, execData } = buildPlan(cand, { source, premium, minProfit: cand.minProfitToken });
