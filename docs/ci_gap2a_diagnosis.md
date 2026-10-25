@@ -10,3 +10,9 @@ Projection oversizes vs actual pool reserves — the ~$3.70 uniform projection d
 settled.json lacks projected field — pairing projection→realized impossible. Persist projection per candidate with stable id going forward.
 ## Not fixed (per directive — diagnose only)
 profit model untouched; no tuning; thresholds unchanged.
+
+## Stage 3B correction (verified)
+solver.ts:309 ALREADY calls closedFormCycle — sizing IS in the live path.
+Real defect: 157-probe corpus shares ONE fixed borrowAmount (355519959056922752)
+across all variants — generated at a single witness state, replayed at drifted
+reserves → K() everywhere. Repair = re-sim at exec-block, not new sizing.
