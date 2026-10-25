@@ -11,6 +11,8 @@ import type { Candidate } from '../strategies/solver.js';
 import { buildPlan } from './planBuilder.js';
 import { pickFlashSource, flashPremium, FLASH_VENUES } from './flashVenues.js';
 import { execProbe, type StateOverride } from './verify.js';
+import { registry } from '../pools/registry.js';
+import { decOf } from '../strategies/solver.js';
 import { logger } from '../config/logger.js';
 import { ethers } from 'ethers';
 
@@ -60,6 +62,18 @@ export async function shadowExecProbe(chain: ChainConfig, rpc: RpcPool, cand: Ca
       appendFileSync(FILE, JSON.stringify({ ts: new Date().toISOString(), stage: 'shadow_exec_probe', chain: chain.key, path, probe: 'stale_state_rejected', stalePools: stale.length, reason: `reserves older than ${STALE_MS}ms` }) + '\n');
       return;
     }
+    // Stage-3G: cross-venue spread diagnostic — same-pair peer divergence (reporting-only, no decision effect)
+    let spreadDiag: Record<string, unknown> = {};
+    try {
+      const { spreadFor } = await import('../ci/spread.js');
+      const { v2SpotPrice } = await import('../math/univ2.js');
+      const peers = registry.peers(chain.key, cand.legs[0].pool.token0, cand.legs[0].pool.token1);
+      const quotes = peers
+        .filter((p) => p.reserve0 && p.reserve1)
+        .map((p) => ({ venue: p.address, price: v2SpotPrice({ reserveIn: p.reserve0!, reserveOut: p.reserve1! }, decOf(p, p.token0), decOf(p, p.token1)), ageMs: (p as any).updatedAt ? Date.now() - (p as any).updatedAt : undefined }));
+      const sp = spreadFor(`${cand.legs[0].pool.token0.slice(0, 8)}/${cand.legs[0].pool.token1.slice(0, 8)}`, quotes, { block: (cand.legs[0].pool as any).blockNumber });
+      spreadDiag = { spreadBps: sp.spreadBps, spreadStatus: sp.status, spreadVenues: sp.validQuotes, spreadAgeMs: Math.max(...quotes.map((q) => q.ageMs ?? 0)) || undefined };
+    } catch { /* diagnostic failure never blocks the probe */ }
     const source = pickFlashSource(chain.key, cand.borrowToken);
     const premium = flashPremium(source, cand.borrowAmount);
     const { planBytes, execData } = buildPlan(cand, { source, premium, minProfit: cand.minProfitToken });

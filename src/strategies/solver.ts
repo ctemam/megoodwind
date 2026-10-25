@@ -86,7 +86,7 @@ export function legOut(pool: PoolState, amountIn: bigint, tokenIn: string): bigi
 }
 
 /** decimals of `token` as recorded on `pool` (token0/token1 side). */
-const decOf = (pool: PoolState, token: string): number =>
+export const decOf = (pool: PoolState, token: string): number =>
   pool.token0.toLowerCase() === token.toLowerCase() ? pool.dec0 : pool.dec1;
 
 /** Adaptive depth ladder — when a chain emits ZERO candidates while
