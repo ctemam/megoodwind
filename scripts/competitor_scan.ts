@@ -23,6 +23,12 @@ import { registry, PoolState } from '../src/pools/registry.js';
 const registryAll = (k: ChainKey) => registry.all(k) as PoolState[];
 
 const KEY = (process.argv[2] ?? 'eth') as ChainKey;
+// COMPTOOL runtime contract — atomic guard + run status
+const { acquireGuard, releaseGuard, newRun, recordAttempt, recordSuccess, recordDuplicate } = await import('../src/ci/runStatus.js');
+const run = newRun(KEY);
+const g = acquireGuard();
+recordAttempt(run);
+if (!g.ok) { recordDuplicate(KEY, g.why!); console.log(`SKIPPED_DUPLICATE: ${g.why}`); process.exit(4); }
 const WINDOW = Number(process.argv[3] ?? 500);
 const chain = chainConfig(KEY);
 const rpc = new RpcPool(chain);
@@ -238,6 +244,7 @@ const arbRate = makeRate('arb_detection', 'event', arbs.length, swapLogs.length,
 const joinRate = makeRate('pipeline_join_matched', 'event', join.matched, receiptedTx.size, 0, join.unresolved, window);
 store.ingest({ schema: 'mc-v1', chain: KEY, kind: 'arb', tx: `window:${from}-${head}`, pools: [], block: from, source: 'measure', ...({ window, coverage: cov, rates: { arbRate, joinRate } } as any) } as any);
 store.flush();
+try { const { recordSuccess, releaseGuard } = await import('../src/ci/runStatus.js'); recordSuccess({ ...run, status: 'succeeded', endedAt: Date.now(), outputs: ['docs/comptool_'+KEY+'.md','data/ci/dashboard_'+KEY+'.json'], summary: `${rows.length} observations` }); releaseGuard(); } catch {}
 const econCounts: Record<string, number> = {};
 for (const r of rows) if (r.econ) econCounts[r.econ.status] = (econCounts[r.econ.status] ?? 0) + 1;
 log(`  econ statuses: ${Object.entries(econCounts).map(([k, n]) => `${k}=${n}`).join(' | ')}`);
