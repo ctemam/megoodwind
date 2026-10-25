@@ -27,6 +27,7 @@ export interface SettledRecord {
   txHash: string;
   spreadPct: number;
   regime?: string;
+  projectedNetUsd?: number;   // projection at candidate stage — enables calibration pairing
 }
 
 export type Lane = 'predictive' | 'whale';
@@ -219,8 +220,8 @@ class Metrics {
     };
   }
 
-  addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number, regime?: string) {
-    this.settled.push({ ts: Date.now(), chain, strategy, netUsd, txHash, spreadPct, regime });
+  addSettled(chain: ChainKey, strategy: string, netUsd: number, txHash: string, spreadPct: number, regime?: string, projectedNetUsd?: number) {
+    this.settled.push({ ts: Date.now(), chain, strategy, netUsd, txHash, spreadPct, regime, projectedNetUsd });
     this.persist();
   }
 
