@@ -16,3 +16,9 @@ solver.ts:309 ALREADY calls closedFormCycle — sizing IS in the live path.
 Real defect: 157-probe corpus shares ONE fixed borrowAmount (355519959056922752)
 across all variants — generated at a single witness state, replayed at drifted
 reserves → K() everywhere. Repair = re-sim at exec-block, not new sizing.
+
+## Stage 3D-E: volBps=0 interpretation (Commander-challenged, verified)
+volBps = MEDIAN |Δprice| across sampled pools (marketRegime.ts:111).
+Zero median ≠ zero spread — cross-venue arbs live in the TAIL, not median.
+Correct measure for arb viability = max cross-venue divergence, not median vol.
+Rerun gate should be spread-triggered, not vol-triggered.
